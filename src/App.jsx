@@ -1,4 +1,6 @@
 import React from "react";
+import { MISSION_CONTENT, missionFileScript, clearPlaytestMission } from "./content/mission-registry.js";
+import { catalogDriftIssues } from "./content/mission-format.js";
 
 /* =========================================================================
  * TACTICAL ENGINE — PHASE 1
@@ -9837,13 +9839,17 @@ function conventionAsset(id, pathWithoutExtension, fallback, recommended) {
  * CONTENT REGISTRY INSTANCE
  * -------------------------------------------------------------*/
 
+/* Maps and encounters authored as mission files (src/content/missions/*.json,
+ * plus the editor's playtest slot) are merged in here, before the registry is
+ * built and frozen. Hand-written entries win on an id collision so a stray
+ * file can never shadow a built-in fixture. */
 const CONTENT = buildContentRegistry(prepareAssetAwareContentSources({
   units: UNITS,
   abilities: ABILITIES,
   statuses: STATUSES,
   terrains: TERRAINS,
-  maps: MAPS,
-  encounters: ENCOUNTERS,
+  maps: { ...MISSION_CONTENT.maps, ...MAPS },
+  encounters: { ...MISSION_CONTENT.encounters, ...ENCOUNTERS },
   aiProfiles: AI_PROFILES,
   equipment: EQUIPMENT,
   presentationAssets: ASSETS
@@ -16819,7 +16825,7 @@ function storyConditionMet(campaign, condition, context) {
 }
 
 function storyScript(missionId) {
-  return CAMPAIGN.dialogue[missionId] || null;
+  return missionFileScript(missionId) || CAMPAIGN.dialogue[missionId] || null;
 }
 
 function createStorySceneModel(campaign, missionId, sceneId, context) {
@@ -17471,7 +17477,12 @@ function missionRoster(campaign, deployment, missionId) {
 
 function missionEncounterId(missionId, campaign) {
   const mission = CAMPAIGN.missions[missionId];
-  if (!mission) return null;
+  if (!mission) {
+    // File-authored missions are not on the campaign board; they resolve
+    // straight to the encounter the compiler produced.
+    const fileMission = MISSION_CONTENT.missions[missionId];
+    return fileMission ? fileMission.encounterId : null;
+  }
   for (const variant of mission.encounterVariants || []) {
     if (storyConditionMet(campaign || createCampaignState(), variant.when, null)) return variant.encounterId;
   }
@@ -20378,7 +20389,7 @@ test("Forecast", "Ability categories are presentation metadata only", () => {
 test("Forecast", "Every Phase 2 presentation test still passes", () => {
   const results = runTests("Presentation");
   assertEqual(results.failed, 0);
-  assertEqual(results.total, 20, "Phase 2 kept 20 presentation tests");
+  assertEqual(results.total, 21, "Phase 2 kept its presentation tests");
 });
 
 
@@ -23794,6 +23805,87 @@ test("Maps and encounters", "Every battle initializes legally and reaches a term
       seed += 1;
     }
     if (missionAvailable(campaign, missionId)) campaign = completeActOneMission(campaign, missionId);
+  }
+});
+
+/* ---------------------------------------------------------------
+ * MISSION FILE PIPELINE
+ * Guards the src/content/missions/*.json -> engine path, including the
+ * hand-mirrored editor catalog.
+ * -------------------------------------------------------------*/
+
+test("Mission files", "The editor catalog matches the live content registry", () => {
+  const issues = catalogDriftIssues(CONTENT);
+  assertEqual(issues.length, 0, issues.join(" | "));
+});
+
+test("Mission files", "Every checked-in mission file loaded without errors", () => {
+  assertEqual(
+    MISSION_CONTENT.errors.length,
+    0,
+    MISSION_CONTENT.errors.join(" | ")
+  );
+  assert(Object.keys(MISSION_CONTENT.missions).length > 0, "No mission files were found");
+});
+
+test("Mission files", "File-authored maps and encounters reach the frozen registry", () => {
+  for (const mission of Object.values(MISSION_CONTENT.missions)) {
+    const encounter = CONTENT.encounters[mission.encounterId];
+    assert(encounter, mission.missionId + " has no registered encounter");
+    const map = CONTENT.maps[encounter.mapId];
+    assert(map, mission.missionId + " has no registered map");
+    assertEqual(map.rows.length, map.height, mission.missionId + " map row count");
+    assertEqual(map.rows[0].length, map.width, mission.missionId + " map row width");
+    assert(storyScript(mission.missionId), mission.missionId + " has no story script");
+  }
+});
+
+test("Mission files", "Authored unit and region references compile to runtime ids", () => {
+  for (const mission of Object.values(MISSION_CONTENT.missions)) {
+    const encounter = CONTENT.encounters[mission.encounterId];
+    const params = encounter.objectiveParams || {};
+    for (const unitId of params.unitIds || []) {
+      assert(
+        encounter.units[Number(unitId.slice(1)) - 1],
+        mission.missionId + " objective references unresolved unit " + unitId
+      );
+    }
+    const state = createBattle(mission.encounterId, 11);
+    for (const unitId of params.unitIds || []) {
+      assert(state.units[unitId], mission.missionId + " objective unit " + unitId + " is not in the battle");
+    }
+    for (const beat of storyScript(mission.missionId).midBattle || []) {
+      if (beat.trigger.regionRef) {
+        throw new Error(mission.missionId + " beat " + beat.id + " still carries an uncompiled regionRef");
+      }
+    }
+  }
+});
+
+test("Mission files", "A battle on a file-authored map initializes and resolves headlessly", () => {
+  for (const mission of Object.values(MISSION_CONTENT.missions)) {
+    const state = createBattle(mission.encounterId, 31);
+    assertEqual(state.errors.length, 0, mission.missionId + ": " + state.errors.join(" | "));
+    const map = CONTENT.maps[state.mapId];
+    for (const unitId of state.unitOrder) {
+      const unit = state.units[unitId];
+      assert(
+        isWalkable(map, unit.x, unit.y, state),
+        mission.missionId + " spawned " + unitId + " on an unwalkable tile"
+      );
+    }
+    const result = runBattle(state, GAME_CONFIG.limits.maxActivationsPerBattle);
+    assertEqual(state.errors.length, 0, mission.missionId + " runtime errors: " + state.errors.join(" | "));
+    assertEqual(
+      result.hitCap,
+      false,
+      mission.missionId +
+        " did not reach a terminal result within " +
+        GAME_CONFIG.limits.maxActivationsPerBattle +
+        " activations. On maps this size that usually means GAME_CONFIG.grid.maxPathLength (" +
+        GAME_CONFIG.grid.maxPathLength +
+        ") is shorter than the distance between the two sides."
+    );
   }
 });
 
@@ -27609,8 +27701,15 @@ function TacticalBattleContent({ viewport }) {
 
   // Campaign layer: screens, story flags and persistence.
   const [campaign, setCampaign] = React.useState(() => createCampaignState());
-  const [screen, setScreen] = React.useState("base");
-  const [pendingMissionId, setPendingMissionId] = React.useState(null);
+  // The editor's Playtest button drops a mission into sessionStorage and opens
+  // the game; when that slot is filled we boot straight into the battle instead
+  // of the hub, so painting a tile and standing on it are one click apart.
+  const [screen, setScreen] = React.useState(() =>
+    MISSION_CONTENT.playtestMissionId ? "battle" : "base"
+  );
+  const [pendingMissionId, setPendingMissionId] = React.useState(
+    MISSION_CONTENT.playtestMissionId || null
+  );
   const [missionResult, setMissionResult] = React.useState(null);
   const [pendingOutcome, setPendingOutcome] = React.useState(null);
   const [saveNote, setSaveNote] = React.useState("Campaign not saved yet.");
@@ -27640,7 +27739,10 @@ function TacticalBattleContent({ viewport }) {
 
   const battleRef = React.useRef(null);
   if (!battleRef.current) {
-    battleRef.current = createBattle(deploymentEncounterId(), GAME_CONFIG.defaults.seed);
+    battleRef.current = createBattle(
+      MISSION_CONTENT.playtestEncounterId || deploymentEncounterId(),
+      GAME_CONFIG.defaults.seed
+    );
   }
   const state = battleRef.current;
 
@@ -28879,6 +28981,24 @@ function TacticalBattleContent({ viewport }) {
     >
       <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(circle at 50% 45%, rgba(30,73,105,0.18), transparent 52%), linear-gradient(180deg, #07111c, #02060c)" }} />
       <div className="pointer-events-none absolute inset-0 opacity-20" style={{ backgroundImage: "linear-gradient(rgba(125,183,226,0.07) 1px, transparent 1px)", backgroundSize: "100% 4px" }} />
+      {MISSION_CONTENT.playtestMissionId ? (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-b border border-t-0 border-amber-500/60 bg-amber-950/90 px-3 py-1 text-[11px] text-amber-200"
+          style={{ top: 0 }}
+        >
+          <span className="font-bold tracking-widest">PLAYTEST</span>
+          <span className="text-amber-100/80">{MISSION_CONTENT.playtestMissionId}</span>
+          <button
+            className="rounded border border-amber-500/60 px-2 py-0.5 hover:bg-amber-800/60"
+            onClick={() => {
+              clearPlaytestMission();
+              window.location.reload();
+            }}
+          >
+            Exit playtest
+          </button>
+        </div>
+      ) : null}
       <TopHud
         hud={hud}
         timeline={view.timeline}
@@ -29381,3 +29501,30 @@ const UI_COMPONENTS = {
   TacticalBattleContent,
   TacticalBattle
 };
+
+/* =========================================================================
+ * HEADLESS TEST HOOK
+ *
+ * Exposes the existing suite so it can be driven from outside React — a
+ * browser console, or a Playwright/CI run that loads the page and calls
+ * `window.STATUS_ZERO.runTests()`. The suite already runs renderer-free, so
+ * this needs no separate harness.
+ * =======================================================================*/
+if (typeof window !== "undefined") {
+  window.STATUS_ZERO = {
+    runTests,
+    auditArchitecture,
+    validateContent,
+    runBattleSoak,
+    deterministicReplayCheck,
+    missionContent: MISSION_CONTENT,
+    content: CONTENT,
+    // Enough of the simulation to profile a map or reproduce a battle from a
+    // console, without exposing the whole engine surface.
+    createBattle,
+    runBattle,
+    runActivation,
+    computeMovementRange,
+    chooseAiCommands
+  };
+}
