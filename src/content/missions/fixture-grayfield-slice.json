@@ -1,0 +1,990 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-grayfield-slice",
+  "name": "Grayfield Intercept (vertical slice)",
+  "scale": "S",
+  "summary": "ENGINE ACCEPTANCE FIXTURE, not campaign content. Proves that a Grayfield-shaped mid-battle reversal — pause, cinematic, authoritative scripted shot and repair, faction flip in place, objective replacement, reinforcement spawn, facts and music — is authorable entirely in mission data. Map, balance, dialogue and art are placeholders.",
+  "map": {
+    "name": "Grayfield (slice)",
+    "width": 20,
+    "height": 22,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "....................",
+      "....................",
+      "....................",
+      "....................",
+      ".........##.........",
+      ".........##.........",
+      "....................",
+      "....................",
+      "...###........###...",
+      "...###........###...",
+      "....................",
+      "....................",
+      "~~................~~",
+      "~~................~~",
+      "~~................~~",
+      "....................",
+      "....................",
+      "....................",
+      "....................",
+      "....................",
+      "....................",
+      "...................."
+    ],
+    "elevationRows": [
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000001111110000000",
+      "00000001111110000000",
+      "00000001111110000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000"
+    ]
+  },
+  "teams": [
+    {
+      "id": "player",
+      "name": "Status:Zero",
+      "controller": "human",
+      "marker": "▲",
+      "accent": "emerald"
+    },
+    {
+      "id": "foe",
+      "name": "Loyalist Force",
+      "controller": "ai",
+      "marker": "■",
+      "accent": "rose"
+    },
+    {
+      "id": "sectionSeven",
+      "name": "Section Seven",
+      "controller": "ai",
+      "marker": "◆",
+      "accent": "amber"
+    }
+  ],
+  "units": [
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "player",
+      "x": 9,
+      "y": 19,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": "valeCell",
+      "note": ""
+    },
+    {
+      "ref": "nyx",
+      "definitionId": "stealthMech",
+      "teamId": "player",
+      "x": 11,
+      "y": 19,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": "valeCell",
+      "note": ""
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 3,
+      "facing": "southeast",
+      "aiProfile": "cautious",
+      "group": "sectionSeven",
+      "note": ""
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 16,
+      "y": 3,
+      "facing": "southwest",
+      "aiProfile": "support",
+      "group": "sectionSeven",
+      "note": ""
+    },
+    {
+      "ref": "prototype",
+      "definitionId": "heavyEnforcer",
+      "teamId": "foe",
+      "x": 10,
+      "y": 2,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "escorts",
+      "note": ""
+    },
+    {
+      "ref": "escortA",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 7,
+      "y": 6,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "escorts",
+      "note": ""
+    },
+    {
+      "ref": "escortB",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 13,
+      "y": 6,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "escorts",
+      "note": ""
+    },
+    {
+      "ref": "loyalistAce",
+      "definitionId": "governmentCommander",
+      "teamId": "foe",
+      "x": 10,
+      "y": 0,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "loyalistAce",
+      "note": ""
+    },
+    {
+      "ref": "reserveA",
+      "definitionId": "lightPursuit",
+      "teamId": "foe",
+      "x": 8,
+      "y": 1,
+      "facing": null,
+      "aiProfile": "aggressive",
+      "group": "loyalistReserve",
+      "note": ""
+    },
+    {
+      "ref": "reserveB",
+      "definitionId": "lightPursuit",
+      "teamId": "foe",
+      "x": 12,
+      "y": 1,
+      "facing": null,
+      "aiProfile": "aggressive",
+      "group": "loyalistReserve",
+      "note": ""
+    }
+  ],
+  "regions": [
+    {
+      "id": "valeFallback",
+      "name": "Vale Fallback",
+      "color": "#34d399",
+      "kind": "trigger",
+      "tiles": [
+        {
+          "x": 8,
+          "y": 16
+        },
+        {
+          "x": 9,
+          "y": 16
+        },
+        {
+          "x": 10,
+          "y": 16
+        },
+        {
+          "x": 11,
+          "y": 16
+        },
+        {
+          "x": 12,
+          "y": 16
+        },
+        {
+          "x": 8,
+          "y": 17
+        },
+        {
+          "x": 9,
+          "y": 17
+        },
+        {
+          "x": 10,
+          "y": 17
+        },
+        {
+          "x": 11,
+          "y": 17
+        },
+        {
+          "x": 12,
+          "y": 17
+        },
+        {
+          "x": 8,
+          "y": 18
+        },
+        {
+          "x": 9,
+          "y": 18
+        },
+        {
+          "x": 10,
+          "y": 18
+        },
+        {
+          "x": 11,
+          "y": 18
+        },
+        {
+          "x": 12,
+          "y": 18
+        }
+      ]
+    },
+    {
+      "id": "interceptGround",
+      "name": "Intercept Ground",
+      "color": "#f59e0b",
+      "kind": "trigger",
+      "tiles": [
+        {
+          "x": 6,
+          "y": 10
+        },
+        {
+          "x": 7,
+          "y": 10
+        },
+        {
+          "x": 8,
+          "y": 10
+        },
+        {
+          "x": 9,
+          "y": 10
+        },
+        {
+          "x": 10,
+          "y": 10
+        },
+        {
+          "x": 11,
+          "y": 10
+        },
+        {
+          "x": 12,
+          "y": 10
+        },
+        {
+          "x": 13,
+          "y": 10
+        },
+        {
+          "x": 6,
+          "y": 11
+        },
+        {
+          "x": 7,
+          "y": 11
+        },
+        {
+          "x": 8,
+          "y": 11
+        },
+        {
+          "x": 9,
+          "y": 11
+        },
+        {
+          "x": 10,
+          "y": 11
+        },
+        {
+          "x": 11,
+          "y": 11
+        },
+        {
+          "x": 12,
+          "y": 11
+        },
+        {
+          "x": 13,
+          "y": 11
+        },
+        {
+          "x": 6,
+          "y": 12
+        },
+        {
+          "x": 7,
+          "y": 12
+        },
+        {
+          "x": 8,
+          "y": 12
+        },
+        {
+          "x": 9,
+          "y": 12
+        },
+        {
+          "x": 10,
+          "y": 12
+        },
+        {
+          "x": 11,
+          "y": 12
+        },
+        {
+          "x": 12,
+          "y": 12
+        },
+        {
+          "x": 13,
+          "y": 12
+        },
+        {
+          "x": 6,
+          "y": 13
+        },
+        {
+          "x": 7,
+          "y": 13
+        },
+        {
+          "x": 8,
+          "y": 13
+        },
+        {
+          "x": 9,
+          "y": 13
+        },
+        {
+          "x": 10,
+          "y": 13
+        },
+        {
+          "x": 11,
+          "y": 13
+        },
+        {
+          "x": 12,
+          "y": 13
+        },
+        {
+          "x": 13,
+          "y": 13
+        },
+        {
+          "x": 6,
+          "y": 14
+        },
+        {
+          "x": 7,
+          "y": 14
+        },
+        {
+          "x": 8,
+          "y": 14
+        },
+        {
+          "x": 9,
+          "y": 14
+        },
+        {
+          "x": 10,
+          "y": 14
+        },
+        {
+          "x": 11,
+          "y": 14
+        },
+        {
+          "x": 12,
+          "y": 14
+        },
+        {
+          "x": 13,
+          "y": 14
+        }
+      ]
+    },
+    {
+      "id": "loyalistStaging",
+      "name": "Loyalist Staging",
+      "color": "#f43f5e",
+      "kind": "trigger",
+      "tiles": [
+        {
+          "x": 7,
+          "y": 1
+        },
+        {
+          "x": 8,
+          "y": 1
+        },
+        {
+          "x": 9,
+          "y": 1
+        },
+        {
+          "x": 10,
+          "y": 1
+        },
+        {
+          "x": 11,
+          "y": 1
+        },
+        {
+          "x": 12,
+          "y": 1
+        },
+        {
+          "x": 7,
+          "y": 2
+        },
+        {
+          "x": 8,
+          "y": 2
+        },
+        {
+          "x": 9,
+          "y": 2
+        },
+        {
+          "x": 10,
+          "y": 2
+        },
+        {
+          "x": 11,
+          "y": 2
+        },
+        {
+          "x": 12,
+          "y": 2
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Survive Grayfield",
+    "teamId": "player",
+    "opposingTeamId": "foe",
+    "unitRefs": [],
+    "regionRef": null,
+    "activations": null,
+    "allowElimination": true,
+    "phases": []
+  },
+  "scenes": {
+    "grayfieldTurn": {
+      "title": "The Turn",
+      "location": "Grayfield",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "commander",
+          "text": "Kell is anchoring. He has the shot on me and he is not taking it."
+        },
+        {
+          "speaker": "kell",
+          "text": "You were supposed to move."
+        },
+        {
+          "speaker": "kell",
+          "text": "Not you, Commander. Them."
+        }
+      ],
+      "choices": [
+        {
+          "id": "grayfieldTrust",
+          "prompt": "Kell's line is open. Answer him.",
+          "defaultOptionId": "trust",
+          "options": [
+            {
+              "id": "trust",
+              "text": "\"Take the shot.\"",
+              "flag": "",
+              "fact": "valeTrustedKell",
+              "factValue": true,
+              "detail": ""
+            },
+            {
+              "id": "doubt",
+              "text": "\"Give me a reason first.\"",
+              "flag": "",
+              "fact": "valeDoubtedKell",
+              "factValue": true,
+              "detail": ""
+            }
+          ]
+        }
+      ]
+    },
+    "grayfieldReunion": {
+      "title": "Herald",
+      "location": "Grayfield",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "Hold still. Your left actuator is three seconds from seizing."
+        },
+        {
+          "speaker": "commander",
+          "text": "Reyes —"
+        },
+        {
+          "speaker": "reyes",
+          "text": "Later."
+        }
+      ],
+      "choices": []
+    },
+    "briefing": {
+      "title": "Interception",
+      "location": "Grayfield",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "government",
+          "text": "Zero designate located at Grayfield. Section Seven is already deployed."
+        },
+        {
+          "speaker": "nyx",
+          "text": "That is not an interception. That is a box."
+        }
+      ],
+      "choices": []
+    },
+    "aftermath": {
+      "title": "Whole Again",
+      "location": "Grayfield",
+      "kind": "aftermath",
+      "lines": [
+        {
+          "speaker": "commander",
+          "text": "Section Seven is back. Get them off this field before anyone reconsiders."
+        }
+      ],
+      "choices": []
+    },
+    "defeat": {
+      "title": "Boxed",
+      "location": "Grayfield",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "nyx",
+          "text": "They closed it. Fall back and try the other road."
+        }
+      ],
+      "choices": []
+    }
+  },
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "midBattle": [],
+  "factions": {
+    "relationships": [
+      {
+        "a": "player",
+        "b": "foe",
+        "relationship": "hostile",
+        "symmetric": true
+      },
+      {
+        "a": "player",
+        "b": "sectionSeven",
+        "relationship": "hostile",
+        "symmetric": true
+      },
+      {
+        "a": "foe",
+        "b": "sectionSeven",
+        "relationship": "allied",
+        "symmetric": true
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "valeCell",
+      "name": "Vale's cell",
+      "teamId": "player",
+      "startsActive": true,
+      "deployment": "field"
+    },
+    {
+      "id": "sectionSeven",
+      "name": "Section Seven",
+      "teamId": "sectionSeven",
+      "startsActive": true,
+      "deployment": "field"
+    },
+    {
+      "id": "escorts",
+      "name": "Government escorts",
+      "teamId": "foe",
+      "startsActive": true,
+      "deployment": "field"
+    },
+    {
+      "id": "loyalistAce",
+      "name": "Loyalist ace",
+      "teamId": "foe",
+      "startsActive": false,
+      "deployment": "field"
+    },
+    {
+      "id": "loyalistReserve",
+      "name": "Loyalist reserve",
+      "teamId": "foe",
+      "startsActive": false,
+      "deployment": "reserve"
+    }
+  ],
+  "objectives": [
+    {
+      "id": "surviveInterception",
+      "type": "surviveActivations",
+      "text": "Survive the interception",
+      "required": true,
+      "hidden": false,
+      "startsActive": false,
+      "teamId": "player",
+      "opposingTeamId": "foe",
+      "unitRefs": [],
+      "regionRef": null,
+      "activations": 6,
+      "allowElimination": true,
+      "phases": []
+    },
+    {
+      "id": "defeatLoyalists",
+      "type": "defeatAllEnemies",
+      "text": "Break the loyalist counterattack",
+      "required": true,
+      "hidden": false,
+      "startsActive": false,
+      "teamId": "player",
+      "opposingTeamId": "foe",
+      "unitRefs": [],
+      "regionRef": null,
+      "activations": null,
+      "allowElimination": true,
+      "phases": []
+    },
+    {
+      "id": "protectSectionSeven",
+      "type": "protectUnits",
+      "text": "Keep Kell and Reyes alive",
+      "required": false,
+      "hidden": false,
+      "startsActive": false,
+      "teamId": "player",
+      "opposingTeamId": "foe",
+      "unitRefs": [
+        "kell",
+        "reyes"
+      ],
+      "regionRef": null,
+      "activations": null,
+      "allowElimination": true,
+      "phases": []
+    }
+  ],
+  "phases": [
+    {
+      "id": "interception",
+      "name": "Interception",
+      "enterWhen": null,
+      "next": null,
+      "objectives": [
+        "surviveInterception"
+      ],
+      "activateGroups": [
+        "escorts",
+        "sectionSeven"
+      ],
+      "deactivateGroups": [],
+      "onEnter": [
+        {
+          "type": "requestMusicState",
+          "context": "battle",
+          "track": "grayfield-trap"
+        },
+        {
+          "type": "setMissionFact",
+          "fact": "grayfieldPhase",
+          "value": "interception"
+        }
+      ],
+      "onExit": [],
+      "music": null
+    },
+    {
+      "id": "betrayal",
+      "name": "The turn",
+      "enterWhen": {
+        "trigger": "objectiveCompleted",
+        "objectiveRef": "surviveInterception"
+      },
+      "next": "counterattack",
+      "objectives": [],
+      "activateGroups": [],
+      "deactivateGroups": [],
+      "onEnter": [
+        {
+          "type": "focusCamera",
+          "unitRef": "kell",
+          "hold": 400
+        },
+        {
+          "type": "showScene",
+          "sceneRef": "grayfieldTurn"
+        },
+        {
+          "type": "performAttack",
+          "sourceRef": "kell",
+          "targetRefs": [
+            "prototype"
+          ],
+          "power": 400,
+          "formula": "physical",
+          "lethal": true
+        },
+        {
+          "type": "focusCamera",
+          "unitRef": "reyes",
+          "hold": 300
+        },
+        {
+          "type": "moveUnit",
+          "unitRef": "reyes",
+          "regionRef": "valeFallback",
+          "mode": "path"
+        },
+        {
+          "type": "performRepair",
+          "sourceRef": "reyes",
+          "targetRefs": [
+            "vale"
+          ],
+          "amount": 60
+        },
+        {
+          "type": "showScene",
+          "sceneRef": "grayfieldReunion"
+        },
+        {
+          "type": "changeFaction",
+          "teamId": "sectionSeven",
+          "otherTeamId": "player",
+          "relationship": "allied",
+          "symmetric": true
+        },
+        {
+          "type": "changeFaction",
+          "teamId": "sectionSeven",
+          "otherTeamId": "foe",
+          "relationship": "hostile",
+          "symmetric": true
+        },
+        {
+          "type": "replaceObjectives",
+          "objectiveRefs": [
+            "defeatLoyalists",
+            "protectSectionSeven"
+          ]
+        },
+        {
+          "type": "activateGroup",
+          "groupRef": "loyalistAce"
+        },
+        {
+          "type": "spawnGroup",
+          "groupRef": "loyalistReserve",
+          "regionRef": "loyalistStaging"
+        },
+        {
+          "type": "setMissionFact",
+          "fact": "sectionSevenTurned",
+          "value": true
+        },
+        {
+          "type": "setMissionFact",
+          "fact": "grayfieldPhase",
+          "value": "counterattack"
+        },
+        {
+          "type": "setCampaignFlag",
+          "flag": "sectionSevenRejoined",
+          "value": true
+        },
+        {
+          "type": "requestMusicState",
+          "context": "battle",
+          "track": "grayfield-counterattack"
+        },
+        {
+          "type": "completePhase"
+        }
+      ],
+      "onExit": [],
+      "music": null
+    },
+    {
+      "id": "counterattack",
+      "name": "Counterattack",
+      "enterWhen": null,
+      "next": null,
+      "objectives": [
+        "defeatLoyalists",
+        "protectSectionSeven"
+      ],
+      "activateGroups": [
+        "loyalistAce"
+      ],
+      "deactivateGroups": [],
+      "onEnter": [
+        {
+          "type": "queueBark",
+          "speaker": "kell",
+          "text": "Prototype is down. Ward is coming up the middle."
+        }
+      ],
+      "onExit": [],
+      "music": null
+    }
+  ],
+  "beats": [
+    {
+      "id": "openingCallout",
+      "name": "Opening",
+      "trigger": {
+        "trigger": "battleStarted"
+      },
+      "when": null,
+      "phase": "interception",
+      "once": true,
+      "maxFires": null,
+      "priority": 90,
+      "actions": [
+        {
+          "type": "queueBark",
+          "speaker": "commander",
+          "text": "Two Section Seven frames on the ridge. They knew we were coming."
+        }
+      ]
+    },
+    {
+      "id": "valePressed",
+      "name": "Vale takes fire",
+      "trigger": {
+        "trigger": "unitHpBelowThreshold",
+        "unitRef": "vale",
+        "percent": 75
+      },
+      "when": {
+        "phase": "interception"
+      },
+      "phase": null,
+      "once": true,
+      "maxFires": null,
+      "priority": 80,
+      "actions": [
+        {
+          "type": "setMissionFact",
+          "fact": "valeWasPressed",
+          "value": true
+        },
+        {
+          "type": "queueBark",
+          "speaker": "nyx",
+          "text": "You're taking the whole line yourself again."
+        }
+      ]
+    },
+    {
+      "id": "reservesReachTheGround",
+      "name": "Reserves commit",
+      "trigger": {
+        "trigger": "unitEnteredRegion",
+        "regionRef": "interceptGround",
+        "teamId": "foe"
+      },
+      "when": {
+        "phase": "counterattack"
+      },
+      "phase": null,
+      "once": true,
+      "maxFires": null,
+      "priority": 60,
+      "actions": [
+        {
+          "type": "queueBark",
+          "speaker": "reyes",
+          "text": "They're committing the reserve. Hold the ridge."
+        }
+      ]
+    },
+    {
+      "id": "prototypeDown",
+      "name": "Prototype destroyed",
+      "trigger": {
+        "trigger": "unitDestroyed",
+        "unitRef": "prototype"
+      },
+      "when": null,
+      "phase": null,
+      "once": true,
+      "maxFires": null,
+      "priority": 70,
+      "actions": [
+        {
+          "type": "setMissionFact",
+          "fact": "prototypeDestroyed",
+          "value": true
+        }
+      ]
+    }
+  ],
+  "startPhaseId": "interception"
+}

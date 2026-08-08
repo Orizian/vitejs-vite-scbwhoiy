@@ -12,6 +12,13 @@ import {
   Btn
 } from "./panels.jsx";
 import {
+  FactionsPanel,
+  GroupsPanel,
+  ObjectiveLibraryPanel,
+  PhasesPanel,
+  TriggersPanel
+} from "./scriptPanels.jsx";
+import {
   createEmptyMission,
   normalizeMission,
   validateMission,
@@ -38,9 +45,14 @@ const TABS = [
   { id: "map", label: "Map" },
   { id: "units", label: "Units" },
   { id: "regions", label: "Regions" },
-  { id: "objective", label: "Objective" },
+  { id: "factions", label: "Factions" },
+  { id: "groups", label: "Groups" },
+  { id: "objectives", label: "Objectives" },
+  { id: "phases", label: "Phases" },
+  { id: "triggers", label: "Triggers" },
   { id: "scenes", label: "Scenes" },
-  { id: "beats", label: "Beats" }
+  { id: "objective", label: "Fallback" },
+  { id: "barks", label: "Barks" }
 ];
 
 const AUTOSAVE_KEY = "statuszero.editor.draft";
@@ -68,6 +80,8 @@ export default function Editor() {
   const [selectedRegionId, setSelectedRegionId] = React.useState(null);
   const [selectedSceneId, setSelectedSceneId] = React.useState(null);
   const [selectedBeatId, setSelectedBeatId] = React.useState(null);
+  const [selectedPhaseId, setSelectedPhaseId] = React.useState(null);
+  const [selectedTriggerId, setSelectedTriggerId] = React.useState(null);
   const [showElevation, setShowElevation] = React.useState(true);
   const [showRegions, setShowRegions] = React.useState(true);
   const [showUnits, setShowUnits] = React.useState(true);
@@ -479,12 +493,31 @@ export default function Editor() {
                 setSelectedSceneId={setSelectedSceneId}
               />
             ) : null}
-            {tab === "beats" ? (
+            {tab === "barks" ? (
               <BeatsPanel
                 mission={mission}
                 update={update}
                 selectedBeatId={selectedBeatId}
                 setSelectedBeatId={setSelectedBeatId}
+              />
+            ) : null}
+            {tab === "factions" ? <FactionsPanel mission={mission} update={update} /> : null}
+            {tab === "groups" ? <GroupsPanel mission={mission} update={update} /> : null}
+            {tab === "objectives" ? <ObjectiveLibraryPanel mission={mission} update={update} /> : null}
+            {tab === "phases" ? (
+              <PhasesPanel
+                mission={mission}
+                update={update}
+                selectedPhaseId={selectedPhaseId}
+                setSelectedPhaseId={setSelectedPhaseId}
+              />
+            ) : null}
+            {tab === "triggers" ? (
+              <TriggersPanel
+                mission={mission}
+                update={update}
+                selectedBeatId={selectedTriggerId}
+                setSelectedBeatId={setSelectedTriggerId}
               />
             ) : null}
           </div>

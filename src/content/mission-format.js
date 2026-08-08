@@ -23,6 +23,8 @@ import {
   TERRAIN_IDS,
   DEFAULT_LEGEND,
   UNIT_IDS,
+  ABILITY_IDS,
+  STATUS_IDS,
   AI_PROFILE_IDS,
   FACINGS,
   SPEAKER_IDS,
@@ -31,10 +33,12 @@ import {
   PHASE_OBJECTIVE_TYPE_IDS,
   objectiveTypeById,
   triggerTypeById,
-  phaseActionTypeById,
   mapScaleById,
   terrainById
 } from "./catalog.js";
+import { validateAction } from "../mission/actions.js";
+import { validateTrigger, validateCondition } from "../mission/conditions.js";
+import { normalizeRelationship, RELATIONSHIPS } from "../mission/factions.js";
 
 export const FORMAT_ID = "statuszero.mission";
 export const FORMAT_VERSION = 1;
@@ -131,8 +135,116 @@ export function normalizeMission(raw) {
     scenes: normalizeScenes(source.scenes),
     sequences: normalizeSequences(source.sequences),
     midBattle: (Array.isArray(source.midBattle) ? source.midBattle : []).map(normalizeMidBattle),
-    campaign: source.campaign || null
+    campaign: source.campaign || null,
+
+    /* ---- scripting layer ---- */
+    factions: normalizeFactions(source.factions),
+    // Units may name a group the author never declared; those become ordinary
+    // field groups so `group` keeps working as a plain label.
+    groups: withImplicitGroups(
+      (Array.isArray(source.groups) ? source.groups : []).map(normalizeGroup),
+      units
+    ),
+    objectives: (Array.isArray(source.objectives) ? source.objectives : []).map(normalizeObjectiveEntry),
+    beats: (Array.isArray(source.beats) ? source.beats : []).map(normalizeBeat),
+    startPhaseId: source.startPhaseId || null
   };
+}
+
+/* ---------------------------------------------------------------
+ * SCRIPTING LAYER NORMALIZERS
+ * -------------------------------------------------------------*/
+
+function normalizeFactions(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    relationships: (Array.isArray(source.relationships) ? source.relationships : [])
+      .map((entry) => ({
+        a: entry.a,
+        b: entry.b,
+        relationship: normalizeRelationship(entry.relationship) || "hostile",
+        symmetric: entry.symmetric !== false
+      }))
+      .filter((entry) => entry.a && entry.b)
+  };
+}
+
+function withImplicitGroups(groups, units) {
+  const declared = new Set(groups.map((group) => group.id));
+  const out = groups.slice();
+  for (const unit of units) {
+    if (!unit.group || declared.has(unit.group)) continue;
+    declared.add(unit.group);
+    out.push({
+      id: unit.group,
+      name: unit.group,
+      teamId: unit.teamId || null,
+      startsActive: true,
+      deployment: "field",
+      implicit: true
+    });
+  }
+  return out;
+}
+
+function normalizeGroup(raw, index) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    id: source.id || "group" + (index + 1),
+    name: source.name || source.id || "Group " + (index + 1),
+    teamId: source.teamId || null,
+    startsActive: source.startsActive !== false,
+    // "field" units are placed at battle start; "reserve" units are held back
+    // until a spawnGroup action puts them on the map.
+    deployment: source.deployment === "reserve" ? "reserve" : "field"
+  };
+}
+
+/** An entry in the mission's objective library. Objectives are declared once
+ *  and then activated, completed, failed or replaced by script actions. */
+function normalizeObjectiveEntry(raw, index) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    id: source.id || "objective" + (index + 1),
+    type: OBJECTIVE_TYPE_IDS.includes(source.type) ? source.type : "defeatAllEnemies",
+    text: source.text || "",
+    required: source.required !== false,
+    hidden: source.hidden === true,
+    startsActive: source.startsActive === true,
+    teamId: source.teamId || "player",
+    opposingTeamId: source.opposingTeamId || "foe",
+    unitRefs: Array.isArray(source.unitRefs) ? source.unitRefs.slice() : [],
+    regionRef: source.regionRef || null,
+    activations: source.activations == null ? null : Number(source.activations),
+    allowElimination: source.allowElimination !== false,
+    phases: Array.isArray(source.phases) ? source.phases.map(normalizeObjectivePhase) : []
+  };
+}
+
+function normalizeBeat(raw, index) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    id: source.id || "beat" + (index + 1),
+    name: source.name || "",
+    trigger: normalizeTriggerSpec(source.trigger),
+    when: source.when || null,
+    phase: source.phase || null,
+    once: source.once !== false,
+    maxFires: source.maxFires == null ? null : Number(source.maxFires),
+    priority: source.priority == null ? 50 : Number(source.priority),
+    actions: (Array.isArray(source.actions) ? source.actions : []).map((action) => ({ ...action }))
+  };
+}
+
+function normalizeTriggerSpec(raw) {
+  if (!raw) return null;
+  if (typeof raw === "string") return { trigger: raw };
+  const spec = { ...raw };
+  if (spec.type && !spec.trigger) {
+    spec.trigger = spec.type;
+    delete spec.type;
+  }
+  return spec.trigger ? spec : null;
 }
 
 function normalizeMap(raw) {
@@ -253,20 +365,44 @@ function normalizeObjectivePhase(raw, index) {
   };
 }
 
-/** Authored mission phases (GDD §2.2). Stored, validated and exported; the
- *  engine cannot run them yet — see finding R-01. */
+/**
+ * A runtime mission phase (GDD §2.2). Executed by src/mission/runtime.js.
+ *
+ * `enterWhen` is a trigger spec, a condition object, or both — `{ trigger,
+ * when }`. On entry a phase declaratively replaces the active objectives and
+ * wakes/sleeps groups, then runs its `onEnter` actions.
+ */
 function normalizePhase(raw, index) {
   const source = raw && typeof raw === "object" ? raw : {};
+  const enterWhen = source.enterWhen ? { ...source.enterWhen } : null;
+  if (enterWhen && enterWhen.type && !enterWhen.trigger) {
+    enterWhen.trigger = enterWhen.type;
+    delete enterWhen.type;
+  }
+
+  // `actions` was the field name before phases were executable; keep reading it
+  // so missions authored against the previous format still load.
+  const legacyActions = Array.isArray(source.actions) ? source.actions : [];
+
   return {
     id: source.id || "phase" + (index + 1),
     name: source.name || source.id || "Phase " + (index + 1),
-    enterWhen: source.enterWhen || null,
-    activeGroups: Array.isArray(source.activeGroups) ? source.activeGroups.slice() : [],
-    objectiveIds: Array.isArray(source.objectiveIds) ? source.objectiveIds.slice() : [],
-    music: source.music || null,
-    actions: Array.isArray(source.actions)
-      ? source.actions.map((action) => ({ ...action, type: action.type || "queueBark" }))
-      : []
+    enterWhen,
+    next: source.next || null,
+    objectives: Array.isArray(source.objectives)
+      ? source.objectives.slice()
+      : Array.isArray(source.objectiveIds)
+      ? source.objectiveIds.slice()
+      : [],
+    activateGroups: Array.isArray(source.activateGroups)
+      ? source.activateGroups.slice()
+      : Array.isArray(source.activeGroups)
+      ? source.activeGroups.slice()
+      : [],
+    deactivateGroups: Array.isArray(source.deactivateGroups) ? source.deactivateGroups.slice() : [],
+    onEnter: (Array.isArray(source.onEnter) ? source.onEnter : legacyActions).map((a) => ({ ...a })),
+    onExit: (Array.isArray(source.onExit) ? source.onExit : []).map((a) => ({ ...a })),
+    music: source.music || null
   };
 }
 
@@ -286,10 +422,17 @@ function normalizeScenes(raw) {
       choices: (Array.isArray(scene.choices) ? scene.choices : []).map((choice, index) => ({
         id: choice.id || sceneId + "Choice" + (index + 1),
         prompt: choice.prompt || "",
+        // The option a headless run picks. Choices set facts, and facts change
+        // authoritative outcomes, so this must never be random.
+        defaultOptionId: choice.defaultOptionId || null,
         options: (Array.isArray(choice.options) ? choice.options : []).map((option, oIndex) => ({
           id: option.id || "option" + (oIndex + 1),
           text: option.text || "",
           flag: option.flag || "",
+          // `fact` is the mission-local equivalent of `flag`; later triggers
+          // read it through the missionFact condition.
+          fact: option.fact || "",
+          factValue: option.factValue === undefined ? true : option.factValue,
           detail: option.detail || ""
         }))
       }))
@@ -344,10 +487,11 @@ function inferScale(width, height) {
  * so the editor shows them just as loudly.
  * -------------------------------------------------------------*/
 
-export function validateMission(mission) {
+export function validateMission(mission, catalog) {
   const errors = [];
   const warnings = [];
   const m = normalizeMission(mission);
+  const scriptRefs = buildScriptRefs(m, catalog);
 
   const push = (list, message) => list.push(message);
 
@@ -520,7 +664,11 @@ export function validateMission(mission) {
         push(warnings, 'Choice "' + choice.id + '" needs at least two options.');
       }
       for (const option of choice.options) {
-        if (!option.flag) push(warnings, 'Choice option "' + option.id + '" sets no campaign flag, so nothing can react to it.');
+        // An option is useful if it sets either a campaign flag (persists past
+        // the mission) or a mission fact (readable by this mission's triggers).
+        if (!option.flag && !option.fact) {
+          push(warnings, 'Choice option "' + option.id + '" sets neither a campaign flag nor a mission fact, so nothing can react to it.');
+        }
       }
     }
   }
@@ -561,33 +709,184 @@ export function validateMission(mission) {
     if (!SPEAKER_IDS.includes(beat.speaker)) {
       push(warnings, label + ' uses unknown speaker "' + beat.speaker + '".');
     }
-    for (const action of beat.actions) {
-      const actionType = phaseActionTypeById(action.type);
-      if (!actionType) {
-        push(errors, label + ' uses unknown action "' + action.type + '".');
-      } else if (!actionType.supported) {
-        push(
-          warnings,
-          label + ' queues action "' + action.type + '". The mid-battle layer can only queue dialogue today (finding R-01), so this is authored but inert.'
-        );
+    // Legacy `midBattle` beats may now carry real actions too, validated
+    // against the same registry the runtime executes.
+    for (let index = 0; index < beat.actions.length; index += 1) {
+      for (const problem of validateAction(beat.actions[index], scriptRefs, label + " action " + (index + 1))) {
+        push(errors, problem);
       }
     }
   }
 
-  /* --- authored mission phases --- */
-  for (const phase of m.phases) {
-    push(
-      warnings,
-      'Mission phase "' + phase.id + '" is stored but not executed — the phase state machine (SCR-01) is not built yet.'
-    );
-    for (const action of phase.actions) {
-      if (!phaseActionTypeById(action.type)) {
-        push(errors, 'Mission phase "' + phase.id + '" uses unknown action "' + action.type + '".');
-      }
-    }
-  }
+  /* --- scripting layer --- */
+  validateScriptLayer(m, scriptRefs, errors, warnings);
 
+  /* --- legacy authored phase shell (pre-runtime missions) --- */
   return { errors, warnings, mission: m, ok: errors.length === 0 };
+}
+
+/* ---------------------------------------------------------------
+ * SCRIPTING LAYER VALIDATION
+ *
+ * Everything here is validated against the same registries the runtime
+ * executes, so the editor cannot let an author write a beat the engine will
+ * silently ignore.
+ * -------------------------------------------------------------*/
+
+function buildScriptRefs(mission, catalog) {
+  return {
+    units: new Set(mission.units.map((unit) => unit.ref)),
+    regions: new Set(mission.regions.map((region) => region.id)),
+    objectives: new Set(mission.objectives.map((objective) => objective.id)),
+    groups: new Set(mission.groups.map((group) => group.id)),
+    phases: new Set(mission.phases.map((phase) => phase.id)),
+    scenes: new Set(Object.keys(mission.scenes)),
+    teams: new Set(mission.teams.map((team) => team.id)),
+    terrains: new Set(TERRAIN_IDS),
+    abilities: new Set((catalog && catalog.abilities) || ABILITY_IDS),
+    statuses: new Set((catalog && catalog.statuses) || STATUS_IDS)
+  };
+}
+
+function validateScriptLayer(mission, refs, errors, warnings) {
+  const push = (list, message) => list.push(message);
+
+  /* factions */
+  for (const entry of mission.factions.relationships) {
+    if (!refs.teams.has(entry.a)) push(errors, 'Faction relationship references unknown team "' + entry.a + '".');
+    if (!refs.teams.has(entry.b)) push(errors, 'Faction relationship references unknown team "' + entry.b + '".');
+    if (!RELATIONSHIPS.includes(entry.relationship)) {
+      push(errors, 'Faction relationship "' + entry.relationship + '" is not one of ' + RELATIONSHIPS.join(", ") + ".");
+    }
+  }
+
+  /* groups */
+  const groupIds = new Set();
+  const usedGroups = new Set(mission.units.map((unit) => unit.group).filter(Boolean));
+  for (const group of mission.groups) {
+    if (groupIds.has(group.id)) push(errors, 'Duplicate group id "' + group.id + '".');
+    groupIds.add(group.id);
+    if (group.teamId && !refs.teams.has(group.teamId)) {
+      push(errors, 'Group "' + group.id + '" references unknown team "' + group.teamId + '".');
+    }
+    if (!usedGroups.has(group.id)) {
+      push(warnings, 'Group "' + group.id + '" has no units assigned to it.');
+    }
+  }
+
+  /* objective library */
+  const objectiveIds = new Set();
+  for (const objective of mission.objectives) {
+    const label = 'Objective "' + objective.id + '"';
+    if (objectiveIds.has(objective.id)) push(errors, "Duplicate objective id " + objective.id + ".");
+    objectiveIds.add(objective.id);
+    if (!objective.text.trim()) push(warnings, label + " has no display text.");
+    validateObjectiveShape(objective, mission, refs.units, refs.regions, errors, warnings, label);
+    for (const phase of objective.phases) {
+      validateObjectiveShape(phase, mission, refs.units, refs.regions, errors, warnings, label + ' phase "' + phase.id + '"');
+    }
+  }
+
+  /* phases */
+  const phaseIds = new Set();
+  for (const phase of mission.phases) {
+    const label = 'Phase "' + phase.id + '"';
+    if (phaseIds.has(phase.id)) push(errors, "Duplicate phase id " + phase.id + ".");
+    phaseIds.add(phase.id);
+
+    if (phase.enterWhen) {
+      if (phase.enterWhen.trigger) {
+        for (const problem of validateTrigger(phase.enterWhen, refs, label + " enterWhen")) push(errors, problem);
+      }
+      if (phase.enterWhen.when) {
+        for (const problem of validateCondition(phase.enterWhen.when, refs, label + " enterWhen.when")) push(errors, problem);
+      }
+      if (!phase.enterWhen.trigger && !phase.enterWhen.when) {
+        push(errors, label + " has an enterWhen with neither a trigger nor a condition, so it can never be entered automatically.");
+      }
+    }
+    if (phase.next && !refs.phases.has(phase.next)) {
+      push(errors, label + ' points at unknown next phase "' + phase.next + '".');
+    }
+    for (const ref of phase.objectives) {
+      if (!refs.objectives.has(ref)) push(errors, label + ' activates unknown objective "' + ref + '".');
+    }
+    for (const ref of phase.activateGroups.concat(phase.deactivateGroups)) {
+      if (!refs.groups.has(ref)) push(errors, label + ' references unknown group "' + ref + '".');
+    }
+    phase.onEnter.forEach((action, index) => {
+      for (const problem of validateAction(action, refs, label + " onEnter[" + (index + 1) + "]")) push(errors, problem);
+    });
+    phase.onExit.forEach((action, index) => {
+      for (const problem of validateAction(action, refs, label + " onExit[" + (index + 1) + "]")) push(errors, problem);
+    });
+  }
+
+  if (mission.startPhaseId && !phaseIds.has(mission.startPhaseId)) {
+    push(errors, 'startPhaseId "' + mission.startPhaseId + '" is not a declared phase.');
+  }
+
+  // A phase after the first that nothing can ever enter is a dead branch.
+  if (mission.phases.length > 1) {
+    const reachable = new Set([mission.startPhaseId || mission.phases[0].id]);
+    for (const phase of mission.phases) {
+      if (phase.next) reachable.add(phase.next);
+      if (phase.enterWhen) reachable.add(phase.id);
+      for (const action of phase.onEnter.concat(phase.onExit)) {
+        if (action.type === "startPhase" && action.phaseRef) reachable.add(action.phaseRef);
+      }
+    }
+    for (const beat of mission.beats) {
+      for (const action of beat.actions) {
+        if (action.type === "startPhase" && action.phaseRef) reachable.add(action.phaseRef);
+      }
+    }
+    for (const phase of mission.phases) {
+      if (!reachable.has(phase.id)) {
+        push(warnings, 'Phase "' + phase.id + '" is unreachable: nothing enters it and no phase leads to it.');
+      }
+    }
+  }
+
+  /* beats */
+  const beatIds = new Set();
+  for (const beat of mission.beats) {
+    const label = 'Beat "' + beat.id + '"';
+    if (beatIds.has(beat.id)) push(errors, "Duplicate beat id " + beat.id + ".");
+    beatIds.add(beat.id);
+
+    if (!beat.trigger && !beat.when) {
+      push(errors, label + " has neither a trigger nor a condition, so it can never fire.");
+    }
+    if (beat.trigger) {
+      for (const problem of validateTrigger(beat.trigger, refs, label + " trigger")) push(errors, problem);
+    }
+    if (beat.when) {
+      for (const problem of validateCondition(beat.when, refs, label + " when")) push(errors, problem);
+    }
+    if (beat.phase) {
+      const phases = Array.isArray(beat.phase) ? beat.phase : [beat.phase];
+      for (const ref of phases) {
+        if (!refs.phases.has(ref)) push(errors, label + ' is scoped to unknown phase "' + ref + '".');
+      }
+    }
+    if (!beat.actions.length) {
+      push(warnings, label + " has no actions, so firing it does nothing.");
+    }
+    beat.actions.forEach((action, index) => {
+      for (const problem of validateAction(action, refs, label + " action " + (index + 1))) push(errors, problem);
+    });
+
+    // A beat that can fire repeatedly and re-triggers its own trigger type is
+    // the classic runaway; the runtime bounds it, but say so at author time.
+    if (beat.once === false && beat.actions.some((action) => action.type === "startPhase")) {
+      push(warnings, label + " is repeatable and starts a phase. Consider `once: true` to avoid re-entering it.");
+    }
+  }
+
+  if (mission.phases.length && !mission.objectives.length) {
+    push(warnings, "This mission uses phases but declares no objectives, so phases cannot change what the player is doing.");
+  }
 }
 
 function validateObjectiveShape(objective, mission, unitRefs, regionIds, errors, warnings, label) {
@@ -694,12 +993,21 @@ export function compileMission(rawMission) {
     elevationRows: mission.map.elevation.map((row) => row.map((value) => encodeElevation(value)).join(""))
   };
 
+  // Reserve groups are held off the map until a spawnGroup action places them.
+  const reserveGroupIds = new Set(
+    mission.groups.filter((group) => group.deployment === "reserve").map((group) => group.id)
+  );
+  const fieldUnits = mission.units.filter((unit) => !reserveGroupIds.has(unit.group));
+  const reserveUnits = mission.units.filter((unit) => reserveGroupIds.has(unit.group));
+
   // Runtime ids are assigned by createBattle() as u1..uN in encounter order,
   // so the compiler owns that mapping and every reference resolves through it.
+  // Units also carry their authored `ref` into battle state, which is what
+  // lets the mission runtime address spawned units that have no fixed index.
   const runtimeIdByRef = {};
-  const encounterUnits = mission.units.map((unit, index) => {
-    runtimeIdByRef[unit.ref] = "u" + (index + 1);
+  const toSpawnSpec = (unit) => {
     const entry = {
+      ref: unit.ref,
       definitionId: unit.definitionId,
       teamId: unit.teamId,
       x: unit.x,
@@ -707,7 +1015,12 @@ export function compileMission(rawMission) {
     };
     if (unit.facing) entry.facing = unit.facing;
     if (unit.aiProfile) entry.aiProfile = unit.aiProfile;
+    if (unit.group) entry.groupId = unit.group;
     return entry;
+  };
+  const encounterUnits = fieldUnits.map((unit, index) => {
+    runtimeIdByRef[unit.ref] = "u" + (index + 1);
+    return toSpawnSpec(unit);
   });
 
   const regionTiles = {};
@@ -747,7 +1060,62 @@ export function compileMission(rawMission) {
         }
       ])
     ),
-    midBattle: mission.midBattle.map((beat) => compileMidBattle(beat, resolveUnits, regionTiles))
+    midBattle: mission.midBattle.map((beat) => compileMidBattle(beat, resolveUnits, regionTiles)),
+
+    /* ---- runtime scripting layer ----
+     * Passed straight to src/mission/runtime.js. References stay symbolic
+     * (unit refs, region ids) because the runtime resolves them against live
+     * battle state — a unit spawned mid-battle has no compile-time index. */
+    id: mission.id,
+    startPhaseId: mission.startPhaseId || (mission.phases[0] ? mission.phases[0].id : null),
+    factions: {
+      relationships: mission.factions.relationships.map((entry) => ({ ...entry }))
+    },
+    regions: mission.regions.map((region) => ({
+      id: region.id,
+      name: region.name,
+      tiles: region.tiles.map((tile) => ({ x: tile.x, y: tile.y }))
+    })),
+    groups: mission.groups.map((group) => ({
+      id: group.id,
+      name: group.name,
+      teamId: group.teamId,
+      startsActive: group.startsActive,
+      deployment: group.deployment,
+      units: reserveUnits.filter((unit) => unit.group === group.id).map(toSpawnSpec)
+    })),
+    objectives: mission.objectives.map((objective) => ({
+      id: objective.id,
+      objectiveId: objective.type,
+      text: objective.text,
+      required: objective.required,
+      hidden: objective.hidden,
+      startsActive: objective.startsActive,
+      params: compileObjectiveParams(objective, resolveUnits, resolveRegion, { symbolic: true })
+    })),
+    phases: mission.phases.map((phase) => ({
+      id: phase.id,
+      name: phase.name,
+      enterWhen: phase.enterWhen ? { ...phase.enterWhen } : null,
+      next: phase.next,
+      objectives: phase.objectives.slice(),
+      activateGroups: phase.activateGroups.slice(),
+      deactivateGroups: phase.deactivateGroups.slice(),
+      onEnter: phase.onEnter.map((action) => ({ ...action })),
+      onExit: phase.onExit.map((action) => ({ ...action })),
+      music: phase.music
+    })),
+    beats: mission.beats.map((beat) => ({
+      id: beat.id,
+      name: beat.name,
+      trigger: beat.trigger ? { ...beat.trigger } : null,
+      when: beat.when ? JSON.parse(JSON.stringify(beat.when)) : null,
+      phase: beat.phase,
+      once: beat.once,
+      maxFires: beat.maxFires,
+      priority: beat.priority,
+      actions: beat.actions.map((action) => ({ ...action }))
+    }))
   };
 
   return {
@@ -784,7 +1152,7 @@ function cloneChoice(choice) {
   };
 }
 
-function compileObjectiveParams(objective, resolveUnits, resolveRegion) {
+function compileObjectiveParams(objective, resolveUnits, resolveRegion, options) {
   const base = {
     teamId: objective.teamId,
     opposingTeamId: objective.opposingTeamId
@@ -796,18 +1164,27 @@ function compileObjectiveParams(objective, resolveUnits, resolveRegion) {
       phases: objective.phases.map((phase) => ({
         id: phase.id,
         type: phase.type,
-        params: singleObjectiveParams(phase, resolveUnits, resolveRegion)
+        params: singleObjectiveParams(phase, resolveUnits, resolveRegion, options)
       }))
     };
   }
 
-  return { ...base, ...singleObjectiveParams(objective, resolveUnits, resolveRegion) };
+  return { ...base, ...singleObjectiveParams(objective, resolveUnits, resolveRegion, options) };
 }
 
-function singleObjectiveParams(objective, resolveUnits, resolveRegion) {
+function singleObjectiveParams(objective, resolveUnits, resolveRegion, options) {
   const params = {};
-  const units = resolveUnits(objective.unitRefs);
-  if (units.length) params.unitIds = units;
+  const refs = objective.unitRefs || [];
+  if (refs.length) {
+    if (options && options.symbolic) {
+      // Script-owned objectives keep authored refs; the engine resolves them
+      // against live state so units spawned mid-battle can be targets.
+      params.unitRefs = refs.slice();
+    } else {
+      const units = resolveUnits(refs);
+      if (units.length) params.unitIds = units;
+    }
+  }
   if (objective.regionRef) params.tiles = resolveRegion(objective.regionRef);
   if (objective.activations != null) params.activations = objective.activations;
   if (objective.type === "reachExtraction" && objective.allowElimination) params.allowElimination = true;
@@ -892,6 +1269,8 @@ export function catalogDriftIssues(content) {
   check("Terrain", TERRAIN_IDS, Object.keys(content.terrains));
   check("Chassis", UNIT_IDS, Object.keys(content.units));
   check("AI profile", AI_PROFILE_IDS, Object.keys(content.aiProfiles));
+  check("Ability", ABILITY_IDS, Object.keys(content.abilities));
+  check("Status", STATUS_IDS, Object.keys(content.statuses));
 
   // The reverse direction is a warning, not an error: not every internal test
   // fixture needs to be placeable in the editor.
@@ -937,10 +1316,17 @@ export function serializeMission(mission) {
         tiles: region.tiles
       })),
       objective: m.objective,
-      phases: m.phases,
       scenes: m.scenes,
       sequences: m.sequences,
       midBattle: m.midBattle,
+
+      /* scripting layer */
+      factions: m.factions,
+      groups: m.groups,
+      objectives: m.objectives,
+      phases: m.phases,
+      beats: m.beats,
+      ...(m.startPhaseId ? { startPhaseId: m.startPhaseId } : {}),
       ...(m.campaign ? { campaign: m.campaign } : {})
     },
     null,

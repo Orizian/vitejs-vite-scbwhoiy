@@ -1,5 +1,11 @@
 # STATUS ZERO — ENGINE ANALYSIS
 
+> **Updated after the mission-scripting phase.** §3's table now reflects what is built. The
+> scripting layer described as the critical gap in §4 (R-01), the faction matrix (R-02) and
+> mid-mission save (R-05) have since been implemented — see `docs/MISSION_SCRIPTING.md`.
+> Findings that are now closed are marked **[CLOSED]**; the analysis text is left intact so the
+> reasoning that drove the work stays readable.
+
 **Audit of `src/App.jsx` against the Gameplay, Mission & Engine Design v1.0 and the four character documents.**
 Written to answer one question: *what has to be built before it is worth authoring assets, dialogue and 72 operations?*
 
@@ -100,10 +106,10 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 |---|---|---|---|
 | SIM-01 | Deterministic authoritative simulation | **Met** | Enforced by the architecture audit. |
 | TIM-01 | Recovery timeline | **Met** | Constants need a large-map pass (§2.2). |
-| ACT-01 | Action + reaction framework | **Partial** | Move + primary action + quick actions exist. **No reaction system at all** — line 6047 is a comment reading "Generic hook reserved for Phase 4 reactions". Every trio Link mechanic depends on this. |
+| ACT-01 | Action + reaction framework | **Partial** | Move + primary action + quick actions exist. **No reaction system at all.** Every trio Link mechanic depends on this. It is the next phase's work, and it will consume the same authoritative event stream the mission scripting layer now uses. |
 | RES-01 | Generic resource framework | **Partial** | Per-unit resources exist with max/current and spend/restore effects. **No squad-wide resources** (Stock), no charge/solution states, no reaction pools. |
 | STA-01 | Status/component framework | **Partial** | Timed statuses work well. **No subsystem damage** — nothing models a damaged sensor, radiator, weapon or comms, which Kell's solution-breaking, Nyx's venting and Becker's whole character need. |
-| FAC-01 | Multi-faction hostility matrix | **Missing** | `isHostile()` is one line: `teamId !== teamId` (line 4690). Three teams means three mutually hostile teams. Civilians and protected assets have to be put **on the player team**, which is why the example mission's pumps are player units. Mid-battle hostility change is impossible. |
+| FAC-01 | Multi-faction hostility matrix | **Met** | **[CLOSED]** A per-battle relationship matrix (`src/mission/factions.js`) with allied / neutral / hostile, mutable mid-battle, serialized with the save. Elimination now resolves on hostility rather than team identity. Defaults reproduce the old rule exactly, so existing content is unaffected. |
 | MAP-01 | 2.5D tile battlefield | **Met** | Elevation, cover, facing, flanking, LOS, deterministic projection all present. |
 | MAP-02 | Large-map sectors & culling | **Missing** | No dormant groups, no sector activation, no render culling, no pathfinding budget. Every unit thinks every activation (`runAiTurn`, line 8273). |
 | MAP-03 | Interactive/destructible environment | **Missing** | `createTerrain`/`removeTerrain` effects exist and are capped at 64 overrides. **No doors, gates, interactables, hazards or scripted terrain replacement.** |
@@ -111,16 +117,16 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 | AI-01 | Role-based tactical AI | **Partial** | Three profiles (`aggressive`, `cautious`, `support`) that are pure weight vectors. No hunter, escort, civilian, ace or objective-focused behaviour. |
 | AI-02 | Alert/search state | **Missing** | No dormant → alerted → searching → engaged. AI reads full battle state; there is no per-faction knowledge model at all. |
 | STL-01 | Three-state stealth | **Missing** | Concealment is a boolean derived from status flags `untargetable` / `hidden` (line 4758). No Suspected state, no last-known position, no heat, no counter-detection. Nyx's entire design is unimplemented. |
-| OBJ-01 | Composable objectives | **Partial** | Six types plus a linear `phasedObjective`. **One objective at a time**, no objective stack, no partial failure. The GDD's Bellview brief ("losing pumps is survivable unless all fail") cannot be expressed. |
-| OBJ-02 | Dynamic objective mutation | **Missing** | Phases advance linearly and only forward. Objectives cannot be added, replaced, failed, hidden or reprioritised mid-battle. |
-| SCR-01 | Mission phase state machine | **Missing** | No phase machine. |
-| SCR-02 | Trigger/action event bus | **Partial → the critical gap.** | See §4. Triggers exist but only produce dialogue, and they work by rescanning the battle log rather than subscribing to events. |
+| OBJ-01 | Composable objectives | **Met** | **[CLOSED]** An objective stack with required/optional entries, per-entry progress and per-entry status. Optional objectives record outcomes without ending the mission, which is what the Bellview brief needs. |
+| OBJ-02 | Dynamic objective mutation | **Met** | **[CLOSED]** `addObjective`, `removeObjective`, `replaceObjectives`, `completeObjective`, `failObjective`, plus per-phase objective sets. Hidden objectives are supported. |
+| SCR-01 | Mission phase state machine | **Met** | **[CLOSED]** Named phases with entry conditions, declarative objective/group sets, onEnter/onExit action lists and a `next` handoff. Phase state serializes and replays deterministically. |
+| SCR-02 | Trigger/action event bus | **Met** | **[CLOSED]** A typed mission event stream derived from the simulation's own event queue, a generic field-equality trigger registry, a composable condition vocabulary and an action registry. No log rescanning. Adding an event type adds a trigger with no other code. |
 | CIN-01 | Mid-battle cinematic sequencer | **Partial** | Hard-pause portrait dialogue with priority and once-only works well. No camera choreography, no unit emphasis, no in-scene choices mid-battle. |
-| CIN-02 | Cinematic authoritative actions | **Missing** | A cutscene cannot change battle state. Grayfield's scripted shot, scripted repair and faction flip are all impossible. |
+| CIN-02 | Cinematic authoritative actions | **Met** | **[CLOSED]** `performAttack`, `performRepair`, `moveUnit`, `changeFaction`, `changeUnitTeam`, `modifyTerrain`, `applyStatus` and `spawnGroup` all route through the engine's own effect and event machinery. Verified: the Grayfield prototype goes 145 HP → 0 with a real `unitDefeated`. |
 | BARK-01 | Non-blocking combat dialogue | **Partial** | `pauseBattle: false` exists on beats. No collision/cooldown rules to prevent spam. |
-| SPN-01 | Reinforcement system | **Missing** | A `spawnUnit` effect exists for summons. **No authored spawn groups, no map-edge arrival, no telegraphing, no phase-specific AI assignment.** |
+| SPN-01 | Reinforcement system | **Met** | **[CLOSED]** Named groups with dormant/awake state and field/reserve deployment; `activateGroup` and `spawnGroup` with region placement. Reinforcements take a full recovery before acting and never spawn twice. Telegraphing is presentation work, still to do. |
 | BOS-01 | Elite/ace phase behaviour | **Missing** | No retreat, no loadout change, no death-refusal, no cross-mission persistence. |
-| CIV-01 | Civilian/convoy behaviour | **Partial** | A `civilian` tag exists and outcome facts track civilian damage — which is the *good* half. No panic, flee, traffic routes or evacuation zones. |
+| CIV-01 | Civilian/convoy behaviour | **Partial** | A `civilian` tag exists and outcome facts track civilian damage. Civilians can now sit on a genuinely neutral faction rather than pretending to be player units (FAC-01). Still no panic, flee, traffic routes or evacuation zones. |
 | CAP-01 | Disable/capture/surrender | **Missing** | Units are alive or destroyed. No disable, capture, surrender or extraction of a pilot from a dead frame. |
 | SUB-01 | Multi-sector / submap | **Missing** | One map per battle. |
 | UI-01 | Battle HUD clarity | **Met** | Genuinely strong — timeline, forecasts, threat zones, danger overlays, contextual command model. |
@@ -133,11 +139,11 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 | NYX-01 | Thermal headroom + cloak | **Missing** | A binary `cloak` status stands in. |
 | LINK-01 | Relationship link / reaction pool | **Missing** | Blocked on ACT-01. |
 | BRN-01 | Outcome fact/flag system | **Met** | The best-implemented advanced requirement in the project. Facts are derived from battle state, and the architecture audit *tests* that a dialogue promise does not set the flag. |
-| SAV-01 | Mid-mission save/resume | **Missing** | `saveCampaign()` (line 17799) serialises hub state only. Battle state is never serialised. A 150-minute XL operation cannot be paused. |
+| SAV-01 | Mid-mission save/resume | **Met** | **[CLOSED]** `serializeBattle` / `deserializeBattle` cover RNG state, timeline, terrain overrides, factions, the objective stack and the whole mission runtime including the half-executed beat. Verified in a browser: saving mid-cinematic and reloading resumes at the same action and never replays it. |
 | AUD-01 | Contextual audio control | **Partial** | Per-screen and per-mission music with fallback chains. No per-phase changes or stingers. |
 | DBG-01 | Mission authoring/debug tools | **Partial** | Strong developer panel, validation panel, soak tests, replay check. No phase jump, flag setting, group spawning or AI-knowledge inspection. |
 
-**Tally: 7 met, 13 partial, 20 missing.**
+**Tally after the mission-scripting phase: 15 met, 12 partial, 13 missing.** (Was 7 / 13 / 20.)
 
 That reads worse than it is. Of the 20 missing, roughly twelve are downstream of just **three** systems: the mission script layer (SCR-01/02, CIN-02, OBJ-02, SPN-01, BOS-01), the faction matrix (FAC-01, CAP-01, CIV-01), and the reaction framework (ACT-01, LINK-01, and all four character kits).
 
@@ -145,7 +151,10 @@ That reads worse than it is. Of the 20 missing, roughly twelve are downstream of
 
 ## 4. The critical gap, in detail
 
-### R-01 — The mid-battle layer can talk but cannot act
+### R-01 — The mid-battle layer can talk but cannot act  **[CLOSED]**
+
+> Implemented. `src/mission/` now provides the event stream, phase machine, condition vocabulary and action registry described below. The Grayfield fixture is the acceptance test. See `docs/MISSION_SCRIPTING.md`.
+
 
 `evaluateMidBattleTriggers()` (line 16983) is the closest thing to the GDD's §5 mission-script layer. What it actually does:
 
@@ -169,7 +178,10 @@ Three consequences:
 
 This single change unblocks SCR-01, SCR-02, CIN-02, OBJ-02, SPN-01 and BOS-01 — six requirements, and by far the most mission-design leverage per unit of work.
 
-### R-02 — No faction matrix
+### R-02 — No faction matrix  **[CLOSED]**
+
+> Implemented as `src/mission/factions.js`, stored in battle state and mutable by the `changeFaction` action.
+
 
 `isHostile()` is `state.units[a].teamId !== state.units[b].teamId`. Everything else follows from that one line:
 
@@ -202,7 +214,10 @@ At the measured 2.7 ms per decision this is fine up to roughly 25 thinking units
 
 **Fix:** interpose a knowledge layer between AI and state. Start dumb — a per-faction set of "known contacts" with last-known positions, updated on LOS and on noise events. Dormancy falls out of it almost for free.
 
-### R-05 — No mid-mission save
+### R-05 — No mid-mission save  **[CLOSED]**
+
+> Implemented as `serializeBattle` / `deserializeBattle`, covering the mission runtime as well as the simulation.
+
 
 XL operations are specified at 90–150 minutes. Nothing serialises battle state. This is not a nice-to-have for missions that long; it is the difference between a mission being playable and being abandoned.
 

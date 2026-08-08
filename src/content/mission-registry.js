@@ -47,6 +47,7 @@ function collect() {
   const maps = {};
   const encounters = {};
   const scripts = {};
+  const scriptsByEncounter = {};
   const missions = {};
   const errors = [];
   const warnings = [];
@@ -79,11 +80,13 @@ function collect() {
       delete maps[compiled.mapId];
       delete encounters[compiled.encounterId];
       delete scripts[compiled.missionId];
+      delete scriptsByEncounter[compiled.encounterId];
       delete missions[compiled.missionId];
     }
     maps[compiled.mapId] = compiled.map;
     encounters[compiled.encounterId] = compiled.encounter;
     scripts[compiled.missionId] = compiled.script;
+    scriptsByEncounter[compiled.encounterId] = compiled.script;
     missions[compiled.missionId] = {
       missionId: compiled.missionId,
       encounterId: compiled.encounterId,
@@ -114,6 +117,7 @@ function collect() {
     maps,
     encounters,
     scripts,
+    scriptsByEncounter,
     missions,
     errors,
     warnings,

@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "node scripts/run-tests.mjs",
     "test:serve": "node scripts/run-tests.mjs --serve",
-    "editor": "vite --open /editor.html"
+    "editor": "vite --open /editor.html",
+    "check:grayfield": "node scripts/grayfield-check.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

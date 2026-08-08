@@ -1,6 +1,31 @@
 import React from "react";
 import { MISSION_CONTENT, missionFileScript, clearPlaytestMission } from "./content/mission-registry.js";
 import { catalogDriftIssues } from "./content/mission-format.js";
+import {
+  createFactionState,
+  relationshipBetween,
+  factionsHostile,
+  setRelationship,
+  ensureFaction
+} from "./mission/factions.js";
+import {
+  createMissionRuntimeState,
+  ingestSimulationEvent,
+  advanceMission,
+  resolveMissionWait,
+  takePresentationRequests,
+  autoResolveWaits,
+  startMission,
+  LIMITS as MISSION_LIMITS
+} from "./mission/runtime.js";
+import { ACTION_REGISTRY, ENGINE_ADAPTER_CONTRACT } from "./mission/actions.js";
+import { MISSION_EVENT_TYPES, deriveMissionEvents } from "./mission/events.js";
+import {
+  CONDITION_REGISTRY,
+  evaluateCondition as evaluateMissionCondition,
+  matchTrigger as matchMissionTrigger
+} from "./mission/conditions.js";
+import { validateMission as validateMissionFile, normalizeMission } from "./content/mission-format.js";
 
 /* =========================================================================
  * TACTICAL ENGINE — PHASE 1
@@ -4509,6 +4534,15 @@ function tilesInArea(state, center, area, context) {
 
 function createBattle(encounterId, seed, options) {
   const opts = options || {};
+  // A mission file that declares phases or beats brings its runtime with it.
+  // Encounters without one never touch the scripting layer at all.
+  if (!opts.missionScript && MISSION_CONTENT.scriptsByEncounter[encounterId]) {
+    const candidate = MISSION_CONTENT.scriptsByEncounter[encounterId];
+    if ((candidate.phases || []).length || (candidate.beats || []).length) {
+      opts.missionScript = candidate;
+    }
+  }
+  if (opts.missionScript) registerMissionScript(opts.missionScript);
   const encounter = CONTENT.encounters[encounterId];
   if (!encounter) throw new Error("Unknown encounter: " + encounterId);
   if (CONTENT.errors.length && !opts.ignoreContentErrors) {
@@ -4535,9 +4569,24 @@ function createBattle(encounterId, seed, options) {
     objectiveState: {
       objectiveId: encounter.objective,
       params: encounter.objectiveParams ? JSON.parse(JSON.stringify(encounter.objectiveParams)) : {},
-      progress: {}
+      progress: {},
+      // Script-owned objective stack. Empty means "use the single legacy
+      // objective above", which is what every pre-existing encounter does.
+      entries: []
     },
     battleLog: [],
+
+    // Faction relationships live in battle state so they serialize with a save
+    // and can be rewritten mid-battle. Defaults reproduce the old behaviour.
+    factions: createFactionState(
+      encounter.teams.map((team) => team.id),
+      (opts.missionScript && opts.missionScript.factions) || encounter.factions || null
+    ),
+
+    // Mission scripting runtime. Null for encounters with no script, which
+    // keeps the whole system off the critical path for existing content.
+    mission: opts.missionScript ? createMissionRuntimeState(opts.missionScript) : null,
+    missionScriptId: opts.missionScript ? opts.missionScript.id || null : null,
 
     randomSeed: seed == null ? GAME_CONFIG.defaults.seed : seed,
     randomState: createRandomState(seed == null ? GAME_CONFIG.defaults.seed : seed),
@@ -4581,6 +4630,8 @@ function createBattle(encounterId, seed, options) {
       y: spawn.y,
       facing: (rosterEntry && rosterEntry.facing) || spawn.facing || null,
       aiProfileId: spawn.aiProfile || null,
+      ref: spawn.ref || null,
+      groupId: spawn.groupId || null,
       modifiers: rosterEntry && rosterEntry.modifiers ? rosterEntry.modifiers : spawn.modifiers || null
     });
     state.units[unit.id] = unit;
@@ -4605,6 +4656,32 @@ function createBattle(encounterId, seed, options) {
   }
 
   logLine(state, "battleStarted", "Battle started: " + encounter.name);
+
+  if (state.mission) {
+    state.campaignFlagsSnapshot = opts.campaignFlags ? { ...opts.campaignFlags } : {};
+    // Headless callers (tests, soaks, deterministic replay) resolve blocking
+    // scenes with their authored defaults so a scripted battle runs to
+    // completion without a renderer. The authoritative outcome is identical
+    // either way, because scenes never touch battle state — only their choices
+    // do, and those resolve to a fixed default rather than a random pick.
+    state.autoResolveScenes = opts.autoResolveScenes === true;
+
+    // Groups that start asleep put their units to sleep before the first turn.
+    for (const groupId of Object.keys(state.mission.groups)) {
+      if (state.mission.groups[groupId].active) continue;
+      for (const unitId of state.unitOrder) {
+        if (state.units[unitId].groupId === groupId) state.units[unitId].dormant = true;
+      }
+    }
+
+    startMissionScript(state, {
+      script: opts.missionScript,
+      campaignFlags: state.campaignFlagsSnapshot,
+      autoResolve: state.autoResolveScenes
+    });
+    processAllEvents(state);
+    checkObjectives(state);
+  }
   return state;
 }
 
@@ -4663,6 +4740,15 @@ function createRuntimeUnit(state, options) {
 
     aiProfileId: options.aiProfileId || definition.aiProfile || null,
 
+    // Authored identity. The mission runtime addresses units by `ref` rather
+    // than by index, which is what lets an objective or a trigger name a unit
+    // that gets spawned mid-battle.
+    ref: options.ref || id,
+    groupId: options.groupId || null,
+    // A dormant unit stays on the map but takes no turns, which is how
+    // reinforcement waves and sleeping sectors work.
+    dormant: options.dormant === true,
+
     alive: true
   };
 }
@@ -4687,8 +4773,26 @@ function livingUnits(state) {
   return state.unitOrder.map((id) => state.units[id]).filter((u) => u.alive);
 }
 
+/**
+ * The one place hostility is decided. Reads the battle's faction matrix, which
+ * defaults to "different team means enemy" so every pre-existing encounter
+ * behaves exactly as before, and which a mission script can rewrite mid-battle
+ * without recreating a single unit.
+ */
 function isHostile(state, aId, bId) {
-  return state.units[aId].teamId !== state.units[bId].teamId;
+  const a = state.units[aId];
+  const b = state.units[bId];
+  if (!a || !b) return false;
+  return factionsHostile(state.factions, a.teamId, b.teamId);
+}
+
+/** True when two units are on the same side — same team, or teams that have
+ *  been made allies. Used for ally targeting and threat display. */
+function isFriendly(state, aId, bId) {
+  const a = state.units[aId];
+  const b = state.units[bId];
+  if (!a || !b) return false;
+  return relationshipBetween(state.factions, a.teamId, b.teamId) === "allied";
 }
 
 /* ---------------------------------------------------------------
@@ -4702,12 +4806,14 @@ function compareTimelineEntries(a, b) {
 }
 
 function timelineCandidates(state) {
-  return livingUnits(state).map((unit) => ({
-    unitId: unit.id,
-    time: unit.nextActionTime,
-    speed: calculateUnitStats(state, unit.id).speed,
-    creationOrder: unit.creationOrder
-  }));
+  return livingUnits(state)
+    .filter((unit) => !unit.dormant)
+    .map((unit) => ({
+      unitId: unit.id,
+      time: unit.nextActionTime,
+      speed: calculateUnitStats(state, unit.id).speed,
+      creationOrder: unit.creationOrder
+    }));
 }
 
 function getNextActionableUnitId(state) {
@@ -4779,7 +4885,9 @@ const TARGET_FILTERS = {
     return unit.id === sourceUnitId;
   },
   ally(state, sourceUnitId, unit) {
-    return !isHostile(state, sourceUnitId, unit.id);
+    // "Not hostile" is not the same as "allied" once neutrals exist: a repair
+    // must not be able to target a civilian faction the player merely tolerates.
+    return unit.id === sourceUnitId || isFriendly(state, sourceUnitId, unit.id);
   },
   enemy(state, sourceUnitId, unit) {
     return isHostile(state, sourceUnitId, unit.id);
@@ -6364,6 +6472,16 @@ const EVENT_HANDLERS = {
     });
   },
 
+  /** A unit placed by the mission script. The unit already exists — this event
+   *  exists so the log, the renderer and the mission stream all see it. */
+  unitDeployed(state, event) {
+    logLine(state, "unitDeployed", unitLabel(state, event.unitId) + " deploys", {
+      unitId: event.unitId,
+      tile: event.tile,
+      groupId: event.groupId || null
+    });
+  },
+
   unitSpawned(state, event) {
     const source = state.units[event.sourceUnitId];
     const teamId =
@@ -6719,6 +6837,12 @@ function processNextEvent(state, onEvent) {
   }
   const before = onEvent ? snapshotForEvents(state) : null;
   handler(state, event);
+  // The mission scripting layer consumes the same authoritative event the
+  // simulation just applied. No log rescanning, no polling.
+  if (state.mission) {
+    const deps = missionDeps(state);
+    if (deps) ingestSimulationEvent(state, deps, event);
+  }
   if (onEvent) onEvent(event, before, snapshotForEvents(state));
   return event;
 }
@@ -7683,6 +7807,15 @@ function executeCommand(state, command, options) {
     events = events.concat(processAllEvents(state, onEvent));
   }
   checkObjectives(state, onEvent);
+
+  // Mission script last, so beats react to a settled battle state. Objectives
+  // are then re-checked because a beat may have replaced them with something
+  // already satisfied. Two passes, never a loop.
+  if (state.mission) {
+    runMissionScript(state, options);
+    events = events.concat(processAllEvents(state, onEvent));
+    checkObjectives(state, onEvent);
+  }
   return { ok: true, errors: [], events, preview: validation.preview };
 }
 
@@ -7697,21 +7830,66 @@ function markEliminationObjectives(handlers, ids) {
   }
 }
 
+/**
+ * Objective parameters, with authored unit refs resolved against live state.
+ *
+ * Script-owned objectives keep symbolic refs rather than compile-time ids so a
+ * unit spawned mid-battle can be an objective target. Legacy encounters carry
+ * `unitIds` directly and pass through untouched.
+ */
+function resolveObjectiveParams(state, params) {
+  const source = params || {};
+  if (!source.unitRefs && !source.phases) return source;
+  const resolved = { ...source };
+  if (source.unitRefs) {
+    resolved.unitIds = source.unitRefs
+      .map((ref) => state.unitOrder.find((id) => state.units[id].ref === ref))
+      .filter(Boolean);
+  }
+  if (source.phases) {
+    resolved.phases = source.phases.map((phase) => ({
+      ...phase,
+      params: resolveObjectiveParams(state, phase.params)
+    }));
+  }
+  return resolved;
+}
+
 function objectiveParams(state) {
-  return (state.objectiveState && state.objectiveState.params) || {};
+  return resolveObjectiveParams(state, (state.objectiveState && state.objectiveState.params) || {});
 }
 
 function teamAlive(state, teamId) {
   return livingUnits(state).some((unit) => unit.teamId === teamId);
 }
 
+/**
+ * Elimination resolves on *hostility*, not on team identity.
+ *
+ * Counting distinct surviving teams was correct while every different team was
+ * automatically an enemy. Once factions exist, an allied third party sharing
+ * the field means two teams survive and the battle would never end — which is
+ * exactly what Grayfield produces after Section Seven changes sides.
+ *
+ * Under the default matrix (different team means hostile) this is equivalent
+ * to the old rule, so existing encounters are unaffected.
+ */
 function eliminationResult(state) {
   const alive = livingUnits(state);
-  const teams = new Set(alive.map((u) => u.teamId));
-  if (teams.size <= 1) {
-    return { finished: true, winner: teams.size === 1 ? [...teams][0] : null };
+  if (!alive.length) return { finished: true, winner: null };
+
+  for (let i = 0; i < alive.length; i += 1) {
+    for (let j = i + 1; j < alive.length; j += 1) {
+      if (isHostile(state, alive[i].id, alive[j].id)) return { finished: false, winner: null };
+    }
   }
-  return { finished: false, winner: null };
+
+  // Nobody left is hostile to anybody. The survivors won; name the human side
+  // if it is among them so the result reads correctly for the player.
+  const survivingTeamIds = new Set(alive.map((unit) => unit.teamId));
+  const human = state.teams.find((team) => team.controller === "human" && survivingTeamIds.has(team.id));
+  const winner = human || state.teams.find((team) => survivingTeamIds.has(team.id));
+  return { finished: true, winner: winner ? winner.id : null };
 }
 
 /**
@@ -7881,14 +8059,122 @@ OBJECTIVE_HANDLERS.phasedObjective = function phasedObjective(state) {
 
 markEliminationObjectives(OBJECTIVE_HANDLERS, ["defeatAllEnemies"]);
 
+/**
+ * Evaluates one entry of the script-owned objective stack in isolation, by
+ * temporarily pointing the legacy objective slot at it. Every handler reads
+ * `objectiveParams(state)` and `state.objectiveState.progress`, so this reuses
+ * all six objective types without duplicating any of them.
+ */
+function evaluateObjectiveEntry(state, entry) {
+  const handler = OBJECTIVE_HANDLERS[entry.objectiveId];
+  if (!handler) {
+    state.errors.push("No handler for objective: " + entry.objectiveId);
+    return { finished: false, winner: null };
+  }
+  if (!entry.progress) entry.progress = {};
+  const saved = state.objectiveState;
+  state.objectiveState = {
+    ...saved,
+    objectiveId: entry.objectiveId,
+    params: entry.params,
+    progress: entry.progress
+  };
+  let result;
+  try {
+    result = handler(state);
+  } finally {
+    entry.progress = state.objectiveState.progress;
+    state.objectiveState = saved;
+  }
+  return result;
+}
+
+/**
+ * Resolves the script-owned objective stack. An entry completes when its
+ * handler declares the player team the winner and fails when it declares the
+ * opposition. Victory needs every required entry complete; one failed required
+ * entry loses the mission.
+ */
+function checkObjectiveStack(state) {
+  const entries = state.objectiveState.entries || [];
+  const rootParams = state.objectiveState.params || {};
+  const playerTeamId = rootParams.teamId || "player";
+  const opposingTeamId = rootParams.opposingTeamId || "foe";
+
+  if (!teamAlive(state, playerTeamId)) return { finished: true, winner: opposingTeamId };
+
+  let required = 0;
+  let complete = 0;
+  for (const entry of entries) {
+    if (entry.status === "failed") {
+      if (entry.required) return { finished: true, winner: opposingTeamId };
+      continue;
+    }
+    if (entry.required) required += 1;
+    if (entry.status === "complete") {
+      if (entry.required) complete += 1;
+      continue;
+    }
+    const result = evaluateObjectiveEntry(state, entry);
+    if (!result.finished) continue;
+    const entryPlayerTeamId = (entry.params && entry.params.teamId) || playerTeamId;
+    if (result.winner === entryPlayerTeamId) {
+      entry.status = "complete";
+      logLine(state, "objectiveCompleted", "Objective complete: " + (entry.text || entry.ref), {
+        objectiveRef: entry.ref
+      });
+      if (state.mission) state.mission.inbox.push({ type: "objectiveCompleted", objectiveRef: entry.ref });
+      if (entry.required) complete += 1;
+    } else if (result.winner) {
+      entry.status = "failed";
+      logLine(state, "objectiveFailed", "Objective failed: " + (entry.text || entry.ref), {
+        objectiveRef: entry.ref
+      });
+      if (state.mission) state.mission.inbox.push({ type: "objectiveFailed", objectiveRef: entry.ref });
+      if (entry.required) return { finished: true, winner: opposingTeamId };
+    }
+  }
+
+  if (required > 0 && complete >= required) {
+    // Completing the last required objective only wins the battle once the
+    // mission script has nothing left to say. Otherwise a phase-one objective
+    // like "survive the interception" would end Grayfield at the exact moment
+    // it is supposed to hand over to the betrayal phase. The script gets to
+    // replace the objectives first; executeCommand re-checks immediately after.
+    if (missionScriptBusy(state)) return { finished: false, winner: null };
+    return { finished: true, winner: playerTeamId };
+  }
+  return { finished: false, winner: null };
+}
+
+/** True while the mission runtime still has events, queued beats or a scene in
+ *  flight. Victory and defeat both wait for it. */
+function missionScriptBusy(state) {
+  const runtime = state.mission;
+  if (!runtime) return false;
+  return !!(
+    runtime.wait ||
+    runtime.pending ||
+    runtime.queue.length ||
+    runtime.inbox.length
+  );
+}
+
 function checkObjectives(state, onEvent) {
   if (state.finished) return state;
-  const handler = OBJECTIVE_HANDLERS[state.objectiveState.objectiveId];
-  if (!handler) {
-    state.errors.push("No handler for objective: " + state.objectiveState.objectiveId);
-    return state;
+
+  let result;
+  if ((state.objectiveState.entries || []).length) {
+    result = checkObjectiveStack(state);
+  } else {
+    const handler = OBJECTIVE_HANDLERS[state.objectiveState.objectiveId];
+    if (!handler) {
+      state.errors.push("No handler for objective: " + state.objectiveState.objectiveId);
+      return state;
+    }
+    result = handler(state);
   }
-  const result = handler(state);
+
   if (result.finished) {
     state.finished = true;
     state.winner = result.winner;
@@ -7899,6 +8185,373 @@ function checkObjectives(state, onEvent) {
   }
   return state;
 }
+/* ---------------------------------------------------------------
+ * MISSION SCRIPTING BRIDGE
+ *
+ * The mission runtime (src/mission/) is engine-agnostic: it knows about
+ * phases, triggers and actions but nothing about this file. Everything it
+ * needs from the simulation arrives through this adapter, which is the only
+ * place the two halves meet.
+ *
+ * Every simulation-authority action routes to the same machinery ordinary
+ * gameplay uses — resolveEffects, the event queue, the pathfinder — so a
+ * scripted attack produces real damage, real defeat events and real log lines,
+ * and shows up identically in a save.
+ * -------------------------------------------------------------*/
+
+const MISSION_ENGINE = {
+  resolveEffects(state, options) {
+    resolveEffects(state, options);
+  },
+
+  processEvents(state) {
+    processAllEvents(state);
+  },
+
+  queueEvent(state, event) {
+    queueEvent(state, event);
+  },
+
+  logLine(state, type, text, data) {
+    logLine(state, type, text, data);
+  },
+
+  unitStats(state, unitId) {
+    return calculateUnitStats(state, unitId);
+  },
+
+  unitTags(state, unitId) {
+    const unit = state.units[unitId];
+    if (!unit) return [];
+    const definition = CONTENT.units[unit.definitionId];
+    return (definition && definition.tags) || [];
+  },
+
+  isWalkable(state, x, y) {
+    const map = getMap(state);
+    return inBounds(map, x, y) && isWalkable(map, x, y, state);
+  },
+
+  /**
+   * Pathfinding for a scripted move.
+   *
+   * Ordinary pathfinding is capped by the unit's per-turn movement allowance,
+   * which is right for a player order and wrong for a cinematic: Reyes
+   * crossing the field to reach Vale is not a normal move. The budget is
+   * raised to the engine's path-length ceiling, so terrain, elevation and
+   * blocking rules all still apply — only the turn allowance is lifted.
+   */
+  findPath(state, unitId, target) {
+    return findPath(state, unitId, target, { budget: GAME_CONFIG.grid.maxPathLength });
+  },
+
+  /**
+   * Scripted movement along a real path. Emits the same `unitMoved` event a
+   * player move does, so region triggers, facing and the renderer all behave
+   * exactly as they would for a normal move.
+   */
+  moveUnitAlongPath(state, unitId, path) {
+    const unit = state.units[unitId];
+    if (!unit || !path || path.length < 2) return false;
+    const startFacing = normalizeFacing(unit.facing);
+    const stepFacings = path.slice(1).map((tile, index) => facingFromTiles(path[index], tile, startFacing));
+    const finalFacing = stepFacings.length ? stepFacings[stepFacings.length - 1] : startFacing;
+    queueEvent(state, {
+      type: "unitMoved",
+      unitId,
+      from: { x: path[0].x, y: path[0].y },
+      to: { x: path[path.length - 1].x, y: path[path.length - 1].y },
+      path: path.map((tile) => ({ x: tile.x, y: tile.y })),
+      tiles: path.length - 1,
+      startFacing,
+      stepFacings,
+      scripted: true
+    });
+    if (finalFacing !== startFacing) {
+      queueEvent(state, { type: "facingChanged", unitId, from: startFacing, to: finalFacing, reason: "movement" });
+    }
+    return true;
+  },
+
+  /** Direct placement, used when no legal path exists. Goes through the same
+   *  teleport effect ordinary abilities use. */
+  teleportUnit(state, unitId, tile) {
+    const unit = state.units[unitId];
+    if (!unit) return false;
+    queueEvent(state, {
+      type: "unitTeleported",
+      unitId,
+      from: { x: unit.x, y: unit.y },
+      to: { x: tile.x, y: tile.y },
+      scripted: true
+    });
+    return true;
+  },
+
+  spawnUnit(state, spec) {
+    if (state.spawnCount >= GAME_CONFIG.limits.maxSpawnedUnits) {
+      state.errors.push("Spawn limit reached; scripted group was not placed.");
+      return null;
+    }
+    if (!CONTENT.units[spec.definitionId]) {
+      state.errors.push("Scripted spawn used unknown chassis: " + spec.definitionId);
+      return null;
+    }
+    const unit = createRuntimeUnit(state, {
+      definitionId: spec.definitionId,
+      teamId: spec.teamId,
+      x: spec.x,
+      y: spec.y,
+      facing: spec.facing || null,
+      aiProfileId: spec.aiProfile || null,
+      ref: spec.ref || null,
+      groupId: spec.groupId || null,
+      dormant: spec.dormant === true
+    });
+    state.units[unit.id] = unit;
+    state.unitOrder.push(unit.id);
+    state.spawnCount += 1;
+    // Stats need the unit to be in state, and a reinforcement must not act the
+    // instant it lands — it waits one full recovery like anything else.
+    const spawnStats = calculateUnitStats(state, unit.id);
+    unit.currentHp = Math.max(0, Math.min(unit.currentHp, spawnStats.maxHp));
+    unit.alive = unit.currentHp > 0;
+    unit.nextActionTime =
+      state.currentTime + FORMULAS.timeline.recoveryDelay(spawnStats.speed, FORMULAS.timeline.baseRecovery);
+    ensureFaction(state.factions, unit.teamId, state.teams.map((team) => team.id), "hostile");
+    queueEvent(state, {
+      type: "unitDeployed",
+      unitId: unit.id,
+      tile: { x: unit.x, y: unit.y },
+      groupId: unit.groupId
+    });
+    return unit.id;
+  },
+
+  setTerrain(state, x, y, terrainId) {
+    const map = getMap(state);
+    if (!inBounds(map, x, y)) return false;
+    if (!CONTENT.terrains[terrainId]) {
+      state.errors.push("Scripted terrain change used unknown terrain: " + terrainId);
+      return false;
+    }
+    queueEvent(state, {
+      type: "terrainCreated",
+      tile: { x, y },
+      terrainId,
+      sourceUnitId: null,
+      scripted: true
+    });
+    return true;
+  },
+
+  /**
+   * Moves a unit to another team in place. No despawn, no replacement: HP,
+   * statuses, position, facing, equipment and timeline slot all survive. This
+   * is what lets Kell and Reyes defect mid-battle and keep the damage they
+   * took while hostile.
+   */
+  setUnitTeam(state, unitId, teamId) {
+    const unit = state.units[unitId];
+    if (!unit || unit.teamId === teamId) return;
+    const from = unit.teamId;
+    unit.teamId = teamId;
+    ensureFaction(state.factions, teamId, state.teams.map((team) => team.id), "hostile");
+    logLine(state, "unitChangedTeam", unitLabel(state, unitId) + " changes allegiance to " + teamId, {
+      unitId,
+      from,
+      to: teamId
+    });
+  },
+
+  /** A scripted attack resolved through the real damage pipeline. */
+  scriptedAttack(state, options) {
+    const { sourceUnitId, targetUnitIds, abilityId } = options;
+    const ability = abilityId ? CONTENT.abilities[abilityId] : null;
+
+    if (ability) {
+      // Prefer the authored ability so the shot uses its real numbers, effects
+      // and presentation profile.
+      queueEvent(state, {
+        type: "abilityUsed",
+        sourceUnitId,
+        abilityId,
+        target: (() => {
+          const target = state.units[targetUnitIds[0]];
+          return target ? { x: target.x, y: target.y } : null;
+        })(),
+        targetUnitIds: targetUnitIds.slice(),
+        scripted: true
+      });
+      processAllEvents(state);
+      return;
+    }
+
+    // No ability named: a plain authored hit, still through resolveEffects so
+    // shields, statuses, defeat and wreck events all behave normally.
+    const power = options.power == null ? 999 : options.power;
+    resolveEffects(state, {
+      sourceUnitId,
+      targetUnitIds,
+      effects: [
+        {
+          type: "damage",
+          formula: options.formula || "physical",
+          power,
+          canMiss: false,
+          ignoresShields: options.lethal === true
+        }
+      ]
+    });
+    processAllEvents(state);
+  },
+
+  /** A scripted repair resolved through the real heal pipeline. */
+  scriptedRepair(state, options) {
+    const { sourceUnitId, targetUnitIds, abilityId } = options;
+    if (abilityId && CONTENT.abilities[abilityId]) {
+      queueEvent(state, {
+        type: "abilityUsed",
+        sourceUnitId,
+        abilityId,
+        target: (() => {
+          const target = state.units[targetUnitIds[0]];
+          return target ? { x: target.x, y: target.y } : null;
+        })(),
+        targetUnitIds: targetUnitIds.slice(),
+        scripted: true
+      });
+      processAllEvents(state);
+      return;
+    }
+    resolveEffects(state, {
+      sourceUnitId,
+      targetUnitIds,
+      effects: [{ type: "heal", formula: "flat", power: options.amount == null ? 40 : options.amount }]
+    });
+    processAllEvents(state);
+  }
+};
+
+/* ---------------------------------------------------------------
+ * MID-MISSION SAVE (SAV-01)
+ *
+ * Battle state is plain serializable data by construction — the architecture
+ * audit already forbids live references and definitions inside runtime units —
+ * so a save is a JSON round-trip plus a version stamp and a guard that the
+ * content it refers to still exists.
+ *
+ * What this covers, per GDD §12.1: RNG state and counter, the timeline and the
+ * active unit, terrain overrides, delayed effects, faction relationships, the
+ * objective stack with its per-entry progress, and the whole mission runtime —
+ * current phase, mission facts, fired-once counters, group states, the pending
+ * beat with its action index, and any scene the battle is suspended on.
+ *
+ * That last part is what makes a reload safe: a one-time cinematic is recorded
+ * as fired *before* its actions run, so reloading a save taken after the beat
+ * never replays it, and a save taken mid-beat resumes at the exact action.
+ * -------------------------------------------------------------*/
+
+const BATTLE_SAVE_VERSION = 1;
+
+function serializeBattle(state) {
+  return JSON.stringify({
+    version: BATTLE_SAVE_VERSION,
+    savedAt: state.currentTime,
+    state
+  });
+}
+
+function deserializeBattle(serialized) {
+  const parsed = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
+  if (!parsed || parsed.version !== BATTLE_SAVE_VERSION) return null;
+  const state = parsed.state;
+  if (!state || !CONTENT.encounters[state.encounterId]) return null;
+  if (!CONTENT.maps[state.mapId]) return null;
+
+  // Fields added by a later engine version must not be undefined on an older
+  // save, or the first thing that touches them throws.
+  if (!state.factions) {
+    state.factions = createFactionState(state.teams.map((team) => team.id), null);
+  }
+  if (!state.objectiveState.entries) state.objectiveState.entries = [];
+  if (!state.terrainOverrides) state.terrainOverrides = {};
+  if (!state.delayedEffects) state.delayedEffects = [];
+  if (!state.errors) state.errors = [];
+  for (const id of state.unitOrder) {
+    const unit = state.units[id];
+    if (unit.ref == null) unit.ref = id;
+    if (unit.dormant == null) unit.dormant = false;
+    if (unit.groupId === undefined) unit.groupId = null;
+  }
+
+  // The compiled script is not stored in the save — it is content, and content
+  // changes between builds. It is re-attached by id here.
+  if (state.mission && state.missionScriptId) {
+    const script = MISSION_SCRIPTS[state.missionScriptId] || MISSION_CONTENT.scriptsByEncounter[state.encounterId];
+    if (script) registerMissionScript(script);
+  }
+  return state;
+}
+
+/** Compiled mission scripts, keyed by the id stored on battle state. Kept out
+ *  of battle state itself so a save stays small and a script edit does not
+ *  invalidate old saves. */
+const MISSION_SCRIPTS = {};
+
+function registerMissionScript(script) {
+  if (script && script.id) MISSION_SCRIPTS[script.id] = script;
+  return script;
+}
+
+function missionScriptFor(state) {
+  if (!state || !state.missionScriptId) return null;
+  return MISSION_SCRIPTS[state.missionScriptId] || null;
+}
+
+/** The dependency bundle the mission runtime expects. */
+function missionDeps(state, options) {
+  const script = (options && options.script) || missionScriptFor(state);
+  if (!script) return null;
+  return {
+    script,
+    engine: MISSION_ENGINE,
+    campaignFlags: (options && options.campaignFlags) || state.campaignFlagsSnapshot || {}
+  };
+}
+
+/**
+ * Runs the mission script forward after the simulation has changed.
+ *
+ * Called from executeCommand, so a scripted beat fires in the same tick as the
+ * action that triggered it — headless or in the browser, identically.
+ */
+function runMissionScript(state, options) {
+  const deps = missionDeps(state, options);
+  if (!deps || !state.mission) return null;
+  const result = advanceMission(state, deps);
+  const autoResolve = (options && options.autoResolve) || state.autoResolveScenes;
+  if (autoResolve && state.mission.wait) autoResolveWaits(state, deps);
+  return result;
+}
+
+function startMissionScript(state, options) {
+  const deps = missionDeps(state, options);
+  if (!deps || !state.mission) return state;
+  startMission(state, deps);
+  if (options && options.autoResolve) autoResolveWaits(state, deps);
+  return state;
+}
+
+/** Renderer callback: a blocking presentation request finished. */
+function resolveMissionPresentation(state, token, payload, options) {
+  const deps = missionDeps(state, options);
+  if (!deps) return false;
+  const resolved = resolveMissionWait(state, deps, token, payload);
+  if (resolved) advanceMission(state, deps);
+  return resolved;
+}
+
 /* ---------------------------------------------------------------
  * SCORE-BASED AI
  * -------------------------------------------------------------*/
@@ -11430,7 +12083,7 @@ function suggestAttackPlan(state, unitId, targetUnitId, options) {
     if (opts.abilityId) return abilityId === opts.abilityId;
     const target = state.units[targetUnitId];
     const relation = CONTENT.abilities[abilityId].targeting.type;
-    const sameTeam = target.teamId === state.units[unitId].teamId;
+    const sameTeam = !isHostile(state, unitId, target.id);
     return sameTeam ? relation === "ally" || relation === "any" : isOffensiveAbility(abilityId);
   });
 
@@ -11934,7 +12587,7 @@ function inputReducer(input, action, state) {
       const hostileUnderPointer =
         occupantUnderPointer &&
         activeId &&
-        occupantUnderPointer.teamId !== state.units[activeId].teamId &&
+        isHostile(state, activeId, occupantUnderPointer.id) &&
         !isUnitConcealed(state, occupantUnderPointer.id)
           ? occupantUnderPointer.id
           : null;
@@ -12061,7 +12714,7 @@ function inputReducer(input, action, state) {
       // Clicking any other unit: inspect it, show its threat, and offer the
       // abilities that can meaningfully reach it.
       if (occupant) {
-        const hostile = occupant.teamId !== state.units[activeId].teamId;
+        const hostile = isHostile(state, activeId, occupant.id);
         const sameThreat = input.threatUnitId === occupant.id;
         const inspected = {
           ...input,
@@ -12463,9 +13116,11 @@ function createContextualTargetOptions(state, activeUnitId, clickedUnitId, optio
   const relation =
     activeUnitId === clickedUnitId
       ? "self"
-      : clicked.teamId === active.teamId
+      : isFriendly(state, activeUnitId, clickedUnitId)
       ? "ally"
-      : "enemy";
+      : isHostile(state, activeUnitId, clickedUnitId)
+      ? "enemy"
+      : "neutral";
 
   const results = [];
   for (const abilityId of unitAbilityIds(state, activeUnitId)) {
@@ -13081,9 +13736,24 @@ function humanizeId(id) {
 
 function createBattleHudModel(state) {
   const encounter = CONTENT.encounters[state.encounterId];
+  // A scripted mission owns a live objective stack; an unscripted encounter
+  // still shows its single authored line.
+  const stack = (state.objectiveState.entries || []).filter((entry) => !entry.hidden);
+  const objectiveLine = stack.length
+    ? stack
+        .map((entry) => (entry.status === "complete" ? "✓ " : entry.status === "failed" ? "✗ " : "") + (entry.text || entry.ref))
+        .join("   ·   ")
+    : encounter.objectiveText || humanizeId(state.objectiveState.objectiveId);
   return {
     encounterName: encounter.name,
-    objective: encounter.objectiveText || humanizeId(state.objectiveState.objectiveId),
+    objective: objectiveLine,
+    objectives: stack.map((entry) => ({
+      ref: entry.ref,
+      text: entry.text || entry.ref,
+      status: entry.status,
+      required: entry.required
+    })),
+    missionPhase: state.mission ? state.mission.phaseId : null,
     currentTime: Math.round(state.currentTime),
     activationCount: state.activationCount,
     seed: state.randomSeed,
@@ -23889,6 +24559,920 @@ test("Mission files", "A battle on a file-authored map initializes and resolves 
   }
 });
 
+/* =========================================================================
+ * MISSION SCRIPTING ARCHITECTURE
+ *
+ * The acceptance target is the Grayfield sequence: a mid-battle reversal
+ * authored entirely in mission data, with no mission-id conditionals anywhere
+ * in the simulation or the renderer. These tests check the mechanism piece by
+ * piece and then the whole thing end to end.
+ * =======================================================================*/
+
+/** Pure event-derivation probe, so the derivation rules can be tested without
+ *  standing up a battle. */
+function deriveMissionEventsForTest(simEvent, view) {
+  return deriveMissionEvents(simEvent, view);
+}
+
+/** Runs a single mission action against a live battle, the way a beat would. */
+function runMissionAction(state, action) {
+  const script = missionScriptFor(state);
+  state.mission.queue.push({ beatId: "test", actions: [action], index: 0 });
+  runMissionScript(state, { script });
+  return state;
+}
+
+/** Validates a partial mission on top of a minimal legal skeleton, so a test
+ *  can assert on one authoring mistake at a time. */
+function validateMissionForTest(overrides) {
+  const base = {
+    id: "validator-fixture",
+    name: "Validator Fixture",
+    map: { width: 8, height: 8, terrain: null, elevation: null },
+    teams: [
+      { id: "player", name: "Player", controller: "human" },
+      { id: "foe", name: "Foe", controller: "ai" }
+    ],
+    units: [
+      { ref: "hero", definitionId: "assaultMech", teamId: "player", x: 1, y: 6 },
+      { ref: "villain", definitionId: "rifleGrunt", teamId: "foe", x: 6, y: 1 }
+    ],
+    objective: { type: "defeatAllEnemies", text: "Win" },
+    sequences: { briefing: [], victory: [], defeat: [] }
+  };
+  return validateMissionFile(normalizeMission({ ...base, ...overrides }), {
+    abilities: Object.keys(CONTENT.abilities),
+    statuses: Object.keys(CONTENT.statuses)
+  });
+}
+
+const GRAYFIELD_MISSION_ID = "fixture-grayfield-slice";
+const GRAYFIELD_ENCOUNTER = "file:fixture-grayfield-slice";
+
+function grayfieldBattle(seed, options) {
+  return createBattle(GRAYFIELD_ENCOUNTER, seed == null ? 7 : seed, {
+    autoResolveScenes: true,
+    ...options
+  });
+}
+
+function unitByRef(state, ref) {
+  const id = state.unitOrder.find((entry) => state.units[entry].ref === ref);
+  return id ? state.units[id] : null;
+}
+
+/* ---- faction relationships (FAC-01) ---- */
+
+test("Factions", "Default relationships reproduce the old team-identity rule", () => {
+  const state = createBattle(TEST_ENCOUNTER, 5);
+  const a = state.unitOrder.find((id) => state.units[id].teamId === "player");
+  const b = state.unitOrder.find((id) => state.units[id].teamId === "foe");
+  const c = state.unitOrder.filter((id) => state.units[id].teamId === "player")[1];
+  assertEqual(isHostile(state, a, b), true, "different teams are hostile by default");
+  assertEqual(isHostile(state, a, c), false, "same team is not hostile");
+  assertEqual(isFriendly(state, a, c), true, "same team is allied");
+});
+
+test("Factions", "A relationship can be neutral, which is neither hostile nor a valid ally target", () => {
+  const state = grayfieldBattle(3);
+  setRelationship(state.factions, "player", "sectionSeven", "neutral");
+  const vale = unitByRef(state, "vale");
+  const kell = unitByRef(state, "kell");
+  assertEqual(isHostile(state, vale.id, kell.id), false, "neutral is not hostile");
+  assertEqual(isFriendly(state, vale.id, kell.id), false, "neutral is not allied");
+  assertEqual(
+    TARGET_FILTERS.ally(state, vale.id, kell),
+    false,
+    "a neutral unit must not be a legal ally target"
+  );
+});
+
+test("Factions", "Changing a relationship never recreates a unit", () => {
+  const state = grayfieldBattle(11);
+  const kellBefore = unitByRef(state, "kell");
+  const idBefore = kellBefore.id;
+  kellBefore.currentHp -= 25;
+  const hpBefore = kellBefore.currentHp;
+  const orderBefore = state.unitOrder.slice();
+
+  setRelationship(state.factions, "sectionSeven", "player", "allied");
+
+  const kellAfter = unitByRef(state, "kell");
+  assertEqual(kellAfter.id, idBefore, "same runtime id");
+  assertEqual(kellAfter.currentHp, hpBefore, "damage taken while hostile is kept");
+  assertEqual(kellAfter.teamId, "sectionSeven", "team is untouched by a relationship change");
+  assertEqual(state.unitOrder.join(","), orderBefore.join(","), "no despawn or respawn");
+});
+
+test("Factions", "A unit can move team in place, keeping HP, statuses and timeline slot", () => {
+  const state = grayfieldBattle(13);
+  const kell = unitByRef(state, "kell");
+  kell.currentHp -= 30;
+  kell.nextActionTime = 4321;
+  resolveEffects(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [kell.id],
+    effects: [{ type: "applyStatus", statusId: "braced", chance: 1 }]
+  });
+  processAllEvents(state);
+  const hp = kell.currentHp;
+  const statuses = kell.statuses.length;
+
+  MISSION_ENGINE.setUnitTeam(state, kell.id, "player");
+
+  assertEqual(kell.teamId, "player");
+  assertEqual(kell.currentHp, hp, "HP survives the transfer");
+  assertEqual(kell.statuses.length, statuses, "statuses survive the transfer");
+  assertEqual(kell.nextActionTime, 4321, "timeline slot survives the transfer");
+  assert(
+    state.battleLog.some((entry) => entry.type === "unitChangedTeam"),
+    "the transfer is recorded authoritatively"
+  );
+});
+
+test("Factions", "Elimination resolves on hostility rather than on team identity", () => {
+  const state = grayfieldBattle(17);
+  // Kill everything hostile to the player, leaving an allied third party alive.
+  setRelationship(state.factions, "sectionSeven", "player", "allied");
+  setRelationship(state.factions, "sectionSeven", "foe", "hostile");
+  for (const id of state.unitOrder) {
+    if (state.units[id].teamId === "foe") {
+      state.units[id].currentHp = 0;
+      state.units[id].alive = false;
+    }
+  }
+  const result = eliminationResult(state);
+  assertEqual(result.finished, true, "two allied teams surviving still ends the battle");
+  assertEqual(result.winner, "player", "the human side is named as the winner");
+});
+
+test("Factions", "The click model reads an allied faction as an ally, not an enemy", () => {
+  const state = grayfieldBattle(191);
+  const vale = unitByRef(state, "vale");
+  const kell = unitByRef(state, "kell");
+  // Stand them next to each other: the click model only returns options for a
+  // target something can actually reach.
+  kell.x = vale.x;
+  kell.y = vale.y - 1;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+
+  // Every option carries the relation the click model derived.
+  const relationOf = () => {
+    const options = createContextualTargetOptions(state, vale.id, kell.id);
+    return options.length ? options[0].relation : null;
+  };
+
+  assertEqual(relationOf(), "enemy", "hostile while Section Seven is still government");
+
+  setRelationship(state.factions, "sectionSeven", "player", "allied");
+  assertEqual(relationOf(), "ally", "and an ally once the relationship flips");
+
+  setRelationship(state.factions, "sectionSeven", "player", "neutral");
+  const neutral = relationOf();
+  assert(
+    neutral === "neutral" || neutral === null,
+    "neutral is its own relation, never a hostile fallback (got " + neutral + ")"
+  );
+});
+
+test("Factions", "AI stops targeting a faction the moment it becomes allied", () => {
+  const state = grayfieldBattle(19);
+  const escort = unitByRef(state, "escortA");
+  const kell = unitByRef(state, "kell");
+
+  assertEqual(isHostile(state, escort.id, kell.id), false, "escorts start allied to Section Seven");
+  const before = enumerateAiTargets(state, escort.id, "handCannon", { x: escort.x, y: escort.y });
+  assertEqual(
+    before.some((target) => target.unitId === kell.id),
+    false,
+    "an allied unit is not an AI target"
+  );
+
+  setRelationship(state.factions, "sectionSeven", "foe", "hostile");
+  // Move the escort next to Kell so range is not the reason it is excluded.
+  escort.x = kell.x;
+  escort.y = kell.y + 1;
+  const after = enumerateAiTargets(state, escort.id, "handCannon", { x: escort.x, y: escort.y });
+  assertEqual(
+    after.some((target) => target.unitId === kell.id),
+    true,
+    "the same unit becomes a target once the relationship flips"
+  );
+});
+
+/* ---- event stream (SCR-02) ---- */
+
+test("Mission events", "Simulation events reach the mission stream without a log rescan", () => {
+  // A beat keyed on the activation event is the observable proof: the runtime
+  // drains its inbox during executeCommand, so the fired ledger is what to
+  // assert on rather than the queue.
+  const script = missionScriptFor(grayfieldBattle(23));
+  const probeScript = {
+    ...script,
+    beats: script.beats.concat([
+      {
+        id: "activationProbe",
+        trigger: { trigger: "activationStarted", teamId: "player" },
+        once: true,
+        priority: 10,
+        actions: [{ type: "setMissionFact", fact: "sawPlayerActivation", value: true }]
+      }
+    ])
+  };
+  const state = createBattle(GRAYFIELD_ENCOUNTER, 23, {
+    missionScript: probeScript,
+    autoResolveScenes: true
+  });
+  const vale = unitByRef(state, "vale");
+  vale.nextActionTime = state.currentTime;
+
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+
+  assertEqual(state.mission.facts.sawPlayerActivation, true, "the beat saw the activation event");
+  assertEqual(
+    state.battleLog.some((entry) => entry.type === "missionScript" && /sawPlayerActivation/.test(entry.text)),
+    true,
+    "and it was recorded authoritatively"
+  );
+});
+
+test("Mission events", "Region entry and exit are derived from the movement path", () => {
+  const view = {
+    unitRefById: (id) => id,
+    unitTeam: () => "player",
+    unitTags: () => [],
+    hpPercent: () => 100,
+    regionsContaining: (x) => (x >= 4 && x <= 6 ? ["gate"] : []),
+    thresholds: []
+  };
+  const events = deriveMissionEventsForTest(
+    {
+      type: "unitMoved",
+      unitId: "u1",
+      from: { x: 2, y: 0 },
+      to: { x: 8, y: 0 },
+      path: [
+        { x: 2, y: 0 },
+        { x: 4, y: 0 },
+        { x: 6, y: 0 },
+        { x: 8, y: 0 }
+      ]
+    },
+    view
+  );
+  const entered = events.filter((entry) => entry.type === "unitEnteredRegion");
+  assertEqual(entered.length, 1, "crossing a region fires entry exactly once");
+  assertEqual(entered[0].regionRef, "gate");
+});
+
+test("Mission events", "HP threshold events fire from real damage", () => {
+  const state = grayfieldBattle(29);
+  const vale = unitByRef(state, "vale");
+  state.mission.inbox.length = 0;
+  resolveEffects(state, {
+    sourceUnitId: unitByRef(state, "escortA").id,
+    targetUnitIds: [vale.id],
+    effects: [{ type: "damage", formula: "percentMaxHp", power: 40, canMiss: false }]
+  });
+  processAllEvents(state);
+  const thresholds = state.mission.inbox.filter((entry) => entry.type === "unitHpBelowThreshold");
+  assert(thresholds.length > 0, "damage crossed a threshold");
+  assert(
+    thresholds.every((entry) => entry.unitRef === "vale"),
+    "the event names the authored ref, not the runtime id"
+  );
+});
+
+/* ---- triggers and conditions ---- */
+
+test("Mission triggers", "Field equality matching is generic across event types", () => {
+  assertEqual(
+    matchMissionTrigger({ trigger: "unitDestroyed", unitRef: "prototype" }, { type: "unitDestroyed", unitRef: "prototype" }),
+    true
+  );
+  assertEqual(
+    matchMissionTrigger({ trigger: "unitDestroyed", unitRef: "prototype" }, { type: "unitDestroyed", unitRef: "escortA" }),
+    false
+  );
+  assertEqual(
+    matchMissionTrigger({ trigger: "unitDestroyed", unitRef: ["prototype", "escortA"] }, { type: "unitDestroyed", unitRef: "escortA" }),
+    true,
+    "an array means any of"
+  );
+  assertEqual(
+    matchMissionTrigger({ trigger: "unitHpBelowThreshold", percent: 50 }, { type: "unitHpBelowThreshold", percent: 25 }),
+    true,
+    "percent means at or below"
+  );
+  assertEqual(
+    matchMissionTrigger({ trigger: "unitHpBelowThreshold", percent: 50 }, { type: "unitHpBelowThreshold", percent: 75 }),
+    false
+  );
+});
+
+test("Mission triggers", "Conditions compose with all, any and not", () => {
+  const ctx = {
+    phaseId: "betrayal",
+    facts: { turned: true },
+    flags: { sectionSevenRejoined: true },
+    activationCount: 12,
+    factionState: { relationships: { a: { b: "allied" } } },
+    teamIds: ["a", "b"],
+    unit: () => ({ alive: true, hpPercent: 40, teamId: "a", x: 1, y: 1 }),
+    objective: () => ({ status: "complete" }),
+    group: () => ({ active: true }),
+    region: () => ({ contains: () => true }),
+    teamAliveCount: () => 2,
+    firedCount: () => 0
+  };
+  assertEqual(evaluateMissionCondition({ phase: "betrayal" }, ctx), true);
+  assertEqual(evaluateMissionCondition({ phase: "interception" }, ctx), false);
+  assertEqual(evaluateMissionCondition({ missionFact: "turned" }, ctx), true);
+  assertEqual(evaluateMissionCondition({ not: { missionFact: "missing" } }, ctx), true);
+  assertEqual(
+    evaluateMissionCondition({ all: [{ phase: "betrayal" }, { campaignFlag: "sectionSevenRejoined" }] }, ctx),
+    true
+  );
+  assertEqual(evaluateMissionCondition({ any: [{ phase: "nope" }, { missionFact: "turned" }] }, ctx), true);
+  assertEqual(evaluateMissionCondition({ unitHpBelow: "vale", percent: 50 }, ctx), true);
+  assertEqual(evaluateMissionCondition({ factionRelationship: "a", otherTeamId: "b", is: "allied" }, ctx), true);
+  assertEqual(evaluateMissionCondition({ activationCount: 20 }, ctx), false);
+});
+
+test("Mission triggers", "A one-time beat never fires twice", () => {
+  const state = grayfieldBattle(31);
+  const fired = state.mission.firedCounts.openingCallout;
+  assertEqual(fired, 1, "the opening beat fired once at battle start");
+  // Re-deliver the same event.
+  state.mission.inbox.push({ type: "battleStarted" });
+  runMissionScript(state);
+  assertEqual(state.mission.firedCounts.openingCallout, 1, "and does not fire again");
+});
+
+/* ---- phases (SCR-01) ---- */
+
+test("Mission phases", "The mission starts in its declared first phase", () => {
+  const state = grayfieldBattle(37);
+  assertEqual(state.mission.phaseId, "interception");
+  assertEqual(state.mission.facts.grayfieldPhase, "interception", "phase onEnter actions ran");
+  assertEqual(
+    state.objectiveState.entries.map((entry) => entry.ref).join(","),
+    "surviveInterception",
+    "the phase declared its objective set"
+  );
+});
+
+test("Mission phases", "A declarative entry condition advances the phase machine", () => {
+  const state = grayfieldBattle(41);
+  assertEqual(state.mission.phaseId, "interception");
+
+  // Complete the phase-one objective the way the mission intends.
+  state.activationCount = 99;
+  checkObjectives(state);
+  runMissionScript(state);
+
+  assertEqual(state.mission.phaseHistory.includes("interception"), true);
+  assertEqual(state.mission.phaseId, "counterattack", "betrayal ran and handed off to its next phase");
+  assertEqual(state.mission.facts.sectionSevenTurned, true);
+});
+
+test("Mission phases", "Completing the last required objective waits for the script", () => {
+  const state = grayfieldBattle(43);
+  state.activationCount = 99;
+  checkObjectives(state);
+  // At this instant the objective is complete but the betrayal has not run.
+  assertEqual(state.finished, false, "victory is deferred while the script has work queued");
+  runMissionScript(state);
+  checkObjectives(state);
+  assertEqual(state.finished, false, "and the replaced objectives keep the battle alive");
+});
+
+/* ---- objectives (OBJ-01 / OBJ-02) ---- */
+
+test("Mission objectives", "Objectives can be replaced mid-battle", () => {
+  const state = grayfieldBattle(47);
+  assertEqual(state.objectiveState.entries.length, 1);
+  state.activationCount = 99;
+  checkObjectives(state);
+  runMissionScript(state);
+  const refs = state.objectiveState.entries.map((entry) => entry.ref).sort();
+  assertEqual(refs.join(","), "defeatLoyalists,protectSectionSeven", "the stack was replaced");
+});
+
+test("Mission objectives", "An optional objective failing does not lose the battle", () => {
+  const state = grayfieldBattle(53);
+  state.activationCount = 99;
+  checkObjectives(state);
+  runMissionScript(state);
+  const protectEntry = state.objectiveState.entries.find((entry) => entry.ref === "protectSectionSeven");
+  assertEqual(protectEntry.required, false);
+  const kell = unitByRef(state, "kell");
+  kell.currentHp = 0;
+  kell.alive = false;
+  checkObjectives(state);
+  assertEqual(protectEntry.status, "failed");
+  assertEqual(state.finished, false, "an optional failure does not end the mission");
+});
+
+test("Mission objectives", "A required objective failing loses the battle", () => {
+  const state = grayfieldBattle(59);
+  state.objectiveState.entries = [
+    {
+      ref: "protectSectionSeven",
+      objectiveId: "protectUnits",
+      params: { teamId: "player", opposingTeamId: "foe", unitRefs: ["kell"] },
+      progress: {},
+      status: "active",
+      text: "Keep Kell alive",
+      required: true
+    }
+  ];
+  const kell = unitByRef(state, "kell");
+  kell.currentHp = 0;
+  kell.alive = false;
+  checkObjectives(state);
+  assertEqual(state.finished, true);
+  assertEqual(state.winner, "foe");
+});
+
+test("Mission objectives", "Objective unit references resolve against live state, not compile-time indices", () => {
+  const state = grayfieldBattle(61);
+  const params = resolveObjectiveParams(state, { unitRefs: ["kell", "reyes"] });
+  const kell = unitByRef(state, "kell");
+  assert(params.unitIds.includes(kell.id), "authored ref resolved to the runtime id");
+});
+
+/* ---- authoritative scripted actions (CIN-02) ---- */
+
+test("Mission actions", "A scripted attack resolves through the real combat system", () => {
+  const state = grayfieldBattle(67);
+  const kell = unitByRef(state, "kell");
+  const prototype = unitByRef(state, "prototype");
+  const hpBefore = prototype.currentHp;
+  const logBefore = state.battleLog.length;
+
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [prototype.id],
+    power: 400,
+    formula: "physical",
+    lethal: true
+  });
+
+  assert(prototype.currentHp < hpBefore, "authoritative HP changed");
+  assertEqual(prototype.alive, false, "the prototype is actually destroyed");
+  assert(
+    state.battleLog.slice(logBefore).some((entry) => entry.type === "damageResolved"),
+    "the damage went through the normal damage event"
+  );
+  assert(
+    state.battleLog.slice(logBefore).some((entry) => entry.type === "unitDefeated"),
+    "and produced a real defeat event"
+  );
+});
+
+test("Mission actions", "A scripted attack can use an authored ability", () => {
+  const state = grayfieldBattle(71);
+  const kell = unitByRef(state, "kell");
+  const prototype = unitByRef(state, "prototype");
+  const hpBefore = prototype.currentHp;
+
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [prototype.id],
+    abilityId: "precisionShot"
+  });
+
+  assert(prototype.currentHp < hpBefore, "the ability's own numbers were applied");
+  assert(
+    state.battleLog.some((entry) => entry.type === "abilityUsed" && entry.data.abilityId === "precisionShot"),
+    "and it went through the ability path"
+  );
+});
+
+test("Mission actions", "A scripted repair heals authoritatively", () => {
+  const state = grayfieldBattle(73);
+  const vale = unitByRef(state, "vale");
+  const reyes = unitByRef(state, "reyes");
+  vale.currentHp = 40;
+
+  MISSION_ENGINE.scriptedRepair(state, {
+    sourceUnitId: reyes.id,
+    targetUnitIds: [vale.id],
+    amount: 55
+  });
+
+  assert(vale.currentHp > 40, "HP actually went up");
+  assert(
+    state.battleLog.some((entry) => entry.type === "healResolved"),
+    "through the real heal event"
+  );
+});
+
+test("Mission actions", "Scripted movement walks a real path and emits a real move event", () => {
+  const state = grayfieldBattle(79);
+  const reyes = unitByRef(state, "reyes");
+  const from = { x: reyes.x, y: reyes.y };
+  const destination = { x: reyes.x - 3, y: reyes.y + 4 };
+  // Deliberately farther than one turn's movement: a scripted reposition is
+  // not limited by the unit's per-turn allowance.
+  assertEqual(
+    findPath(state, reyes.id, destination),
+    null,
+    "the destination is out of normal movement range"
+  );
+  const path = MISSION_ENGINE.findPath(state, reyes.id, destination);
+  assert(
+    path && path.length > 1,
+    "but the scripted pathfinder solves it to " + destination.x + "," + destination.y
+  );
+
+  MISSION_ENGINE.moveUnitAlongPath(state, reyes.id, path);
+  processAllEvents(state);
+
+  assert(reyes.x !== from.x || reyes.y !== from.y, "the unit moved");
+  assert(
+    state.battleLog.some((entry) => entry.type === "unitMoved" && entry.data && entry.data.unitId === reyes.id),
+    "and the move was logged like any other"
+  );
+});
+
+/* ---- groups (SPN-01) ---- */
+
+test("Mission groups", "A dormant group takes no turns until it is activated", () => {
+  const state = grayfieldBattle(83);
+  const ace = unitByRef(state, "loyalistAce");
+  assertEqual(ace.dormant, true, "the ace starts asleep");
+  assertEqual(
+    timelineCandidates(state).some((entry) => entry.unitId === ace.id),
+    false,
+    "and is not on the timeline"
+  );
+
+  runMissionAction(state, { type: "activateGroup", groupRef: "loyalistAce" });
+  assertEqual(ace.dormant, false);
+  assertEqual(
+    timelineCandidates(state).some((entry) => entry.unitId === ace.id),
+    true,
+    "activating the group puts it back on the timeline"
+  );
+});
+
+test("Mission groups", "A reserve group is held off the map until it is spawned", () => {
+  const state = grayfieldBattle(89);
+  assertEqual(unitByRef(state, "reserveA"), null, "reserve units are not placed at battle start");
+  const before = state.unitOrder.length;
+
+  runMissionAction(state, { type: "spawnGroup", groupRef: "loyalistReserve", regionRef: "loyalistStaging" });
+  processAllEvents(state);
+
+  assertEqual(state.unitOrder.length, before + 2, "both reserve units arrived");
+  const reserve = unitByRef(state, "reserveA");
+  assert(reserve, "and they carry their authored refs");
+  assertEqual(reserve.teamId, "foe");
+  assert(reserve.nextActionTime > state.currentTime, "a reinforcement does not act the instant it lands");
+});
+
+test("Mission groups", "Spawning the same group twice does not duplicate it", () => {
+  const state = grayfieldBattle(97);
+  runMissionAction(state, { type: "spawnGroup", groupRef: "loyalistReserve" });
+  processAllEvents(state);
+  const after = state.unitOrder.length;
+  runMissionAction(state, { type: "spawnGroup", groupRef: "loyalistReserve" });
+  processAllEvents(state);
+  assertEqual(state.unitOrder.length, after, "the wave arrives exactly once");
+});
+
+/* ---- script safety (requirement 6) ---- */
+
+test("Mission safety", "Two phases that re-enter each other are bounded rather than hanging", () => {
+  // The classic runaway: each phase entry fires a beat that starts the other.
+  const empty = { objectives: [], activateGroups: [], deactivateGroups: [], onEnter: [], onExit: [] };
+  const script = {
+    id: "loopFixture",
+    startPhaseId: "ping",
+    regions: [],
+    groups: [],
+    objectives: [],
+    scenes: {},
+    phases: [
+      { id: "ping", name: "Ping", ...empty },
+      { id: "pong", name: "Pong", ...empty }
+    ],
+    beats: [
+      {
+        id: "toPong",
+        trigger: { trigger: "phaseStarted", phaseRef: "ping" },
+        once: false,
+        priority: 50,
+        actions: [{ type: "startPhase", phaseRef: "pong" }]
+      },
+      {
+        id: "toPing",
+        trigger: { trigger: "phaseStarted", phaseRef: "pong" },
+        once: false,
+        priority: 50,
+        actions: [{ type: "startPhase", phaseRef: "ping" }]
+      }
+    ]
+  };
+
+  const state = createBattle(TEST_ENCOUNTER, 101, { missionScript: script, autoResolveScenes: true });
+
+  assert(
+    state.mission.errors.some((message) => message.toLowerCase().includes("loop")),
+    "the runtime reported breaking a loop: " + state.mission.errors.join(" | ")
+  );
+  assertEqual(state.mission.inbox.length, 0, "and cleared the runaway queue");
+  assert(
+    state.mission.firedCounts.toPong <= MISSION_LIMITS.maxBeatsPerDrain + 1,
+    "the ping-pong was bounded"
+  );
+  assertEqual(state.errors.length, 0, "without corrupting battle state");
+});
+
+test("Mission safety", "Duplicate faction changes do not emit duplicate events", () => {
+  const state = grayfieldBattle(103);
+  const before = state.battleLog.filter((entry) => entry.type === "missionScript").length;
+  runMissionAction(state, { type: "changeFaction", teamId: "sectionSeven", otherTeamId: "player", relationship: "allied" });
+  const afterFirst = state.battleLog.filter((entry) => entry.type === "missionScript").length;
+  runMissionAction(state, { type: "changeFaction", teamId: "sectionSeven", otherTeamId: "player", relationship: "allied" });
+  const afterSecond = state.battleLog.filter((entry) => entry.type === "missionScript").length;
+  assert(afterFirst > before, "the first change was recorded");
+  assertEqual(afterSecond, afterFirst, "the second, identical change was a no-op");
+});
+
+test("Mission safety", "A campaign flag is queued once no matter how often the action fires", () => {
+  const state = grayfieldBattle(107);
+  runMissionAction(state, { type: "setCampaignFlag", flag: "rewardFlag", value: true });
+  runMissionAction(state, { type: "setCampaignFlag", flag: "rewardFlag", value: true });
+  runMissionAction(state, { type: "setCampaignFlag", flag: "rewardFlag", value: true });
+  const matches = state.mission.campaignFlagRequests.filter((entry) => entry.flag === "rewardFlag");
+  assertEqual(matches.length, 1, "no duplicate reward");
+});
+
+/* ---- save / load (SAV-01) ---- */
+
+test("Mission save", "A battle round-trips through serialization unchanged", () => {
+  const state = grayfieldBattle(109);
+  const saved = serializeBattle(state);
+  const restored = deserializeBattle(saved);
+  assert(restored, "the save loaded");
+  assertEqual(serializeBattle(restored), saved, "and is byte-identical");
+});
+
+test("Mission save", "Saving and reloading mid-mission preserves phase, facts and fired beats", () => {
+  const state = grayfieldBattle(113);
+  state.activationCount = 99;
+  checkObjectives(state);
+  runMissionScript(state);
+  assertEqual(state.mission.phaseId, "counterattack");
+
+  const restored = deserializeBattle(serializeBattle(state));
+  assertEqual(restored.mission.phaseId, "counterattack");
+  assertEqual(restored.mission.facts.sectionSevenTurned, true);
+  assertEqual(restored.mission.phaseHistory.join(","), state.mission.phaseHistory.join(","));
+  assertEqual(
+    JSON.stringify(restored.mission.firedCounts),
+    JSON.stringify(state.mission.firedCounts),
+    "the fired-once ledger survives"
+  );
+  assertEqual(
+    relationshipBetween(restored.factions, "sectionSeven", "player"),
+    "allied",
+    "faction relationships survive"
+  );
+  assertEqual(
+    restored.objectiveState.entries.map((entry) => entry.ref).sort().join(","),
+    "defeatLoyalists,protectSectionSeven",
+    "the objective stack survives"
+  );
+});
+
+test("Mission save", "Reloading after a cinematic never replays it", () => {
+  const state = grayfieldBattle(127);
+  state.activationCount = 99;
+  checkObjectives(state);
+  runMissionScript(state);
+  const firedBefore = JSON.stringify(state.mission.firedCounts);
+  const prototypeDead = unitByRef(state, "prototype").alive === false;
+  assertEqual(prototypeDead, true, "the scripted shot resolved before the save");
+
+  const restored = deserializeBattle(serializeBattle(state));
+  runMissionScript(restored);
+  runMissionScript(restored);
+  assertEqual(JSON.stringify(restored.mission.firedCounts), firedBefore, "no beat re-fired");
+  assertEqual(restored.mission.facts.sectionSevenTurned, true);
+  // The prototype stays dead: the scripted attack is not re-run.
+  assertEqual(unitByRef(restored, "prototype").alive, false);
+});
+
+test("Mission save", "A save taken before the turn still runs the turn after reloading", () => {
+  const state = grayfieldBattle(131);
+  assertEqual(state.mission.phaseId, "interception");
+  const restored = deserializeBattle(serializeBattle(state));
+  restored.autoResolveScenes = true;
+  restored.activationCount = 99;
+  checkObjectives(restored);
+  runMissionScript(restored);
+  assertEqual(restored.mission.phaseId, "counterattack", "the reversal is still ahead of a pre-turn save");
+  assertEqual(unitByRef(restored, "prototype").alive, false);
+});
+
+/* ---- determinism ---- */
+
+test("Mission determinism", "A scripted battle replays identically from the same seed", () => {
+  const runOne = grayfieldBattle(149);
+  const resultOne = runBattle(runOne, 400);
+  const runTwo = grayfieldBattle(149);
+  const resultTwo = runBattle(runTwo, 400);
+
+  assertEqual(resultOne.winner, resultTwo.winner);
+  assertEqual(resultOne.activations, resultTwo.activations);
+  assertEqual(serializeBattle(runOne), serializeBattle(runTwo), "identical authoritative state");
+});
+
+test("Mission determinism", "Resuming from a save produces the same outcome as never saving", () => {
+  const straight = grayfieldBattle(151);
+  const straightResult = runBattle(straight, 400);
+
+  const forked = grayfieldBattle(151);
+  runBattle(forked, 8);
+  const resumed = deserializeBattle(serializeBattle(forked));
+  resumed.autoResolveScenes = true;
+  const resumedResult = runBattle(resumed, 400);
+
+  assertEqual(resumedResult.winner, straightResult.winner, "same winner");
+  assertEqual(serializeBattle(resumed), serializeBattle(straight), "same final state");
+});
+
+/* ---- the acceptance fixture ---- */
+
+test("Grayfield slice", "The whole reversal runs from mission data alone", () => {
+  const state = grayfieldBattle(7);
+
+  /* phase 1 */
+  assertEqual(state.mission.phaseId, "interception");
+  const vale = unitByRef(state, "vale");
+  const kell = unitByRef(state, "kell");
+  const reyes = unitByRef(state, "reyes");
+  const prototype = unitByRef(state, "prototype");
+  const ace = unitByRef(state, "loyalistAce");
+
+  assertEqual(isHostile(state, vale.id, kell.id), true, "Kell begins hostile");
+  assertEqual(isHostile(state, vale.id, reyes.id), true, "Reyes begins hostile");
+  assert(prototype && prototype.alive, "the prototype is on the field");
+  assertEqual(ace.dormant, true, "the loyalist ace is asleep");
+  assertEqual(state.objectiveState.entries.map((entry) => entry.ref).join(","), "surviveInterception");
+
+  const kellId = kell.id;
+  const reyesId = reyes.id;
+  const reyesStart = { x: reyes.x, y: reyes.y };
+  vale.currentHp = Math.max(1, vale.currentHp - 50);
+  const valeHpBeforeRepair = vale.currentHp;
+
+  /* the turn */
+  const outcome = runBattle(state, 400);
+
+  assertEqual(state.mission.phaseHistory.join(" -> ") + " -> " + state.mission.phaseId,
+    "interception -> betrayal -> counterattack", "all three phases ran in order");
+
+  assertEqual(prototype.alive, false, "the prototype was destroyed by the scripted shot");
+  assertEqual(prototype.currentHp, 0, "authoritatively, not visually");
+
+  assert(
+    reyes.x !== reyesStart.x || reyes.y !== reyesStart.y,
+    "Reyes actually moved"
+  );
+  assert(
+    state.battleLog.some((entry) => entry.type === "healResolved" && entry.data && entry.data.unitId === vale.id),
+    "and repaired Vale through the real heal path"
+  );
+  assert(vale.currentHp > valeHpBeforeRepair || vale.currentHp === 0, "Vale's HP went up");
+
+  assertEqual(kell.id, kellId, "Kell was never recreated");
+  assertEqual(reyes.id, reyesId, "Reyes was never recreated");
+  assertEqual(kell.teamId, "sectionSeven", "and never left their team");
+  assertEqual(isHostile(state, vale.id, kellId), false, "Kell is no longer hostile");
+  assertEqual(isFriendly(state, vale.id, kellId), true, "Kell is allied");
+  assertEqual(relationshipBetween(state.factions, "sectionSeven", "foe"), "hostile", "and now fights the loyalists");
+
+  assertEqual(ace.dormant, false, "the ace woke up");
+  assert(unitByRef(state, "reserveA"), "the reserve wave spawned");
+
+  assertEqual(state.mission.facts.sectionSevenTurned, true, "mission facts were set");
+  assertEqual(state.mission.facts.prototypeDestroyed, true, "a beat reacted to the scripted kill");
+  assertEqual(
+    state.mission.campaignFlagRequests.some((entry) => entry.flag === "sectionSevenRejoined"),
+    true,
+    "a campaign flag was queued"
+  );
+  assert(
+    state.mission.presentation.length > 0 || state.mission.presentationSeq > 0,
+    "presentation requests were produced for the renderer"
+  );
+
+  assertEqual(outcome.hitCap, false, "the mission reached a terminal result");
+  assertEqual(outcome.winner, "player", "and the player won");
+  assertEqual(state.errors.length, 0, "with no engine errors: " + state.errors.join(" | "));
+  assertEqual(state.mission.errors.length, 0, "and no script errors: " + state.mission.errors.join(" | "));
+});
+
+test("Grayfield slice", "The engine contains no reference to the fixture", () => {
+  // The whole point: nothing in the simulation knows this mission exists.
+  const sources = engineSourceEntries().map((entry) => entry.source).join("\n");
+  assertEqual(
+    sources.includes("fixture-grayfield-slice"),
+    false,
+    "engine code must not name the mission"
+  );
+  assertEqual(sources.includes("sectionSeven"), false, "nor any of its teams");
+  assertEqual(sources.includes("prototype\""), false, "nor any of its units");
+});
+
+/* ---- editor-facing validation ---- */
+
+test("Mission authoring", "The validator rejects an action that references a missing unit", () => {
+  const report = validateMissionForTest({
+    beats: [
+      {
+        id: "bad",
+        trigger: { trigger: "battleStarted" },
+        actions: [{ type: "performAttack", sourceRef: "ghost", targetRefs: ["alsoGhost"] }]
+      }
+    ]
+  });
+  assert(
+    report.errors.some((message) => message.includes('unknown unit "ghost"')),
+    "missing source reported: " + report.errors.join(" | ")
+  );
+});
+
+test("Mission authoring", "The validator rejects an unknown action type", () => {
+  const report = validateMissionForTest({
+    beats: [{ id: "bad", trigger: { trigger: "battleStarted" }, actions: [{ type: "explodeTheMoon" }] }]
+  });
+  assert(
+    report.errors.some((message) => message.includes("explodeTheMoon")),
+    "unknown action reported"
+  );
+});
+
+test("Mission authoring", "The validator rejects a trigger field the event does not carry", () => {
+  const report = validateMissionForTest({
+    beats: [{ id: "bad", trigger: { trigger: "battleStarted", regionRef: "nowhere" }, actions: [] }]
+  });
+  assert(
+    report.errors.some((message) => message.includes("does not carry")),
+    "bad trigger field reported: " + report.errors.join(" | ")
+  );
+});
+
+test("Mission authoring", "The validator rejects a phase reference that does not exist", () => {
+  const report = validateMissionForTest({
+    phases: [
+      { id: "one", name: "One", next: "missingPhase", onEnter: [], onExit: [], objectives: [], activateGroups: [], deactivateGroups: [] }
+    ]
+  });
+  assert(
+    report.errors.some((message) => message.includes("missingPhase")),
+    "dangling phase reported"
+  );
+});
+
+test("Mission authoring", "The engine adapter satisfies the contract the action registry expects", () => {
+  const missing = ENGINE_ADAPTER_CONTRACT.filter((name) => typeof MISSION_ENGINE[name] !== "function");
+  assertEqual(missing.length, 0, "adapter is missing: " + missing.join(", "));
+  // Every simulation action must have a handler; every presentation action must
+  // declare itself as such so it can never reach battle state.
+  for (const id of Object.keys(ACTION_REGISTRY)) {
+    const definition = ACTION_REGISTRY[id];
+    assert(typeof definition.run === "function", id + " has no run()");
+    assert(
+      definition.authority === "simulation" || definition.authority === "presentation",
+      id + " declares no authority"
+    );
+  }
+  for (const entry of MISSION_EVENT_TYPES) {
+    assert(Array.isArray(entry.fields), entry.id + " declares no matchable fields");
+  }
+  assert(Object.keys(CONDITION_REGISTRY).length > 8, "the condition vocabulary is populated");
+});
+
+test("Mission authoring", "The shipped Grayfield fixture validates cleanly", () => {
+  const mission = MISSION_CONTENT.missions[GRAYFIELD_MISSION_ID];
+  assert(mission, "the fixture is loaded");
+  assertEqual(
+    MISSION_CONTENT.errors.filter((message) => message.includes(GRAYFIELD_MISSION_ID)).length,
+    0,
+    "no load errors"
+  );
+  const script = MISSION_CONTENT.scriptsByEncounter[GRAYFIELD_ENCOUNTER];
+  assertEqual(script.phases.length, 3);
+  assertEqual(script.beats.length, 4);
+  assertEqual(script.objectives.length, 3);
+});
+
 test("Progression", "Persistent damage creates a finite repair decision and repair consumes supplies", () => {
   let campaign = createCampaignState();
   campaign = { ...campaign, roster: { ...campaign.roster, commander: { ...campaign.roster.commander, condition: 54 } } };
@@ -27330,7 +28914,16 @@ function CombatDialogueOverlay({ entry, onDismiss }) {
   React.useEffect(() => setLineIndex(0), [entry && entry.id]);
   const lines = entry && entry.lines && entry.lines.length ? entry.lines : entry ? [{ speaker: entry.speaker, name: entry.name, glyph: entry.glyph, text: entry.text }] : [];
   const line = lines[Math.min(lineIndex, Math.max(0, lines.length - 1))];
-  const advance = React.useCallback(() => { if (!entry) return; if (lineIndex < lines.length - 1) setLineIndex((index) => index + 1); else onDismiss(); }, [entry, lineIndex, lines.length, onDismiss]);
+  const choices = (entry && entry.choices) || [];
+  const atLastLine = lineIndex >= lines.length - 1;
+  const awaitingChoice = atLastLine && choices.length > 0;
+  const advance = React.useCallback(() => {
+    if (!entry) return;
+    if (lineIndex < lines.length - 1) setLineIndex((index) => index + 1);
+    // A scene that ends on a choice waits for the player to pick rather than
+    // dismissing itself; the choice is what sets the mission fact.
+    else if (!choices.length) onDismiss();
+  }, [entry, lineIndex, lines.length, onDismiss, choices.length]);
   React.useEffect(() => { if (typeof window === "undefined" || !entry) return undefined; const onKey = (event) => { if (appSettings && appSettings.settingsOpen) return; if (!event.repeat && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); advance(); } }; window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey); }, [entry, advance, appSettings && appSettings.settingsOpen]);
   if (!entry || !line) return null;
   const portrait = conventionAsset("speaker." + line.speaker, "portraits/" + line.speaker, { type: "portraitSilhouette", value: line.glyph || "?", label: line.name || entry.name }, "512x512 portrait");
@@ -27377,10 +28970,55 @@ function CombatDialogueOverlay({ entry, onDismiss }) {
         >
           {line.text}
         </p>
-        <div className="absolute bottom-5 right-6 flex items-center gap-3"><span className="text-[10px] uppercase tracking-[0.2em] text-slate-600">{lineIndex + 1}/{lines.length}</span><Button tone="primary" size="sm" onClick={advance}>{lineIndex < lines.length - 1 ? "Next" : "Continue"}</Button></div>
+        {awaitingChoice ? (
+          <div className="mt-5 space-y-2">
+            {choices[0].options.map((option) => (
+              <button
+                key={option.id}
+                className="block w-full border border-sky-200/45 bg-slate-900/70 px-4 py-2 text-left text-[15px] text-sky-100 transition hover:border-sky-200 hover:bg-sky-900/50"
+                onClick={() =>
+                  onDismiss({
+                    choiceId: choices[0].id,
+                    optionId: option.id,
+                    facts: option.fact
+                      ? { [option.fact]: option.factValue === undefined ? true : option.factValue }
+                      : {}
+                  })
+                }
+              >
+                {option.text}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <div className="absolute bottom-5 right-6 flex items-center gap-3"><span className="text-[10px] uppercase tracking-[0.2em] text-slate-600">{lineIndex + 1}/{lines.length}</span>{awaitingChoice ? null : <Button tone="primary" size="sm" onClick={advance}>{lineIndex < lines.length - 1 ? "Next" : "Continue"}</Button>}</div>
       </div>
     </div>
   );
+}
+
+/**
+ * Turns a compiled scene into the shape CombatDialogueOverlay renders.
+ * Presentation-only: it reads the mission script and the speaker table and
+ * never touches battle state.
+ */
+function createMissionSceneModel(script, sceneRef, token) {
+  const scene = script && script.scenes ? script.scenes[sceneRef] : null;
+  if (!scene) return null;
+  const speakerOf = (id) => CAMPAIGN.speakers[id] || { name: id, glyph: "💬" };
+  return {
+    id: token + ":" + sceneRef,
+    token,
+    sceneRef,
+    title: scene.title || sceneRef,
+    location: scene.location || "",
+    name: speakerOf((scene.lines[0] || {}).speaker).name,
+    lines: (scene.lines || []).map((line) => {
+      const speaker = speakerOf(line.speaker);
+      return { speaker: line.speaker, name: speaker.name, glyph: speaker.glyph, text: line.text };
+    }),
+    choices: scene.choices || []
+  };
 }
 
 function EndOfPrototype({ base, onBase }) {
@@ -27715,6 +29353,8 @@ function TacticalBattleContent({ viewport }) {
   const [saveNote, setSaveNote] = React.useState("Campaign not saved yet.");
   const [storyLog, setStoryLog] = React.useState([]);
   const [combatDialogueQueue, setCombatDialogueQueue] = React.useState([]);
+  // The mission runtime's blocking scene, if the battle is suspended on one.
+  const [missionScene, setMissionScene] = React.useState(null);
   const firedTriggersRef = React.useRef([]);
 
   React.useEffect(() => {
@@ -27776,6 +29416,14 @@ function TacticalBattleContent({ viewport }) {
   const popupIdRef = React.useRef(0);
   const effectIdRef = React.useRef(0);
   const timersRef = React.useRef([]);
+
+  // Publishes the live battle on the debug hook so a console — or a headless
+  // browser check — can inspect the authoritative state the player is looking
+  // at. Read-only by convention; nothing in the app reads it back.
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !window.STATUS_ZERO) return;
+    window.STATUS_ZERO.liveBattle = () => battleRef.current;
+  });
 
   const touch = () => setVersion((value) => value + 1);
   const mark = (key) =>
@@ -28085,7 +29733,14 @@ function TacticalBattleContent({ viewport }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presentation, timing]);
 
-  const busy = presentation.queue.length > 0 || combatDialogueQueue.length > 0;
+  // The turn driver stops while anything is on screen. A mission scene counts:
+  // that is what "pause tactical simulation safely" means in practice — the
+  // simulation is not mid-anything, it simply is not asked for the next turn.
+  const busy =
+    presentation.queue.length > 0 ||
+    combatDialogueQueue.length > 0 ||
+    !!missionScene ||
+    !!(state.mission && state.mission.wait);
 
   const threatZone = React.useMemo(() => {
     if (!input.threatUnitId || !state.units[input.threatUnitId]) return null;
@@ -28125,6 +29780,71 @@ function TacticalBattleContent({ viewport }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.timeline]);
+
+  /**
+   * Drains the mission runtime's presentation queue.
+   *
+   * Everything here is presentation: a scene to show, a camera to move, a
+   * music request. None of it can change battle state — the runtime already
+   * applied every authoritative change before these requests were queued.
+   */
+  React.useEffect(() => {
+    if (!state.mission) return;
+    const requests = takePresentationRequests(state);
+    const script = missionScriptFor(state);
+    for (const request of requests) {
+      if (request.type === "focusCamera" && request.tile) {
+        setCamera((current) =>
+          focusCameraOnTile(
+            current,
+            {
+              x: request.tile.x,
+              y: request.tile.y,
+              elevation: elevationAt(battleMap, request.tile.x, request.tile.y) || 0
+            },
+            { width: stage.width, height: stage.height },
+            projection
+          )
+        );
+      } else if (request.type === "requestMusicState") {
+        if (appSettings && appSettings.setMusicRequest) {
+          appSettings.setMusicRequest({
+            context: request.context || "battle",
+            missionId: request.track || pendingMissionId || null
+          });
+        }
+      } else if (request.type === "queueBark") {
+        const speaker = CAMPAIGN.speakers[request.speaker] || { name: request.speaker };
+        setNotice(speaker.name + ": " + request.text);
+      }
+    }
+
+    // A blocking scene arrives as the runtime's active wait, not in the drain,
+    // so a reload can re-show the scene the battle was suspended on.
+    const wait = state.mission.wait;
+    if (wait && wait.request.type === "showScene") {
+      const model = createMissionSceneModel(script, wait.request.sceneRef, wait.token);
+      setMissionScene((current) => (current && current.token === wait.token ? current : model));
+    } else if (!wait) {
+      setMissionScene(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, version, presentation]);
+
+  const dismissMissionScene = React.useCallback(
+    (payload) => {
+      const token = missionScene ? missionScene.token : null;
+      setMissionScene(null);
+      if (!token) return;
+      resolveMissionPresentation(state, token, payload || null, {
+        campaignFlags: campaign.flags
+      });
+      checkObjectives(state);
+      touch();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [missionScene, state, campaign]
+  );
 
   React.useEffect(() => {
     if (!pendingMissionId) return;
@@ -29196,6 +30916,9 @@ function TacticalBattleContent({ viewport }) {
       />
 
 
+      {missionScene ? (
+        <CombatDialogueOverlay entry={missionScene} onDismiss={dismissMissionScene} />
+      ) : null}
       {combatDialogueQueue.length ? (
         <CombatDialogueOverlay
           entry={combatDialogueQueue[0]}
@@ -29525,6 +31248,22 @@ if (typeof window !== "undefined") {
     runBattle,
     runActivation,
     computeMovementRange,
-    chooseAiCommands
+    chooseAiCommands,
+    executeCommand,
+    isHostile,
+    isFriendly,
+    relationshipBetween: (state, a, b) => relationshipBetween(state.factions, a, b),
+    serializeBattle,
+    deserializeBattle,
+    resolveMissionPresentation,
+    runMissionScript,
+    missionScriptFor,
+    missionEngine: MISSION_ENGINE,
+    missionRegistries: {
+      actions: ACTION_REGISTRY,
+      conditions: CONDITION_REGISTRY,
+      events: MISSION_EVENT_TYPES,
+      adapterContract: ENGINE_ADAPTER_CONTRACT
+    }
   };
 }

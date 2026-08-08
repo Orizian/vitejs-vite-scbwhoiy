@@ -131,6 +131,8 @@ Renaming a unit or region in the editor rewrites every reference to it.
 
 ## Objectives
 
+A mission has two objective surfaces: the single `objective` slot below (used when the mission has no script), and the `objectives` library the scripting layer activates and replaces. Both use the same types.
+
 Only these exist in the engine. Anything else is a validation error, not a silent no-op.
 
 | Type | Parameters | Behaviour |
@@ -145,7 +147,7 @@ Only these exist in the engine. Anything else is a validation error, not a silen
 
 An activation is **one unit taking its turn**, not a round.
 
-**Known limits** (see `docs/ENGINE_ANALYSIS.md`): one objective at a time, no objective stack, no partial failure, no mid-battle mutation beyond linear phase advance. The GDD's "losing one pump is survivable, losing all of them fails" cannot currently be expressed — the reference mission uses the strict version and says so in its summary.
+Scripted missions get an **objective stack** with required and optional entries, so "losing one pump is survivable, losing all of them fails" is now expressible — mark the per-pump objectives optional and add a required one that fails only on total loss. See `docs/MISSION_SCRIPTING.md`.
 
 ---
 
@@ -157,16 +159,26 @@ The editor lists every trigger in the GDD's §5.2 vocabulary. Supported ones sho
 
 **Authored but inert** (engine backlog): `phaseStarted`, `phaseCompleted`, `timelineTime`, `unitLeftRegion`, `unitSpotted`, `contactStateChanged`, `unitSurrendered`, `unitDisabled`, `objectiveFailed`, `groupAlerted`, `resourceAbove`/`Below`, `terrainDestroyed`, `interactableUsed`, `wreckCreated`, `campaignFlag`.
 
-**Beats can only produce dialogue.** The action vocabulary (spawn, change faction, replace objective, scripted attack…) is authorable in the format and flagged as inert, because the mid-battle layer cannot act yet. This is the top engine finding.
+**Legacy beats produce dialogue.** The `midBattle` array documented above is the original dialogue-only layer and still works. Everything else — phases, event triggers, conditions and the full action vocabulary — now lives in the scripting layer: see **[`docs/MISSION_SCRIPTING.md`](MISSION_SCRIPTING.md)**.
+
+---
+
+## The scripting layer
+
+A mission file also carries `factions`, `groups`, `objectives`, `phases` and `beats`. Those are what make a battle change shape mid-mission — the Grayfield reversal, reinforcement waves, faction defections, objectives that get replaced.
+
+They have their own reference: **[`docs/MISSION_SCRIPTING.md`](MISSION_SCRIPTING.md)**.
+
+A mission that declares none of them never creates a mission runtime at all and behaves exactly as it did before, so nothing here is mandatory.
 
 ---
 
 ## Things the format deliberately does not hide
 
 - **Player-team unit placements are start positions, not characters.** The campaign roster overwrites the chassis at deploy time, filling player-team slots in order. Place them where you want the squad to begin.
-- **Protected assets and civilians have to be on the player team**, because hostility is currently `teamId !== teamId`. There is no neutral faction yet.
-- **`group` on a unit is a label.** There is no spawn-group or dormancy system, so it does nothing at runtime. It is there so waves can be authored now and wired up when SPN-01 lands.
-- **`phases` are stored, validated and exported, but not executed.** The phase state machine does not exist yet. The validator says so for every phase you author.
+- **`group` on a unit is now live.** It assigns the unit to a spawn/activation group; a group the mission does not declare is created implicitly as an ordinary field group.
+- **Neutral factions exist**, so civilians and protected assets no longer have to masquerade as player units. Set the relationship on the Factions tab.
+- **Legacy `phases[].actions` is read as `onEnter`** so pre-scripting mission files keep loading.
 
 These are documented rather than smoothed over so that a mission written today is honest about which parts of it are live.
 

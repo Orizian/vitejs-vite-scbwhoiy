@@ -21,13 +21,15 @@ npm run lint
 | `src/content/mission-format.js` | Mission schema, validator and compiler. Shared by the game and the editor. |
 | `src/content/mission-registry.js` | Loads mission files and the editor's playtest slot into the content registry. |
 | `src/content/catalog.js` | The content vocabulary the editor may place. Mirrors `App.jsx`; a drift test keeps it honest. |
-| `src/editor/` | The standalone mission editor. Imports the mission format and nothing else. |
+| `src/mission/` | The mission scripting runtime: event stream, trigger/condition vocabulary, action registry, phase state machine and faction relationships. Engine-agnostic; App.jsx supplies an adapter. |
+| `src/editor/` | The standalone mission editor. Imports the mission format and the scripting registries, never the game. |
 | `public/assets/` | Art, music and fonts, addressed by convention. Missing files fall back to readable placeholders — no game rule ever depends on an asset existing. |
 
 ## Documentation
 
 - **[`docs/ENGINE_ANALYSIS.md`](docs/ENGINE_ANALYSIS.md)** — audit against the design bible: what is built, what is missing, what to build first, and why.
 - **[`docs/MISSION_FORMAT.md`](docs/MISSION_FORMAT.md)** — the mission file format and the authoring workflow.
+- **[`docs/MISSION_SCRIPTING.md`](docs/MISSION_SCRIPTING.md)** — phases, triggers, actions, factions and groups: how a battle changes shape mid-mission.
 
 ## Authoring a mission
 

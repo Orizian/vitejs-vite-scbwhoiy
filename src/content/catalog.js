@@ -102,6 +102,21 @@ export function unitById(id) {
 
 export const AI_PROFILE_IDS = ["aggressive", "cautious", "support"];
 
+/** Abilities and statuses a mission script may name (scripted attacks, repairs
+ *  and applyStatus). Mirrors App.jsx; `catalogDriftIssues()` keeps it honest. */
+export const ABILITY_IDS = [
+  "quickStrike", "heavyBlow", "basicHeal", "poisonDart", "delayStrike", "shieldAlly", "forcePush",
+  "blink", "hasteAlly", "cleanseAlly", "raiseTestSkeleton", "execution", "tripleShot", "emberField",
+  "lineBlast", "ringNova", "guardAura", "scatterShot", "coverAlly", "stabilize", "burstFire",
+  "bladeStrike", "cloak", "tacticalWithdrawal", "arcWelder", "fieldRepair", "reinforce", "repairDrone",
+  "handCannon", "precisionShot", "brace", "targetMark", "overwatch", "droneWeld", "holdPosition"
+];
+
+export const STATUS_IDS = [
+  "poison", "haste", "slow", "surefooted", "cloaked", "braced", "marked", "reinforced",
+  "systemsFault", "overwatching", "stun"
+];
+
 export const FACINGS = ["northeast", "southeast", "southwest", "northwest"];
 
 /** Team presets. The engine treats `teamId` as the whole hostility model
