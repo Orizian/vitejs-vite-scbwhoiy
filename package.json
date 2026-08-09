@@ -12,7 +12,9 @@
     "test:serve": "node scripts/run-tests.mjs --serve",
     "editor": "vite --open /editor.html",
     "check:grayfield": "node scripts/grayfield-check.mjs",
-    "check:reactions": "node scripts/reaction-check.mjs"
+    "check:reactions": "node scripts/reaction-check.mjs",
+    "check:knowledge": "node scripts/knowledge-check.mjs",
+    "bench:knowledge": "node scripts/knowledge-bench.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

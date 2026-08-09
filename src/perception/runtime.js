@@ -23,6 +23,7 @@ import {
   factionClock,
   advanceFactionClock,
   factionIsBlind,
+  factionHasSolution,
   setKnowledge,
   setSearchAnchor,
   searchAnchorOf
@@ -130,14 +131,22 @@ export function refreshPerception(state, deps, options) {
   const activation = engine.activationIndex(state);
   const changes = [];
 
+  // A sweep is the expensive operation here and it is idempotent, so a board
+  // that has not moved since the last one has nothing to recompute. One O(n)
+  // stamp replaces an O(n²) pass over observer/subject pairs.
+  const stamp = boardStamp(state, deps, perception);
+  if (perception.stamp === stamp && !(options && options.force)) return [];
+  perception.stamp = stamp;
+
   perception.sweeps += 1;
+  const losCache = new Map();
   const factions = observingFactions(state, deps);
   for (const factionId of factions) {
     ensureFactionKnowledge(perception, factionId);
     // Records are dated on the believing faction's own clock, so "four
     // activations ago" means four of its turns rather than four of anyone's.
     const clock = factionClock(perception, factionId);
-    const { best, observed } = sweepFaction(state, deps, perception, factionId);
+    const { best, observed } = sweepFaction(state, deps, perception, factionId, losCache);
 
     for (const subjectId of Object.keys(best).sort()) {
       const change = applyObservation(perception, factionId, best[subjectId], clock);
@@ -171,6 +180,38 @@ export function refreshPerception(state, deps, options) {
 }
 
 /**
+ * Everything a sweep's answer depends on, in one cheap string.
+ *
+ * Positions, who is alive, what conceals or reveals them, the terrain
+ * overrides that make and break sightlines, and the activation counter that
+ * ages signatures and drives decay. Anything that could change an observation
+ * has to be in here, so this is deliberately generous rather than clever.
+ */
+function boardStamp(state, deps, perception) {
+  const engine = deps.engine;
+  let stamp = engine.activationIndex(state) + "|" + Object.keys(state.terrainOverrides || {}).length;
+  for (const unitId of engine.unitIds(state)) {
+    const unit = engine.unit(state, unitId);
+    if (!unit) continue;
+    stamp += ";" + unitId + "," + unit.x + "," + unit.y + "," + (unit.alive ? 1 : 0) +
+      "," + unit.teamId + "," + (unit.statuses ? unit.statuses.length : 0) +
+      "," + Object.values(unit.equipment || {}).join("+");
+  }
+  for (const factionId of Object.keys(perception.factions)) {
+    stamp += "/" + (perception.factions[factionId].clock || 0);
+  }
+  // Signatures are inputs too: a vent opening changes what is observable
+  // without moving anybody.
+  for (const unitId of Object.keys(perception.signatures || {})) {
+    const bucket = perception.signatures[unitId];
+    for (const channel of Object.keys(bucket)) {
+      stamp += "!" + unitId + channel + bucket[channel].strength + "@" + bucket[channel].until;
+    }
+  }
+  return stamp;
+}
+
+/**
  * Reconnaissance sweep: the escalation that breaks a total loss of contact.
  *
  * Fires only for a faction that has held *no* contact of any kind for a
@@ -187,24 +228,35 @@ export function refreshPerception(state, deps, options) {
 function reconSweep(state, deps, perception, factionId, clock) {
   const limit = perception.config.reconSweepActivations;
   const faction = perception.factions[factionId];
-  if (!limit || !faction || faction.blindFor < limit) return [];
-  if (!factionIsBlind(perception, factionId)) {
-    faction.blindFor = 0;
+  if (!limit || !faction || faction.withoutSolutionFor < limit) return [];
+  if (factionHasSolution(perception, factionId)) {
+    faction.withoutSolutionFor = 0;
     return [];
   }
 
+  // Stage one hands out directions to a faction that has lost the enemy
+  // entirely. Stage two paints a trace the faction has been sitting on
+  // without ever resolving it. Stage two never invents a contact.
+  const blind = factionIsBlind(perception, factionId);
+  const next = blind ? "suspected" : "acquired";
   const engine = deps.engine;
   const changes = [];
+
   for (const unitId of engine.unitIds(state)) {
     const unit = engine.unit(state, unitId);
     if (!unit || !unit.alive) continue;
     if (engine.teamRelationship(state, factionId, unitId) !== "hostile") continue;
-    const change = setKnowledge(perception, factionId, unitId, "suspected", {
+    if (!blind) {
+      const record = knowledgeOf(perception, factionId, unitId);
+      if (!record || record.state === "unseen") continue;
+    }
+    const change = setKnowledge(perception, factionId, unitId, next, {
       activation: clock,
       x: unit.x,
       y: unit.y,
-      accuracy: "approximate",
+      accuracy: next === "acquired" ? "exact" : "approximate",
       channels: ["intel"],
+      hold: perception.config.reconHoldActivations,
       source: "recon"
     });
     if (change) {
@@ -212,7 +264,7 @@ function reconSweep(state, deps, perception, factionId, clock) {
       changes.push(change);
     }
   }
-  faction.blindFor = 0;
+  faction.withoutSolutionFor = 0;
   return changes;
 }
 
@@ -260,7 +312,9 @@ export function ingestPerceptionEvent(state, deps, event) {
     if (actor) {
       advanceFactionClock(perception, actor.teamId);
       const faction = perception.factions[actor.teamId];
-      faction.blindFor = factionIsBlind(perception, actor.teamId) ? faction.blindFor + 1 : 0;
+      faction.withoutSolutionFor = factionHasSolution(perception, actor.teamId)
+        ? 0
+        : faction.withoutSolutionFor + 1;
     }
   }
 
@@ -303,6 +357,18 @@ export function ingestPerceptionEvent(state, deps, event) {
  * retires it quickly rather than leaving the unit orbiting an empty corner.
  */
 export function searchTargetFor(state, deps, unitId) {
+  const best = searchLeadFor(state, deps, unitId);
+  if (!best) return null;
+  const unit = deps.engine.unit(state, unitId);
+  const perception = state.perception;
+  if (best.distance <= perception.config.searchArrivalRadius) {
+    markInvestigated(perception, unit.teamId, best.unitId, factionClock(perception, unit.teamId));
+  }
+  return best;
+}
+
+/** The same lead, without the side effect. Safe to call inside a scorer. */
+export function searchLeadFor(state, deps, unitId) {
   const perception = state.perception;
   if (!perception || !perception.enabled) return null;
   const engine = deps.engine;
@@ -310,7 +376,6 @@ export function searchTargetFor(state, deps, unitId) {
   if (!unit || !unit.alive) return null;
   const faction = perception.factions[unit.teamId];
   if (!faction) return null;
-  const clock = factionClock(perception, unit.teamId);
 
   let best = null;
   for (const subjectId of Object.keys(faction.units).sort()) {
@@ -334,10 +399,6 @@ export function searchTargetFor(state, deps, unitId) {
     ) {
       best = { unitId: subjectId, record, distance, x: record.x, y: record.y };
     }
-  }
-
-  if (best && best.distance <= perception.config.searchArrivalRadius) {
-    markInvestigated(perception, unit.teamId, best.unitId, clock);
   }
   return best;
 }

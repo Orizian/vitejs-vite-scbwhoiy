@@ -42,19 +42,34 @@ export const DEFAULT_PERCEPTION_CONFIG = {
   /** A contact whose last-known tile was searched and found empty decays faster. */
   investigatedDecayActivations: 1,
   /**
-   * Own-faction activations of *total* blindness before a reconnaissance sweep
-   * hands the faction fresh contacts.
+   * Own-faction activations without a firing solution before reconnaissance
+   * escalates.
    *
    * Fog of war has one failure mode that is not interesting: two sides that
-   * cannot find each other and stand still until the activation cap. This is
-   * the escalation that resolves it — command notices you have lost the enemy
-   * entirely and tells you roughly where they are.
+   * cannot resolve each other and stand there until the activation cap. Two
+   * tiles apart with a wall between them, hearing each other every turn, is a
+   * real tactical situation and a terrible battle.
    *
-   * It grants SUSPECTED only, so nothing becomes targetable, and it goes stale
-   * like any other contact. It fires only when a faction knows *nothing* at
-   * all, which in an ordinary battle never happens. Set to 0 to disable.
+   * The escalation has two stages, both on this counter:
+   *
+   *   no contact at all   → SUSPECTED contacts: a direction to search
+   *   contact, no solution → those contacts are painted ACQUIRED
+   *
+   * The second stage can only escalate a trace the faction already had, so a
+   * unit that has never been detected is never painted by it — which is what
+   * keeps a stealth build meaningful. In an ordinary engagement neither stage
+   * is ever reached. Set to 0 to disable it for a mission built on the
+   * standoff.
    */
   reconSweepActivations: 12,
+  /**
+   * How many of its own activations a painted contact stays good for.
+   *
+   * Without a hold the paint is undone by the very next sweep — the contact is
+   * not being observed, so ordinary decay demotes it before anybody gets a
+   * turn to act on it, and the standoff simply resumes.
+   */
+  reconHoldActivations: 2,
   /** Hard ceiling so a pathological mission cannot grow knowledge without bound. */
   maxRecordsPerFaction: 4096
 };
@@ -82,8 +97,8 @@ function newFaction() {
     units: {},
     /** This faction's own activation counter — the clock every duration uses. */
     clock: 0,
-    /** Consecutive own activations with no contact of any kind, anywhere. */
-    blindFor: 0,
+    /** Consecutive own activations with nothing this faction could shoot at. */
+    withoutSolutionFor: 0,
     /**
      * Where to look when nothing is known at all.
      *
@@ -103,7 +118,7 @@ export function ensureFactionKnowledge(perception, factionId) {
   if (!perception.factions[factionId]) perception.factions[factionId] = newFaction();
   const faction = perception.factions[factionId];
   if (faction.clock == null) faction.clock = 0;
-  if (faction.blindFor == null) faction.blindFor = 0;
+  if (faction.withoutSolutionFor == null) faction.withoutSolutionFor = 0;
   if (faction.searchAnchor === undefined) faction.searchAnchor = null;
   return faction;
 }
@@ -116,6 +131,16 @@ export function factionIsBlind(perception, factionId) {
     if (faction.units[unitId].state !== "unseen") return false;
   }
   return true;
+}
+
+/** True when this faction holds at least one thing it could legally shoot. */
+export function factionHasSolution(perception, factionId) {
+  const faction = perception && perception.factions[factionId];
+  if (!faction) return false;
+  for (const unitId of Object.keys(faction.units)) {
+    if (faction.units[unitId].state === "acquired") return true;
+  }
+  return false;
 }
 
 export function factionClock(perception, factionId) {
@@ -188,6 +213,8 @@ function blankRecord(unitId, activation) {
      * wrong, which is exactly the right failure mode.
      */
     persistent: false,
+    /** Decay leaves this record alone until the believer's clock passes it. */
+    holdUntil: null,
     source: "sensor"
   };
 }
@@ -287,6 +314,7 @@ export function applyObservation(perception, factionId, observation, activation)
   // The moment a sensor takes over, the record stops being a briefing and
   // becomes an observation — with an observation's shelf life.
   record.persistent = false;
+  record.holdUntil = null;
   record.source = observation.source || "sensor";
   record.channels = observation.channels
     ? observation.channels.slice().sort()
@@ -352,6 +380,7 @@ export function setKnowledge(perception, factionId, unitId, next, options) {
   record.source = (options && options.source) || "script";
   record.channels = (options && options.channels) || ["intel"];
   record.persistent = !!(options && options.persistent);
+  record.holdUntil = options && options.hold ? activation + options.hold : null;
 
   if (next === "unseen") {
     record.x = null;
@@ -410,6 +439,9 @@ export function decayFaction(perception, factionId, activation, observedIds) {
     if (observed.has(unitId)) continue;
     // A briefing is not an observation and does not go stale on its own.
     if (record.persistent && record.state === "suspected") continue;
+    // A fresh paint is guaranteed for a couple of turns, or it would be undone
+    // by the same sweep that issued it.
+    if (record.holdUntil != null && activation < record.holdUntil) continue;
 
     if (record.state === "acquired") {
       // The instant a firing solution is not being maintained it degrades to a

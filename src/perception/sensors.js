@@ -112,7 +112,7 @@ export function pruneSignatures(perception, activation) {
  * stale the instant the subject moves. Spatial jitter is a balance decision
  * that belongs with the detection maths, and plugs into this same field.
  */
-export function observeUnit(state, deps, perception, observerId, subjectId) {
+export function observeUnit(state, deps, perception, observerId, subjectId, losCache) {
   const engine = deps.engine;
   const observer = engine.unit(state, observerId);
   const subject = engine.unit(state, subjectId);
@@ -144,7 +144,16 @@ export function observeUnit(state, deps, perception, observerId, subjectId) {
 
     if (channel.requiresLineOfSight) {
       if (!losKnown) {
-        los = engine.lineOfSight(state, observer, subject);
+        // Sight is reciprocal, so the answer for (A,B) is the answer for
+        // (B,A). One memo per sweep therefore halves the walks on a board
+        // where both sides are looking at each other.
+        const key = observerId < subjectId ? observerId + "|" + subjectId : subjectId + "|" + observerId;
+        if (losCache && losCache.has(key)) {
+          los = losCache.get(key);
+        } else {
+          los = engine.lineOfSight(state, observer, subject);
+          if (losCache) losCache.set(key, los);
+        }
         losKnown = true;
       }
       if (!los) continue;
@@ -174,7 +183,7 @@ export function observeUnit(state, deps, perception, observerId, subjectId) {
  * faction's living units, plus the set of subjects observed at all — decay
  * needs the second to know what it must *not* touch.
  */
-export function sweepFaction(state, deps, perception, factionId) {
+export function sweepFaction(state, deps, perception, factionId, losCache) {
   const engine = deps.engine;
   const unitIds = engine.unitIds(state);
   const observers = [];
@@ -198,7 +207,7 @@ export function sweepFaction(state, deps, perception, factionId) {
 
   for (const subjectId of subjects) {
     for (const observerId of observers) {
-      const observation = observeUnit(state, deps, perception, observerId, subjectId);
+      const observation = observeUnit(state, deps, perception, observerId, subjectId, losCache);
       if (!observation) continue;
       const current = best[subjectId];
       if (!current || rankOf(observation.state) > rankOf(current.state)) {

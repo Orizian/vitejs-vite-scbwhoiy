@@ -117,6 +117,17 @@ export const STATUS_IDS = [
   "systemsFault", "overwatching", "stun"
 ];
 
+/** Loadout parts a mission may bolt onto a unit, and the slots they go in.
+ *  Mirrors App.jsx; `catalogDriftIssues()` keeps it honest. */
+export const EQUIPMENT_SLOTS = ["primaryWeapon", "armor", "utilitySystem", "coreSystem"];
+
+export const EQUIPMENT_IDS = [
+  "closeShotgun", "breacherShotgun", "autogun", "silencedSmg", "arcWelderRig", "pulseWelder",
+  "longRifle", "railBarrel", "plateArmor", "reactiveArmor", "lightPlating", "targetingSuite",
+  "thermalOptics", "signalScanner", "jumpJets", "repairKit", "standardCore", "overclockCore",
+  "bulwarkCore"
+];
+
 export const FACINGS = ["northeast", "southeast", "southwest", "northwest"];
 
 /** Team presets. The engine treats `teamId` as the whole hostility model

@@ -25,6 +25,8 @@ import {
   UNIT_IDS,
   ABILITY_IDS,
   STATUS_IDS,
+  EQUIPMENT_IDS,
+  EQUIPMENT_SLOTS,
   AI_PROFILE_IDS,
   FACINGS,
   SPEAKER_IDS,
@@ -316,6 +318,9 @@ function normalizeUnit(raw, index) {
     facing: FACINGS.includes(raw.facing) ? raw.facing : null,
     aiProfile: AI_PROFILE_IDS.includes(raw.aiProfile) ? raw.aiProfile : null,
     group: raw.group || null,
+    // Per-unit loadout, keyed by slot. This is how a mission fields a garrison
+    // with thermal optics rather than needing a bespoke chassis for it.
+    equipment: raw.equipment && typeof raw.equipment === "object" ? { ...raw.equipment } : null,
     note: raw.note || ""
   };
 }
@@ -586,6 +591,15 @@ export function validateMission(mission, catalog) {
     }
     if (!teamIds.has(unit.teamId)) {
       push(errors, label + ' is on unknown team "' + unit.teamId + '".');
+    }
+    for (const slot of Object.keys(unit.equipment || {})) {
+      const equipmentId = unit.equipment[slot];
+      if (!equipmentId) continue;
+      if (!EQUIPMENT_SLOTS.includes(slot)) {
+        push(errors, label + ' has equipment in unknown slot "' + slot + '".');
+      } else if (!EQUIPMENT_IDS.includes(equipmentId)) {
+        push(errors, label + ' equips unknown part "' + equipmentId + '".');
+      }
     }
     if (unit.x < 0 || unit.y < 0 || unit.x >= m.map.width || unit.y >= m.map.height) {
       push(errors, label + " is placed outside the map.");
@@ -1021,6 +1035,7 @@ export function compileMission(rawMission) {
     if (unit.facing) entry.facing = unit.facing;
     if (unit.aiProfile) entry.aiProfile = unit.aiProfile;
     if (unit.group) entry.groupId = unit.group;
+    if (unit.equipment) entry.equipment = { ...unit.equipment };
     return entry;
   };
   const encounterUnits = fieldUnits.map((unit, index) => {
@@ -1276,6 +1291,7 @@ export function catalogDriftIssues(content) {
   check("AI profile", AI_PROFILE_IDS, Object.keys(content.aiProfiles));
   check("Ability", ABILITY_IDS, Object.keys(content.abilities));
   check("Status", STATUS_IDS, Object.keys(content.statuses));
+  check("Equipment", EQUIPMENT_IDS, Object.keys(content.equipment));
 
   // The reverse direction is a warning, not an error: not every internal test
   // fixture needs to be placeable in the editor.
