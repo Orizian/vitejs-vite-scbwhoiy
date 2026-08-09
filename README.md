@@ -10,6 +10,7 @@ npm test          # runs the full suite headlessly (needs a dev server on :5173)
 npm run check:grayfield   # browser acceptance: mission scripting end to end
 npm run check:reactions   # browser acceptance: Section Seven + Grayfield link restore
 npm run check:knowledge   # browser acceptance: the contact lifecycle, unseen to cold
+npm run check:questions   # verifies the AI cannot read a hidden unit's real position
 npm run bench:knowledge   # A/B the knowledge layer inside one build
 npm run test:serve  # same, but starts and stops vite for you
 npm run build     # builds both entry points

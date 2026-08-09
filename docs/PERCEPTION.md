@@ -7,7 +7,7 @@ Before this existed, AI decision-making read `state.units[id].x` directly. Every
 - Runtime: `src/perception/` — `channels.js`, `knowledge.js`, `sensors.js`, `runtime.js`, `view.js`
 - Bridge into the engine: the `PERCEPTION_ENGINE` adapter in `src/App.jsx`
 - Fixture: `fixture-knowledge-slice.json` (Vent Row)
-- Acceptance run: `npm run check:knowledge` · Benchmark: `npm run bench:knowledge`
+- Acceptance run: `npm run check:knowledge` · Verification: `npm run check:questions` · Benchmark: `npm run bench:knowledge`
 
 ---
 
@@ -48,6 +48,12 @@ Gated: `enumerateAiTargets`, `tilePositionScore`, `objectivePositionScore`, `nea
 **Scope of the gate:** knowledge is required for units the acting faction is *hostile* toward. Own-team, allied and neutral units are treated as known — a medic knowing where the friendly civilians are is not an exploit, and hostility is what the guarantee is about. A neutral that turns hostile is gated from that moment, using the record the sweep has been keeping all along.
 
 Set `perception: false` on `createBattle` and everything is visible again. That is what the A/B benchmark toggles, and it is the fastest way to tell whether a behaviour change came from this layer.
+
+### The one residual channel
+
+`npm run check:questions` installs a tripwire on a hidden unit's coordinates and records every read during a full AI turn. Targeting, threat scoring, facing and the search lead read it **zero** times. One thing still does: **tile occupancy**, via `unitAt`, when movement legality asks whether a tile is free.
+
+That is a physical constraint rather than an information one — bodies block movement whether or not you can see them — but it is a genuine inference channel: a pathfinder that finds a tile mysteriously blocked has learned something. The intended fix is not to let units path through people they cannot see; it is *movement stops on contact*, so bumping into an unseen enemy reveals it. That is a movement feature and is not built yet.
 
 ---
 

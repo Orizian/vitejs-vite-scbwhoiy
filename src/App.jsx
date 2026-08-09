@@ -34178,6 +34178,7 @@ if (typeof window !== "undefined") {
     missionScriptFor,
     missionEngine: MISSION_ENGINE,
     reactionEngine: REACTION_ENGINE,
+    resolveEffects,
     reactionModel,
     resolveReactionChoice,
     refreshReactionLinks,
@@ -34200,6 +34201,16 @@ if (typeof window !== "undefined") {
     },
     perceptionDeps,
     perceptionEngine: PERCEPTION_ENGINE,
+    // The AI's targeting and threat-scoring path, as source, so an external
+    // check can assert it names no stealth concept.
+    enumerateAiTargets,
+    tilePositionScore: (state, unitId, tile, weights) =>
+      tilePositionScore(state, unitId, tile, weights || aiProfileFor(state, unitId)),
+    nearestHostileFacing,
+    aiTargetingSource: () =>
+      [enumerateAiTargets, tilePositionScore, objectivePositionScore, nearestHostileFacing]
+        .map((fn) => fn.toString())
+        .join("\n"),
     describePerception: (state, factionId) => describePerception(state, perceptionDeps(), factionId),
     perceivedUnits: (state, teamId, options) =>
       perceivedUnits(state, perceptionDeps(), teamId, options),

@@ -14,6 +14,7 @@
     "check:grayfield": "node scripts/grayfield-check.mjs",
     "check:reactions": "node scripts/reaction-check.mjs",
     "check:knowledge": "node scripts/knowledge-check.mjs",
+    "check:questions": "node scripts/knowledge-questions.mjs",
     "bench:knowledge": "node scripts/knowledge-bench.mjs"
   },
   "dependencies": {
