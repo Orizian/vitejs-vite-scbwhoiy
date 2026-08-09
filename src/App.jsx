@@ -51,6 +51,43 @@ import {
   deriveReactionEvents
 } from "./reactions/events.js";
 import { validateMission as validateMissionFile, normalizeMission } from "./content/mission-format.js";
+import {
+  OBSERVATION_CHANNELS,
+  CHANNEL_ORDER,
+  KNOWLEDGE_STATES,
+  DEFAULT_SENSOR_PROFILE,
+  DEFAULT_EMISSION_PROFILE,
+  rankOf as knowledgeRank
+} from "./perception/channels.js";
+import {
+  knowledgeOf,
+  knowledgeStateOf,
+  setKnowledge,
+  clearKnowledge,
+  shareKnowledge,
+  describeFactionKnowledge,
+  countKnowledge,
+  PERCEPTION_VERSION
+} from "./perception/knowledge.js";
+import { emitSignature } from "./perception/sensors.js";
+import {
+  createPerception,
+  refreshPerception,
+  ingestPerceptionEvent,
+  searchTargetFor,
+  searchAnchorFor,
+  setSearchAnchor,
+  describePerception,
+  PERCEPTION_TICK_EVENTS,
+  PERCEPTION_LIMITS
+} from "./perception/runtime.js";
+import {
+  perceivedUnits,
+  perceivedThreats,
+  believedPositionOf,
+  canActOn as factionCanActOn,
+  isGated as knowledgeGated
+} from "./perception/view.js";
 
 /* =========================================================================
  * TACTICAL ENGINE — PHASE 1
@@ -3620,6 +3657,38 @@ const DEFAULT_BASE_STATS = {
   movement: 1
 };
 
+/**
+ * Sensors and emissions as ordinary content.
+ *
+ * A chassis, a status and a piece of equipment all normalize to the same
+ * shape, so "a scanner drone", "a cloak field" and "a thermal optic" are three
+ * data entries rather than three engine features:
+ *
+ *   perception: {
+ *     sensors:   { thermal: { range: 8 } },   // what it can detect
+ *     emissions: { optical: 0, signal: 2 }    // what it gives off, as a factor
+ *   }
+ *
+ * Absent fields mean "unchanged", which is why every existing content entry
+ * keeps behaving exactly as it did.
+ */
+function normalizePerceptionProfile(authored) {
+  const sensors = {};
+  const emissions = {};
+  const source = authored || {};
+  for (const channelId of Object.keys(source.sensors || {})) {
+    if (!OBSERVATION_CHANNELS[channelId]) continue;
+    const entry = source.sensors[channelId];
+    sensors[channelId] = { range: entry && entry.range != null ? entry.range : 0 };
+  }
+  for (const channelId of Object.keys(source.emissions || {})) {
+    if (!OBSERVATION_CHANNELS[channelId]) continue;
+    const value = source.emissions[channelId];
+    if (typeof value === "number") emissions[channelId] = value;
+  }
+  return { sensors, emissions };
+}
+
 function buildContentRegistry(sources) {
   const units = deriveIds(sources.units, (entry) => {
     entry.baseStats = { ...DEFAULT_BASE_STATS, ...(entry.baseStats || {}) };
@@ -3637,6 +3706,9 @@ function buildContentRegistry(sources) {
     if (entry.baseStats.maxDrop == null) entry.baseStats.maxDrop = 1;
     entry.defaultEquipment = entry.defaultEquipment || {};
     entry.role = entry.role || "";
+    // What this chassis can detect and what it gives off. Absent means "an
+    // ordinary body with ordinary eyes", which is what every existing unit is.
+    entry.perception = normalizePerceptionProfile(entry.perception);
     return entry;
   });
 
@@ -3678,6 +3750,7 @@ function buildContentRegistry(sources) {
     entry.preventsAction = entry.preventsAction === true;
     entry.glyph = entry.glyph || "•";
     entry.assets = entry.assets || {};
+    entry.perception = normalizePerceptionProfile(entry.perception);
     return entry;
   });
 
@@ -3739,6 +3812,7 @@ function buildContentRegistry(sources) {
     entry.tags = entry.tags || [];
     entry.description = entry.description || "";
     entry.assets = entry.assets || {};
+    entry.perception = normalizePerceptionProfile(entry.perception);
     return entry;
   });
 
@@ -4509,18 +4583,23 @@ function flankProfile(state, sourceUnitId, targetUnitId, options) {
   };
 }
 
+/**
+ * Which way a unit turns when nothing authored says otherwise.
+ *
+ * Toward the nearest hostile its faction is aware of. A faction that starts
+ * blind faces the middle of the map instead of pivoting toward an ambush it
+ * cannot possibly have noticed.
+ */
 function nearestHostileFacing(state, unitId) {
   const unit = state.units[unitId];
   if (!unit) return "southeast";
   let nearest = null;
   let nearestDistance = Infinity;
-  for (const otherId of state.unitOrder) {
-    if (otherId === unitId || !isHostile(state, unitId, otherId)) continue;
-    const other = state.units[otherId];
-    if (!other || !other.alive) continue;
-    const distance = gridDistance(unit, other);
+  for (const threat of perceivedThreats(state, perceptionDeps(), unit.teamId)) {
+    if (threat.unitId === unitId || !threat.alive) continue;
+    const distance = gridDistance(unit, { x: threat.x, y: threat.y });
     if (distance < nearestDistance) {
-      nearest = other;
+      nearest = { x: threat.x, y: threat.y };
       nearestDistance = distance;
     }
   }
@@ -4618,6 +4697,14 @@ function createBattle(encounterId, seed, options) {
     }),
     autoResolveReactions: opts.autoResolveReactions !== false,
 
+    // Faction-scoped battlefield knowledge. Always present so no code path has
+    // to ask whether it exists; `enabled: false` restores full information and
+    // is what the A/B benchmark toggles.
+    perception: createPerception(encounter.teams.map((team) => team.id), {
+      enabled: opts.perception !== false,
+      config: (opts.missionScript && opts.missionScript.perception) || encounter.perception || null
+    }),
+
     // Mission scripting runtime. Null for encounters with no script, which
     // keeps the whole system off the critical path for existing content.
     mission: opts.missionScript ? createMissionRuntimeState(opts.missionScript) : null,
@@ -4665,7 +4752,9 @@ function createBattle(encounterId, seed, options) {
       y: spawn.y,
       facing: (rosterEntry && rosterEntry.facing) || spawn.facing || null,
       aiProfileId: spawn.aiProfile || null,
-      ref: spawn.ref || null,
+      // A deployed operator's ref wins over the encounter's placeholder, so a
+      // campaign mission addresses the same units file-authored fixtures do.
+      ref: (rosterEntry && rosterEntry.ref) || spawn.ref || null,
       groupId: spawn.groupId || null,
       modifiers: rosterEntry && rosterEntry.modifiers ? rosterEntry.modifiers : spawn.modifiers || null
     });
@@ -4673,7 +4762,14 @@ function createBattle(encounterId, seed, options) {
     state.unitOrder.push(unit.id);
   });
 
-  // Units without authored facing begin oriented toward their nearest hostile.
+  // Establish what each faction can see before anything consults it. Silent,
+  // because nothing has changed yet — this is the opening state of the world.
+  refreshPerception(state, perceptionDeps(), { emit: false });
+  seedSearchAnchors(state);
+  grantObjectiveIntel(state);
+
+  // Units without authored facing begin oriented toward their nearest *known*
+  // hostile, falling back to the map default when a faction starts blind.
   for (const id of state.unitOrder) {
     if (!state.units[id].facing) state.units[id].facing = nearestHostileFacing(state, id);
   }
@@ -4812,6 +4908,21 @@ function unitLabel(state, unitId) {
 
 function livingUnits(state) {
   return state.unitOrder.map((id) => state.units[id]).filter((u) => u.alive);
+}
+
+function teamLabel(state, teamId) {
+  const team = (state.teams || []).find((entry) => entry.id === teamId);
+  return (team && team.name) || teamId;
+}
+
+/** Log text for a knowledge transition, phrased from the faction's side. */
+function knowledgeLogText(state, event) {
+  const who = teamLabel(state, event.factionId);
+  const what = unitLabel(state, event.unitId);
+  if (event.to === "acquired") return who + " acquires " + what;
+  if (event.to === "unseen") return who + " loses track of " + what;
+  if (event.from === "unseen") return who + " picks up a contact: " + what;
+  return who + " downgrades " + what + " to " + event.to;
 }
 
 /**
@@ -6523,6 +6634,27 @@ const EVENT_HANDLERS = {
     void event;
   },
 
+  /**
+   * A faction's belief about a unit moved between states.
+   *
+   * The knowledge model already applied the change; this event puts it on the
+   * authoritative queue so mission triggers and reactions can key off "they
+   * have spotted us" or "we lost him" without either layer knowing the
+   * perception system exists. Only real transitions reach here.
+   */
+  knowledgeChanged(state, event) {
+    if (event.to === "unseen" || event.from === "unseen" || event.to === "acquired") {
+      logLine(state, "knowledgeChanged", knowledgeLogText(state, event), {
+        factionId: event.factionId,
+        unitId: event.unitId,
+        from: event.from,
+        to: event.to,
+        reason: event.reason,
+        tile: event.x == null ? null : { x: event.x, y: event.y }
+      });
+    }
+  },
+
   /** A unit placed by the mission script. The unit already exists — this event
    *  exists so the log, the renderer and the mission stream all see it. */
   unitDeployed(state, event) {
@@ -6930,6 +7062,14 @@ function processNextEvent(state, onEvent) {
 
   const before = onEvent ? snapshotForEvents(state) : null;
   handler(state, event);
+
+  // Perception consumes the same authoritative event, immediately after it is
+  // applied and before anything downstream can make a decision on stale
+  // beliefs. It runs first because a mission trigger keyed on "they spotted
+  // us" must see the spot, not the move that caused it.
+  if (state.perception && event.type !== "knowledgeChanged") {
+    ingestPerceptionEvent(state, perceptionDeps(), event);
+  }
 
   // The mission scripting layer consumes the same authoritative event the
   // simulation just applied. No log rescanning, no polling.
@@ -8638,6 +8778,13 @@ function deserializeBattle(serialized) {
     state.reactions = createReactionState(REACTION_CONTENT, { autoResolve: true });
     state.autoResolveReactions = true;
   }
+  if (!state.perception || state.perception.version !== PERCEPTION_VERSION) {
+    // A save from before knowledge existed — or from an incompatible knowledge
+    // version — reloads with full information rather than being rejected. The
+    // first sweep after the reload re-derives the truth anyway; what is lost is
+    // only the *memory* of contacts nobody can currently see.
+    state.perception = createPerception(state.teams.map((team) => team.id), { enabled: false });
+  }
   if (!state.terrainOverrides) state.terrainOverrides = {};
   if (!state.delayedEffects) state.delayedEffects = [];
   if (!state.errors) state.errors = [];
@@ -8655,6 +8802,237 @@ function deserializeBattle(serialized) {
     if (script) registerMissionScript(script);
   }
   return state;
+}
+
+/* ---------------------------------------------------------------
+ * PERCEPTION BRIDGE
+ *
+ * The knowledge system (src/perception/) knows about channels, contacts and
+ * decay, and nothing about this file. Everything it needs from the simulation
+ * arrives through this adapter — including line of sight, which is the
+ * engine's existing implementation rather than a second, disagreeing one.
+ *
+ * The adapter is the *only* path by which the knowledge model reads a true
+ * coordinate. Nothing downstream of it can.
+ * -------------------------------------------------------------*/
+
+/** Chassis + equipment + statuses, composed into one sensor suite. */
+function sensorProfileFor(state, unitId) {
+  const unit = state.units[unitId];
+  if (!unit) return DEFAULT_SENSOR_PROFILE;
+  const channels = {};
+  for (const channelId of CHANNEL_ORDER) {
+    const base = DEFAULT_SENSOR_PROFILE.channels[channelId];
+    channels[channelId] = { range: base ? base.range : 0 };
+  }
+
+  // The best sensor wins rather than stacking: two pairs of binoculars do not
+  // see twice as far, and a max keeps the composition order-independent.
+  const contribute = (profile) => {
+    if (!profile) return;
+    for (const channelId of Object.keys(profile.sensors || {})) {
+      if (!channels[channelId]) channels[channelId] = { range: 0 };
+      channels[channelId].range = Math.max(channels[channelId].range, profile.sensors[channelId].range);
+    }
+  };
+
+  const definition = CONTENT.units[unit.definitionId];
+  contribute(definition && definition.perception);
+  for (const item of equippedItems(state, unitId)) contribute(item.perception);
+  for (const applied of unit.statuses) {
+    const status = CONTENT.statuses[applied.statusId];
+    contribute(status && status.perception);
+  }
+  return { channels };
+}
+
+/** Chassis + equipment + statuses, composed into what a unit gives off. */
+function emissionProfileFor(state, unitId) {
+  const unit = state.units[unitId];
+  if (!unit) return DEFAULT_EMISSION_PROFILE;
+  const emissions = { ...DEFAULT_EMISSION_PROFILE };
+
+  // Emissions multiply, so a cloak that zeroes optical output stays zero no
+  // matter what else is stacked on top of it.
+  const contribute = (profile) => {
+    if (!profile) return;
+    for (const channelId of Object.keys(profile.emissions || {})) {
+      const current = emissions[channelId] == null ? 0 : emissions[channelId];
+      emissions[channelId] = current * profile.emissions[channelId];
+    }
+  };
+
+  const definition = CONTENT.units[unit.definitionId];
+  contribute(definition && definition.perception);
+  for (const item of equippedItems(state, unitId)) contribute(item.perception);
+  for (const applied of unit.statuses) {
+    const status = CONTENT.statuses[applied.statusId];
+    contribute(status && status.perception);
+  }
+  return emissions;
+}
+
+const PERCEPTION_ENGINE = {
+  unitIds(state) {
+    return state.unitOrder;
+  },
+
+  unit(state, unitId) {
+    return state.units[unitId] || null;
+  },
+
+  teamRelationship(state, teamId, otherUnitId) {
+    const other = state.units[otherUnitId];
+    if (!other) return "neutral";
+    return relationshipBetween(state.factions, teamId, other.teamId);
+  },
+
+  /**
+   * Reciprocal line of sight.
+   *
+   * The engine's Bresenham walk is directional — it breaks diagonal ties in
+   * the order it happens to step, so A can have a clear line to B while B does
+   * not have one back. That never mattered while sight was only used to
+   * validate an attacker's shot, but as the basis of *seeing* it produces
+   * one-way visibility and genuine stalemates: a unit that is permanently
+   * observed by an enemy it can never acquire.
+   *
+   * Sight is reciprocal, so perception tests both directions. Targeting keeps
+   * using the existing directional check unchanged; the two are allowed to
+   * differ, and the AI simply repositions until its shot is also legal.
+   */
+  lineOfSight(state, from, to) {
+    const map = CONTENT.maps[state.mapId];
+    return hasLineOfSight(map, from, to, state) || hasLineOfSight(map, to, from, state);
+  },
+
+  distance(a, b) {
+    return gridDistance(a, b);
+  },
+
+  /** Concealment is the existing status-flag model, not a parallel one. */
+  concealedFrom(state, unitId, viewerTeamId) {
+    return isUnitConcealed(state, unitId) || isUnitHiddenFrom(state, unitId, viewerTeamId);
+  },
+
+  sensorProfile(state, unitId) {
+    return sensorProfileFor(state, unitId);
+  },
+
+  emissionProfile(state, unitId) {
+    return emissionProfileFor(state, unitId);
+  },
+
+  /**
+   * How loud one event was for one unit.
+   *
+   * Content decides: an ability tagged `silent` makes no noise, one tagged
+   * `loud` makes more. No ability id appears here.
+   */
+  signatureScale(state, unitId, event) {
+    if (!event || !event.abilityId) return 1;
+    const ability = CONTENT.abilities[event.abilityId];
+    if (!ability) return 1;
+    const tags = ability.tags || [];
+    if (tags.includes("silent")) return 0;
+    if (tags.includes("loud")) return 2;
+    return 1;
+  },
+
+  activationIndex(state) {
+    return state.activationCount;
+  },
+
+  queueEvent(state, event) {
+    queueEvent(state, event);
+  }
+};
+
+const PERCEPTION_DEPS = { engine: PERCEPTION_ENGINE };
+
+function perceptionDeps() {
+  return PERCEPTION_DEPS;
+}
+
+/**
+ * Units the mission itself names as targets, and the faction it names them to.
+ *
+ * Generic: any objective — root or phased — that carries `unitIds` is read as
+ * a briefing. No objective type, unit id or mission id is special-cased.
+ */
+function briefedObjectiveTargets(state) {
+  const params = objectiveParams(state);
+  const teamId = params.teamId;
+  if (!teamId) return null;
+  const unitIds = [];
+  const collect = (entry) => {
+    for (const id of (entry && entry.unitIds) || []) {
+      if (!unitIds.includes(id)) unitIds.push(id);
+    }
+  };
+  collect(params);
+  for (const phase of params.phases || []) collect({ ...params, ...(phase.params || {}) });
+  return unitIds.length ? { teamId, unitIds } : null;
+}
+
+/**
+ * Turns the mission briefing into knowledge.
+ *
+ * Being ordered to destroy something implies being told where it is. The
+ * contact is SUSPECTED, not acquired — the squad still has to go and look
+ * before it can shoot — and it is a snapshot: a briefed unit that walks away
+ * leaves the briefing pointing at empty ground, which is correct.
+ */
+function grantObjectiveIntel(state) {
+  if (!state.perception || !state.perception.enabled) return;
+  const briefing = briefedObjectiveTargets(state);
+  if (!briefing) return;
+  for (const unitId of briefing.unitIds) {
+    const unit = state.units[unitId];
+    if (!unit || !unit.alive) continue;
+    if (relationshipBetween(state.factions, briefing.teamId, unit.teamId) !== "hostile") continue;
+    if (knowledgeStateOf(state.perception, briefing.teamId, unitId) !== "unseen") continue;
+    setKnowledge(state.perception, briefing.teamId, unitId, "suspected", {
+      x: unit.x,
+      y: unit.y,
+      accuracy: "approximate",
+      channels: ["intel"],
+      source: "briefing",
+      persistent: true
+    });
+  }
+}
+
+/**
+ * The opening briefing.
+ *
+ * Every faction starts knowing roughly where the other side came down — you do
+ * not walk into an engagement with no idea which direction it is in. This is
+ * an *area*, taken once at deployment: it cannot be targeted, it never
+ * updates, and within a few activations of contact the real records have taken
+ * over entirely. It exists so a faction that has lost every contact advances
+ * and sweeps instead of standing on a completely flat scoring surface.
+ */
+function seedSearchAnchors(state) {
+  if (!state.perception || !state.perception.enabled) return;
+  for (const team of state.teams) {
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
+    for (const id of state.unitOrder) {
+      const other = state.units[id];
+      if (!other.alive) continue;
+      if (relationshipBetween(state.factions, team.id, other.teamId) !== "hostile") continue;
+      sumX += other.x;
+      sumY += other.y;
+      count += 1;
+    }
+    if (!count) continue;
+    setSearchAnchor(state.perception, team.id, {
+      x: Math.round(sumX / count),
+      y: Math.round(sumY / count)
+    });
+  }
 }
 
 /* ---------------------------------------------------------------
@@ -8780,18 +9158,19 @@ const REACTION_ENGINE = {
     return { moved: true, tiles: path.length - 1, to: { x: best.x, y: best.y } };
   },
 
+  /** Believed positions only: a reaction cannot advance on a contact its own
+   *  faction has never made. */
   moveTowardNearestHostile(state, unitId, options) {
     const unit = state.units[unitId];
     if (!unit || !unit.alive) return { moved: false, reason: "the unit is gone" };
     let nearest = null;
-    for (const otherId of state.unitOrder) {
-      const other = state.units[otherId];
-      if (!other.alive || !isHostile(state, unitId, otherId)) continue;
-      const distance = gridDistance(unit, other);
-      if (!nearest || distance < nearest.distance) nearest = { unit: other, distance };
+    for (const threat of perceivedThreats(state, perceptionDeps(), unit.teamId)) {
+      if (threat.unitId === unitId || !threat.alive) continue;
+      const distance = gridDistance(unit, { x: threat.x, y: threat.y });
+      if (!nearest || distance < nearest.distance) nearest = { x: threat.x, y: threat.y, distance };
     }
     if (!nearest) return { moved: false, reason: "nothing hostile to move toward" };
-    return REACTION_ENGINE.moveTowardTile(state, unitId, { x: nearest.unit.x, y: nearest.unit.y }, options);
+    return REACTION_ENGINE.moveTowardTile(state, unitId, { x: nearest.x, y: nearest.y }, options);
   },
 
   /**
@@ -8972,21 +9351,35 @@ function aiProfileFor(state, unitId) {
   return CONTENT.aiProfiles[fallbackId];
 }
 
+/**
+ * Candidate targets for an AI ability.
+ *
+ * Reads the acting faction's *believed* world, never the board. A hostile the
+ * faction has not acquired is not in the list at all — not "in the list but
+ * unscored", which would still leak its position through range filtering.
+ * Suspected contacts are excluded: a last-known tile is somewhere to go, not
+ * something to shoot.
+ */
 function enumerateAiTargets(state, unitId, abilityId, origin) {
   const ability = CONTENT.abilities[abilityId];
   const targeting = ability.targeting;
   if (targeting.type === "emptyTile") return [];
   if (targeting.type === "self") return [{ unitId }];
   const filter = TARGET_FILTERS[targeting.type];
+  const actor = state.units[unitId];
+  if (!actor) return [];
   const out = [];
-  for (const id of state.unitOrder) {
-    const other = state.units[id];
+  for (const entry of perceivedUnits(state, perceptionDeps(), actor.teamId, {
+    includeDefeated: targeting.allowsDefeated,
+    includeSuspected: false
+  })) {
+    const other = state.units[entry.unitId];
     if (!other.alive && !targeting.allowsDefeated) continue;
     if (!filter(state, unitId, other)) continue;
-    const tile = id === unitId ? origin : { x: other.x, y: other.y };
+    const tile = entry.unitId === unitId ? origin : { x: entry.x, y: entry.y };
     const distance = gridDistance(origin, tile);
     if (distance < targeting.rangeMin || distance > targeting.rangeMax) continue;
-    out.push({ unitId: id });
+    out.push({ unitId: entry.unitId });
   }
   return out;
 }
@@ -9010,31 +9403,56 @@ function activeObjectiveTargetIds(state, unitId) {
   return (params.unitIds || []).filter((id) => state.units[id] && state.units[id].alive);
 }
 
+/**
+ * Pull toward the objective's named units.
+ *
+ * Being told to destroy something is not the same as knowing where it is: an
+ * objective target the faction has no contact on contributes nothing. Missions
+ * that mean to brief their squad say so with a `revealUnit` action, which is a
+ * deliberate authoring decision rather than an engine assumption.
+ */
 function objectivePositionScore(state, unitId, tile) {
   const targets = activeObjectiveTargetIds(state, unitId);
   if (!targets.length) return 0;
+  const unit = state.units[unitId];
+  if (!unit) return 0;
   let nearest = Infinity;
   for (const targetId of targets) {
-    const target = state.units[targetId];
-    nearest = Math.min(nearest, gridDistance(tile, target));
+    const believed = believedPositionOf(state, perceptionDeps(), unit.teamId, targetId);
+    if (!believed) continue;
+    nearest = Math.min(nearest, gridDistance(tile, believed));
   }
   return Number.isFinite(nearest) ? -nearest * GAME_CONFIG.ai.objectiveProximityWeight : 0;
 }
 
+/**
+ * How good a tile is, from the acting faction's point of view.
+ *
+ * Threat comes from `perceivedThreats`, so a hostile nobody has seen exerts no
+ * pull and no fear. A suspected contact counts at half weight for danger while
+ * still drawing the unit in — which is what makes "advance on the last known
+ * position, carefully" fall out of ordinary scoring rather than a search mode.
+ */
 function tilePositionScore(state, unitId, tile, weights) {
+  const unit = state.units[unitId];
+  if (!unit) return 0;
   let proximity = 0;
   let danger = 0;
   let nearest = Infinity;
-  for (const id of state.unitOrder) {
-    const other = state.units[id];
-    if (!other.alive || id === unitId) continue;
-    const distance = gridDistance(tile, { x: other.x, y: other.y });
-    if (isHostile(state, unitId, id)) {
-      nearest = Math.min(nearest, distance);
-      danger += Math.max(0, 4 - distance);
-    }
+  for (const threat of perceivedThreats(state, perceptionDeps(), unit.teamId)) {
+    if (threat.unitId === unitId) continue;
+    const distance = gridDistance(tile, { x: threat.x, y: threat.y });
+    nearest = Math.min(nearest, distance);
+    danger += Math.max(0, 4 - distance) * threat.threat;
   }
-  if (Number.isFinite(nearest)) proximity = -nearest;
+  if (Number.isFinite(nearest)) {
+    proximity = -nearest;
+  } else {
+    // Nothing known at all: head for the area the faction has reason to care
+    // about. No threat is scored, because there is no threat to score.
+    const anchor = searchAnchorFor(state, perceptionDeps(), unitId);
+    if (anchor) proximity = -gridDistance(tile, anchor);
+  }
   return (
     weights.targetProximity * proximity +
     weights.selfDanger * danger +
@@ -14964,6 +15382,7 @@ const CAMPAIGN = {
     "commander": {
       "name": "Commander Vale",
       "glyph": "🧑‍🚀",
+      "ref": "vale",
       "role": "Decorated lance commander learning to lead without the state.",
       "chassis": "assaultMech",
       "perkChoices": [
@@ -18522,8 +18941,13 @@ function createCampaignMissionRoster(campaign, missionId, deployment) {
     const condition = candidate.condition == null ? 100 : candidate.condition;
     const conditionMultiplier = 0.75 + Math.max(0, Math.min(100, condition)) * 0.0025;
     const perk = persistent && persistent.perkId ? CAMPAIGN.perks[persistent.perkId] : null;
+    const operator = CAMPAIGN.operators[operatorId] || {};
     return {
       operatorId,
+      // Stable authored identity for content that names units: links,
+      // reactions, objectives and mission triggers all address units by ref.
+      // Defaults to the operator id, so a new operator needs no extra data.
+      ref: operator.ref || operatorId,
       definitionId: candidate.chassis,
       equipment: cloneLoadout(deployment.loadouts[operatorId]),
       modifiers: [{ stat: "maxHp", mode: "multiplier", value: conditionMultiplier, source: "condition" }]
@@ -22766,7 +23190,17 @@ test("Effects", "The main encounter remains deterministic after directional comb
   const control = createBattle(TEST_ENCOUNTER, GAME_CONFIG.defaults.seed);
   const outcome = runBattle(control, 400);
   assertEqual(outcome.winner, "player");
-  assertEqual(outcome.activations, 22, "The directional-combat fixture timing must stay deterministic");
+  // The fixture takes one activation longer than it did before knowledge
+  // existed, because a unit now has to acquire a contact before it can shoot
+  // at it. Asserting both halves pins the cost of the perception layer to
+  // exactly that one activation: turn it off and the historical timing returns.
+  assertEqual(outcome.activations, 23, "The directional-combat fixture timing must stay deterministic");
+  const omniscient = createBattle(TEST_ENCOUNTER, GAME_CONFIG.defaults.seed, { perception: false });
+  assertEqual(
+    runBattle(omniscient, 400).activations,
+    22,
+    "With knowledge disabled the fixture must reproduce its pre-perception timing exactly"
+  );
   assert(replay.logLength > 0, "The directional-combat battle log must remain populated and deterministic");
   const encounter = CONTENT.encounters[TEST_ENCOUNTER];
   assertEqual(encounter.units.length, 6);
@@ -26762,6 +27196,34 @@ test("Section Seven", "No engine or renderer source names the link or its member
     .map((name) => UI_COMPONENTS[name].toString())
     .join("\n");
   assertEqual(ui.includes("sectionSeven"), false, "and the renderer must not either");
+});
+
+test("Reactions", "Campaign-deployed operators carry stable authored refs", () => {
+  // Content that names units — links, reactions, objectives, mission triggers —
+  // must address a campaign mission the same way it addresses a fixture.
+  const campaign = createCampaignState();
+  const missionId = firstMissionId();
+  const deployment = createCampaignDeploymentState(campaign, missionId);
+  const roster = createCampaignMissionRoster(campaign, missionId, deployment);
+  assert(roster.length > 0, "the mission deploys someone");
+  for (const entry of roster) {
+    assert(entry.ref, entry.operatorId + " has no authored ref");
+  }
+  const state = createBattle(missionEncounterId(missionId, campaign), 3, {
+    roster,
+    rosterTeamId: "player"
+  });
+  const refs = state.unitOrder
+    .filter((id) => state.units[id].teamId === "player")
+    .map((id) => state.units[id].ref);
+  for (const entry of roster) {
+    assert(refs.includes(entry.ref), 'no unit carries ref "' + entry.ref + '"');
+  }
+  // The operator table maps the protagonist onto the ref the character
+  // documents and the link content use.
+  assertEqual(CAMPAIGN.operators.commander.ref, "vale");
+  assert(refs.includes("vale"), "the commander deployed as vale");
+  assert(refs.includes("kell") && refs.includes("reyes"), "and so did the rest of the trio");
 });
 
 test("Reactions", "The reaction vocabulary is internally consistent", () => {
@@ -32786,6 +33248,24 @@ if (typeof window !== "undefined") {
       events: REACTION_EVENT_TYPES,
       linkIds: LINK_IDS,
       limits: REACTION_LIMITS
+    },
+    perceptionDeps,
+    perceptionEngine: PERCEPTION_ENGINE,
+    describePerception: (state, factionId) => describePerception(state, perceptionDeps(), factionId),
+    perceivedUnits: (state, teamId, options) =>
+      perceivedUnits(state, perceptionDeps(), teamId, options),
+    perceivedThreats: (state, teamId) => perceivedThreats(state, perceptionDeps(), teamId),
+    believedPositionOf: (state, teamId, unitId, options) =>
+      believedPositionOf(state, perceptionDeps(), teamId, unitId, options),
+    knowledgeStateOf: (state, teamId, unitId) => knowledgeStateOf(state.perception, teamId, unitId),
+    refreshPerception: (state, options) => refreshPerception(state, perceptionDeps(), options),
+    searchTargetFor: (state, unitId) => searchTargetFor(state, perceptionDeps(), unitId),
+    perceptionRegistries: {
+      channels: OBSERVATION_CHANNELS,
+      channelOrder: CHANNEL_ORDER,
+      states: KNOWLEDGE_STATES,
+      tickEvents: PERCEPTION_TICK_EVENTS,
+      limits: PERCEPTION_LIMITS
     }
   };
 }

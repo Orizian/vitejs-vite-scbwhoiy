@@ -40,7 +40,10 @@ try {
   await editor.waitForTimeout(700);
 
   const validationText = await editor.locator("aside").nth(1).innerText();
-  check("fixture validates with no errors", /Valid/.test(validationText), validationText.split("\n")[0]);
+  // Case-insensitive: the badge is styled `uppercase`, so the rendered text is
+  // whatever the stylesheet says. Now that Tailwind is compiled at build time
+  // rather than fetched from a CDN, it renders uppercase everywhere.
+  check("fixture validates with no errors", /valid/i.test(validationText), validationText.split("\n")[0]);
   check("Playtest is enabled", await editor.getByRole("button", { name: /Playtest/ }).isEnabled());
 
   const nav = editor.getByRole("navigation");
