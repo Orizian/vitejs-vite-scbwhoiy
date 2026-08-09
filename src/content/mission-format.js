@@ -39,6 +39,7 @@ import {
 import { validateAction } from "../mission/actions.js";
 import { validateTrigger, validateCondition } from "../mission/conditions.js";
 import { normalizeRelationship, RELATIONSHIPS } from "../mission/factions.js";
+import { LINK_IDS } from "./reactions.js";
 
 export const FORMAT_ID = "statuszero.mission";
 export const FORMAT_VERSION = 1;
@@ -743,6 +744,7 @@ function buildScriptRefs(mission, catalog) {
     scenes: new Set(Object.keys(mission.scenes)),
     teams: new Set(mission.teams.map((team) => team.id)),
     terrains: new Set(TERRAIN_IDS),
+    links: new Set((catalog && catalog.links) || LINK_IDS),
     abilities: new Set((catalog && catalog.abilities) || ABILITY_IDS),
     statuses: new Set((catalog && catalog.statuses) || STATUS_IDS)
   };

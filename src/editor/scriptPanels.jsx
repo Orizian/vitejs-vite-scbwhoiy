@@ -17,6 +17,7 @@ import {
   ABILITY_IDS,
   STATUS_IDS
 } from "../content/catalog.js";
+import { LINK_DEFINITIONS } from "../content/reactions.js";
 
 /* =========================================================================
  * SCRIPTING PANELS
@@ -238,6 +239,43 @@ function ActionField({ field, mission, action, onPatch }) {
           value={action[field] || null}
           onChange={(v) => patch(v || undefined)}
           options={ABILITY_IDS.map((id) => ({ value: id, label: id }))}
+        />
+      </Field>
+    );
+  }
+  if (field === "linkId") {
+    return (
+      <Field
+        label="Combat link"
+        hint="Enabling a link makes its reactions legal and its shared pool available immediately."
+      >
+        <Select
+          allowEmpty
+          value={action[field] || null}
+          onChange={patch}
+          options={LINK_DEFINITIONS.map((link) => ({ value: link.id, label: link.name + " (" + link.id + ")" }))}
+        />
+      </Field>
+    );
+  }
+  if (field === "enabled" || field === "unlocked") {
+    return (
+      <Field
+        label={field === "enabled" ? "Enabled" : "Unlocked"}
+        hint={
+          field === "enabled"
+            ? "Battle-local switch. Off means the trio is separated."
+            : "Narrative gate. Off means the relationship has not been earned yet."
+        }
+      >
+        <Select
+          allowEmpty
+          value={action[field] === undefined ? null : String(action[field])}
+          onChange={(value) => patch(value === null ? undefined : value === "true")}
+          options={[
+            { value: "true", label: "true" },
+            { value: "false", label: "false" }
+          ]}
         />
       </Field>
     );

@@ -11,7 +11,8 @@
     "test": "node scripts/run-tests.mjs",
     "test:serve": "node scripts/run-tests.mjs --serve",
     "editor": "vite --open /editor.html",
-    "check:grayfield": "node scripts/grayfield-check.mjs"
+    "check:grayfield": "node scripts/grayfield-check.mjs",
+    "check:reactions": "node scripts/reaction-check.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

@@ -754,6 +754,11 @@
           "type": "setMissionFact",
           "fact": "grayfieldPhase",
           "value": "interception"
+        },
+        {
+          "type": "setLinkState",
+          "linkId": "sectionSeven",
+          "enabled": false
         }
       ],
       "onExit": [],
@@ -826,6 +831,12 @@
           "otherTeamId": "foe",
           "relationship": "hostile",
           "symmetric": true
+        },
+        {
+          "type": "setLinkState",
+          "linkId": "sectionSeven",
+          "enabled": true,
+          "unlocked": true
         },
         {
           "type": "replaceObjectives",
@@ -962,6 +973,31 @@
           "type": "queueBark",
           "speaker": "reyes",
           "text": "They're committing the reserve. Hold the ridge."
+        }
+      ]
+    },
+    {
+      "id": "linkRestored",
+      "name": "Link restored",
+      "trigger": {
+        "trigger": "phaseStarted",
+        "phaseRef": "counterattack"
+      },
+      "when": null,
+      "phase": null,
+      "once": true,
+      "maxFires": null,
+      "priority": 80,
+      "actions": [
+        {
+          "type": "setMissionFact",
+          "fact": "sectionSevenLinkRestored",
+          "value": true
+        },
+        {
+          "type": "queueBark",
+          "speaker": "reyes",
+          "text": "Datalink is up. Same as it ever was."
         }
       ]
     },

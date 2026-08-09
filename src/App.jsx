@@ -25,6 +25,31 @@ import {
   evaluateCondition as evaluateMissionCondition,
   matchTrigger as matchMissionTrigger
 } from "./mission/conditions.js";
+import { REACTION_CONTENT, LINK_IDS } from "./content/reactions.js";
+import {
+  createReactionState,
+  buildReactionIndex,
+  runReactionStage,
+  resolveReactionWindow,
+  autoResolveReactionWindows,
+  refreshLinks,
+  setLinkStateById,
+  onUnitActivated as reactionsOnUnitActivated,
+  beginSimulationEvent as reactionsBeginEvent,
+  describeReactions,
+  discoverReactions,
+  REACTION_LIMITS
+} from "./reactions/runtime.js";
+import { REACTION_EFFECT_REGISTRY, validateReactionEffect } from "./reactions/effects.js";
+import {
+  REACTION_CONDITION_REGISTRY,
+  validateReactionCondition
+} from "./reactions/conditions.js";
+import {
+  REACTION_EVENT_TYPES,
+  reactionEventTypeById,
+  deriveReactionEvents
+} from "./reactions/events.js";
 import { validateMission as validateMissionFile, normalizeMission } from "./content/mission-format.js";
 
 /* =========================================================================
@@ -430,7 +455,7 @@ const UNITS = {
       utilitySystem: "targetingSuite",
       coreSystem: "standardCore"
     },
-    abilities: ["scatterShot", "coverAlly", "stabilize"],
+    abilities: ["scatterShot", "coverAlly", "stabilize", "targetMark"],
     aiProfile: "aggressive"
   },
 
@@ -4583,6 +4608,16 @@ function createBattle(encounterId, seed, options) {
       (opts.missionScript && opts.missionScript.factions) || encounter.factions || null
     ),
 
+    // Reaction runtime: economy, link state and any suspended choice prompt.
+    // Always present — an encounter with no link simply has no legal
+    // reactions, and the trigger index makes discovery free in that case.
+    reactions: createReactionState(REACTION_CONTENT, {
+      unlockedLinkIds: opts.unlockedLinkIds || null,
+      autoResolve: opts.autoResolveReactions !== false,
+      autoPolicy: opts.reactionPolicy || "takeFirst"
+    }),
+    autoResolveReactions: opts.autoResolveReactions !== false,
+
     // Mission scripting runtime. Null for encounters with no script, which
     // keeps the whole system off the critical path for existing content.
     mission: opts.missionScript ? createMissionRuntimeState(opts.missionScript) : null,
@@ -4647,13 +4682,19 @@ function createBattle(encounterId, seed, options) {
   // Negative max-HP modifiers must never leave current HP above the live maximum.
   for (const id of state.unitOrder) {
     const stats = calculateUnitStats(state, id);
-    state.units[id].currentHp = Math.max(0, Math.min(state.units[id].currentHp, stats.maxHp));
+    // Start at the *effective* maximum, not the chassis base. Equipment that
+    // raises max HP used to leave a unit permanently short of full at battle
+    // start; condition modifiers that lower it still cap correctly.
+    state.units[id].currentHp = Math.max(0, stats.maxHp);
     state.units[id].alive = state.units[id].currentHp > 0;
     state.units[id].nextActionTime = FORMULAS.timeline.recoveryDelay(
       stats.speed,
       FORMULAS.timeline.baseRecovery
     );
   }
+
+  // Links can only be judged once every unit is on the field.
+  refreshReactionLinks(state);
 
   logLine(state, "battleStarted", "Battle started: " + encounter.name);
 
@@ -6215,7 +6256,10 @@ const EVENT_HANDLERS = {
     const unit = state.units[event.unitId];
     unit.x = event.to.x;
     unit.y = event.to.y;
-    if (state.activation && state.activation.unitId === unit.id) {
+    // Out-of-turn movement never touches the activation. A reaction advance or
+    // a cinematic reposition must not spend the unit's move for the turn, and
+    // must not add movement recovery to a turn it is not part of.
+    if (!event.scripted && state.activation && state.activation.unitId === unit.id) {
       state.activation.moved = true;
       state.activation.movementRecovery += movementRecoveryFor(event.tiles);
     }
@@ -6472,6 +6516,13 @@ const EVENT_HANDLERS = {
     });
   },
 
+  /** A unit changed team. The change is already applied — this event exists so
+   *  the reaction layer, the mission stream and the renderer all observe it at
+   *  a defined point in the queue. */
+  unitChangedTeam(state, event) {
+    void event;
+  },
+
   /** A unit placed by the mission script. The unit already exists — this event
    *  exists so the log, the renderer and the mission stream all see it. */
   unitDeployed(state, event) {
@@ -6643,7 +6694,15 @@ const EVENT_HANDLERS = {
     );
     emitBattleTrigger(state, "damageResolved", event);
     if (target.currentHp <= 0) {
-      queueEvent(state, { type: "unitDefeated", unitId: target.id });
+      // Who killed it and which tile it was holding. Both are what an
+      // "advance into the opening" reaction needs, and neither is derivable
+      // once the unit is off the board.
+      queueEvent(state, {
+        type: "unitDefeated",
+        unitId: target.id,
+        sourceUnitId: event.sourceUnitId || null,
+        tile: { x: target.x, y: target.y }
+      });
     }
   },
 
@@ -6653,6 +6712,9 @@ const EVENT_HANDLERS = {
     const stats = calculateUnitStats(state, target.id);
     const before = target.currentHp;
     target.currentHp = Math.min(stats.maxHp, before + event.amount);
+    // What was actually restored, which is what a "qualifying repair"
+    // condition has to read — topping up a full frame repairs nothing.
+    event.appliedAmount = target.currentHp - before;
     logLine(
       state,
       "healResolved",
@@ -6827,16 +6889,48 @@ function snapshotForEvents(state) {
   return { currentTime: state.currentTime, units };
 }
 
+/**
+ * Applies one event, with a reaction window on each side of the handler.
+ *
+ * `before` runs with the event dequeued but unapplied, which is the only
+ * moment an intercept or a defensive guard can matter. `after` runs against
+ * settled state, which is where counterattacks and pursuit live.
+ *
+ * If a window suspends waiting on a player, the event is pushed back onto the
+ * front of the queue and processing stops. `__seq` and `__beforeDone` ride on
+ * the event itself — plain data, so they survive a save taken mid-window and
+ * the before-stage is never discovered twice for the same event.
+ */
 function processNextEvent(state, onEvent) {
   if (!state.resolutionQueue.length) return null;
+  if (state.reactions && state.reactions.window) return null;
+
   const event = state.resolutionQueue.shift();
   const handler = EVENT_HANDLERS[event.type];
   if (!handler) {
     state.errors.push("No handler for event type: " + event.type);
     return event;
   }
+
+  if (reactionsEnabled(state)) {
+    if (event.__seq == null) {
+      state.reactions.eventSeq += 1;
+      event.__seq = "e" + state.reactions.eventSeq;
+      reactionsBeginEvent(state);
+    }
+    if (!event.__beforeDone) {
+      // Set first: a suspend must not rediscover this stage on resume.
+      event.__beforeDone = true;
+      if (runReactionsForEvent(state, event, "before")) {
+        state.resolutionQueue.unshift(event);
+        return null;
+      }
+    }
+  }
+
   const before = onEvent ? snapshotForEvents(state) : null;
   handler(state, event);
+
   // The mission scripting layer consumes the same authoritative event the
   // simulation just applied. No log rescanning, no polling.
   if (state.mission) {
@@ -6844,6 +6938,18 @@ function processNextEvent(state, onEvent) {
     if (deps) ingestSimulationEvent(state, deps, event);
   }
   if (onEvent) onEvent(event, before, snapshotForEvents(state));
+
+  if (reactionsEnabled(state)) {
+    // Anything that can change who is linked to whom re-evaluates the links
+    // before the after-stage decides what is legal.
+    if (event.type === "unitDefeated" || event.type === "unitChangedTeam" || event.type === "unitDeployed") {
+      refreshReactionLinks(state);
+    }
+    if (event.type === "unitActivated") {
+      reactionsOnUnitActivated(state, reactionDeps(), event.unitId);
+    }
+    runReactionsForEvent(state, event, "after");
+  }
   return event;
 }
 
@@ -6851,6 +6957,8 @@ function processAllEvents(state, onEvent) {
   const processed = [];
   let guard = 0;
   while (state.resolutionQueue.length) {
+    // A pending player reaction parks the queue; the caller resumes it.
+    if (state.reactions && state.reactions.window) break;
     guard += 1;
     if (guard > GAME_CONFIG.limits.maxEventsPerCommand) {
       state.errors.push("Event queue exceeded the maximum event count.");
@@ -6859,8 +6967,15 @@ function processAllEvents(state, onEvent) {
     }
     const event = processNextEvent(state, onEvent);
     if (event) processed.push(event);
+    else if (state.reactions && state.reactions.window) break;
+    else if (!state.resolutionQueue.length) break;
   }
   return processed;
+}
+
+/** True while the battle is parked on a player reaction prompt. */
+function reactionWindowPending(state) {
+  return !!(state.reactions && state.reactions.window);
 }
 
 /**
@@ -7791,14 +7906,20 @@ const COMMAND_HANDLERS = {
 /**
  * Validate, then mutate. Invalid commands never touch battle state.
  */
-function executeCommand(state, command, options) {
+/**
+ * Everything a command does *after* its events have drained: close the
+ * activation, check objectives, run the mission script.
+ *
+ * Split out because a reaction window can park the queue halfway through. The
+ * tail must not run against a half-applied event, so it is skipped while a
+ * window is pending and replayed by `settleAfterReactions` once the player
+ * answers.
+ */
+function settleCommand(state, options) {
   const onEvent = options && options.onEvent ? options.onEvent : null;
-  const validation = validateCommand(state, command);
-  if (!validation.valid) {
-    return { ok: false, errors: validation.errors, events: [] };
-  }
-  COMMAND_HANDLERS[command.type](state, command);
-  let events = processAllEvents(state, onEvent);
+  let events = [];
+  if (reactionWindowPending(state)) return events;
+
   finishActivationIfComplete(state);
   if (state.activation && state.activation.pendingEnd) {
     const pending = state.activation.pendingEnd;
@@ -7806,6 +7927,7 @@ function executeCommand(state, command, options) {
     endActivation(state, pending);
     events = events.concat(processAllEvents(state, onEvent));
   }
+  if (reactionWindowPending(state)) return events;
   checkObjectives(state, onEvent);
 
   // Mission script last, so beats react to a settled battle state. Objectives
@@ -7816,7 +7938,34 @@ function executeCommand(state, command, options) {
     events = events.concat(processAllEvents(state, onEvent));
     checkObjectives(state, onEvent);
   }
-  return { ok: true, errors: [], events, preview: validation.preview };
+  return events;
+}
+
+/** Resumes the tail of a command after a reaction prompt was answered. */
+function settleAfterReactions(state, options) {
+  if (reactionWindowPending(state)) return [];
+  return settleCommand(state, options);
+}
+
+/**
+ * Validate, then mutate. Invalid commands never touch battle state.
+ */
+function executeCommand(state, command, options) {
+  const onEvent = options && options.onEvent ? options.onEvent : null;
+  const validation = validateCommand(state, command);
+  if (!validation.valid) {
+    return { ok: false, errors: validation.errors, events: [] };
+  }
+  COMMAND_HANDLERS[command.type](state, command);
+  let events = processAllEvents(state, onEvent);
+  events = events.concat(settleCommand(state, options));
+  return {
+    ok: true,
+    errors: [],
+    events,
+    preview: validation.preview,
+    pendingReaction: reactionWindowPending(state)
+  };
 }
 
 /* ---------------------------------------------------------------
@@ -8351,6 +8500,12 @@ const MISSION_ENGINE = {
    * is what lets Kell and Reyes defect mid-battle and keep the damage they
    * took while hostile.
    */
+  /** Combat links are battle state, so mission scripting toggles them the
+   *  same way it toggles anything else authoritative. */
+  setLinkState(state, linkId, options) {
+    return setLinkStateById(state, reactionDeps(), linkId, options || {});
+  },
+
   setUnitTeam(state, unitId, teamId) {
     const unit = state.units[unitId];
     if (!unit || unit.teamId === teamId) return;
@@ -8362,6 +8517,8 @@ const MISSION_ENGINE = {
       from,
       to: teamId
     });
+    queueEvent(state, { type: "unitChangedTeam", unitId, from, to: teamId });
+    refreshReactionLinks(state);
   },
 
   /** A scripted attack resolved through the real damage pipeline. */
@@ -8475,6 +8632,12 @@ function deserializeBattle(serialized) {
     state.factions = createFactionState(state.teams.map((team) => team.id), null);
   }
   if (!state.objectiveState.entries) state.objectiveState.entries = [];
+  if (!state.reactions) {
+    // A save from before reactions existed loads with an empty economy rather
+    // than being rejected.
+    state.reactions = createReactionState(REACTION_CONTENT, { autoResolve: true });
+    state.autoResolveReactions = true;
+  }
   if (!state.terrainOverrides) state.terrainOverrides = {};
   if (!state.delayedEffects) state.delayedEffects = [];
   if (!state.errors) state.errors = [];
@@ -8492,6 +8655,251 @@ function deserializeBattle(serialized) {
     if (script) registerMissionScript(script);
   }
   return state;
+}
+
+/* ---------------------------------------------------------------
+ * REACTION BRIDGE
+ *
+ * The reaction runtime (src/reactions/) knows about triggers, windows, links
+ * and economies, and nothing about this file. Everything it needs from the
+ * simulation arrives through this adapter.
+ *
+ * Reactions never call executeCommand: that path demands the unit be the
+ * active unit and consumes its activation, which is precisely what an
+ * out-of-turn response must not do. They route to the same effect and event
+ * machinery instead, so a reaction attack is indistinguishable from a normal
+ * one in the log, in a save, and in a replay.
+ * -------------------------------------------------------------*/
+
+const REACTION_ENGINE = {
+  logLine(state, type, text, data) {
+    logLine(state, type, text, data);
+  },
+
+  processEvents(state) {
+    processAllEvents(state);
+  },
+
+  relationship(state, aId, bId) {
+    const a = state.units[aId];
+    const b = state.units[bId];
+    if (!a || !b) return "hostile";
+    return relationshipBetween(state.factions, a.teamId, b.teamId);
+  },
+
+  hpPercent(state, unitId) {
+    const unit = state.units[unitId];
+    if (!unit) return 0;
+    return (unit.currentHp / Math.max(1, calculateUnitStats(state, unitId).maxHp)) * 100;
+  },
+
+  unitMovement(state, unitId) {
+    return calculateUnitStats(state, unitId).movement;
+  },
+
+  unitSpeed(state, unitId) {
+    return calculateUnitStats(state, unitId).speed;
+  },
+
+  unitHasStatus(state, unitId, statusId) {
+    return unitHasStatus(state, unitId, statusId);
+  },
+
+  statusTags(statusId) {
+    const definition = CONTENT.statuses[statusId];
+    return (definition && definition.tags) || [];
+  },
+
+  distance(state, aId, bId) {
+    const a = state.units[aId];
+    const b = state.units[bId];
+    if (!a || !b) return null;
+    return gridDistance(a, b);
+  },
+
+  scriptedAttack(state, options) {
+    MISSION_ENGINE.scriptedAttack(state, options);
+  },
+
+  scriptedRepair(state, options) {
+    MISSION_ENGINE.scriptedRepair(state, options);
+  },
+
+  applyStatus(state, sourceUnitId, targetUnitIds, statusId) {
+    if (!CONTENT.statuses[statusId]) {
+      state.errors.push("Reaction used unknown status: " + statusId);
+      return;
+    }
+    resolveEffects(state, {
+      sourceUnitId,
+      targetUnitIds,
+      effects: [{ type: "applyStatus", statusId, chance: 1 }]
+    });
+    processAllEvents(state);
+  },
+
+  /**
+   * Legal movement toward a tile, capped at a budget.
+   *
+   * Takes the exact tile when it can be entered, otherwise the reachable tile
+   * closest to it. Returns `moved: false` rather than throwing when there is
+   * nowhere legal to go — a reaction that cannot find ground is a no-op, not a
+   * broken simulation.
+   */
+  moveTowardTile(state, unitId, tile, options) {
+    const unit = state.units[unitId];
+    if (!unit || !unit.alive) return { moved: false, reason: "the unit is gone" };
+    const budget = (options && options.budget) || calculateUnitStats(state, unitId).movement;
+    if (budget <= 0) return { moved: false, reason: "no movement available" };
+
+    const range = computeMovementRange(state, unitId, { budget });
+    let best = null;
+    for (const node of range.values()) {
+      if (node.x === unit.x && node.y === unit.y) continue;
+      if (!isTileFree(state, node.x, node.y, unitId)) continue;
+      const distance = Math.abs(node.x - tile.x) + Math.abs(node.y - tile.y);
+      const current = Math.abs(unit.x - tile.x) + Math.abs(unit.y - tile.y);
+      if (distance >= current) continue;
+      // Closest to the opening; ties broken deterministically by cost then
+      // by coordinate order so a replay always picks the same tile.
+      if (
+        !best ||
+        distance < best.distance ||
+        (distance === best.distance && node.cost < best.cost) ||
+        (distance === best.distance && node.cost === best.cost && (node.y < best.y || (node.y === best.y && node.x < best.x)))
+      ) {
+        best = { ...node, distance };
+      }
+    }
+    if (!best) return { moved: false, reason: "no legal ground closer to the opening" };
+
+    const path = findPath(state, unitId, { x: best.x, y: best.y }, { budget });
+    if (!path || path.length < 2) return { moved: false, reason: "no route to the opening" };
+    MISSION_ENGINE.moveUnitAlongPath(state, unitId, path);
+    processAllEvents(state);
+    return { moved: true, tiles: path.length - 1, to: { x: best.x, y: best.y } };
+  },
+
+  moveTowardNearestHostile(state, unitId, options) {
+    const unit = state.units[unitId];
+    if (!unit || !unit.alive) return { moved: false, reason: "the unit is gone" };
+    let nearest = null;
+    for (const otherId of state.unitOrder) {
+      const other = state.units[otherId];
+      if (!other.alive || !isHostile(state, unitId, otherId)) continue;
+      const distance = gridDistance(unit, other);
+      if (!nearest || distance < nearest.distance) nearest = { unit: other, distance };
+    }
+    if (!nearest) return { moved: false, reason: "nothing hostile to move toward" };
+    return REACTION_ENGINE.moveTowardTile(state, unitId, { x: nearest.unit.x, y: nearest.unit.y }, options);
+  },
+
+  /**
+   * The single basic action a partial action may take.
+   *
+   * Restricted to abilities flagged `basic` in content — a partial action is a
+   * tempo grant, not a second activation. Target chosen by the same
+   * deterministic scorer the AI uses, so headless and browser runs agree.
+   */
+  chooseBasicAction(state, unitId) {
+    const unit = state.units[unitId];
+    if (!unit || !unit.alive) return null;
+    const origin = { x: unit.x, y: unit.y };
+    const weights = aiProfileFor(state, unitId);
+    let best = null;
+
+    for (const abilityId of getUnitAbilities(state, unitId)) {
+      if (!abilityUi(abilityId).basic) continue;
+      if ((unit.cooldowns[abilityId] || 0) > 0) continue;
+      if (!abilityConditionsMet(state, unitId, abilityId)) continue;
+      for (const target of enumerateAiTargets(state, unitId, abilityId, origin)) {
+        const targeting = evaluateTargeting(state, unitId, abilityId, target, origin);
+        if (!targeting.valid || !targeting.targetUnitIds.length) continue;
+        const score = scoreAbilityCandidate(state, unitId, abilityId, targeting, weights);
+        const targetUnitId = targeting.targetUnitIds[0];
+        if (!best || score > best.score || (score === best.score && targetUnitId < best.targetUnitId)) {
+          best = { abilityId, targetUnitId, score };
+        }
+      }
+    }
+    return best;
+  }
+};
+
+/** Reaction content is static, so the trigger index is built once. */
+const REACTION_INDEX = buildReactionIndex(REACTION_CONTENT);
+
+/* The dependency bundle is the same for every battle — content, the trigger
+ * index, the adapter and the AI hook are all static — so it is built once
+ * rather than allocated on every event. */
+const REACTION_DEPS = {
+  content: REACTION_CONTENT,
+  index: REACTION_INDEX,
+  engine: REACTION_ENGINE,
+  chooseAiReaction: (state, offer, event) => chooseAiReaction(state, offer, event)
+};
+
+function reactionDeps() {
+  return REACTION_DEPS;
+}
+
+/**
+ * Deterministic AI reaction policy.
+ *
+ * Intentionally small: it exercises legality and ordering without pretending
+ * to be tactical judgement. A real scorer replaces this when enemy reaction
+ * rosters arrive; the important property is that it goes through exactly the
+ * same legality path a player does.
+ */
+function chooseAiReaction(state, offer, event) {
+  // Do not spend anything reacting to something that is already gone.
+  if (event && event.unitId && state.units[event.unitId] && !state.units[event.unitId].alive) {
+    return false;
+  }
+  // Never burn the last point of a shared pool on a low-priority reaction:
+  // enough policy to be testable, not enough to be a design statement.
+  const cost = offer.cost || {};
+  if (cost.pool) {
+    const pool = state.reactions.economy.pools[cost.pool.id];
+    if (pool && pool.current <= cost.pool.amount && offer.priority < 50) return false;
+  }
+  return true;
+}
+
+function reactionsEnabled(state) {
+  return !!(state.reactions && state.reactions.enabled);
+}
+
+/** Runs one reaction stage for an event. Returns true when the queue must
+ *  stop draining because a player choice is pending. */
+function runReactionsForEvent(state, event, stage) {
+  if (!reactionsEnabled(state)) return false;
+  const result = runReactionStage(state, reactionDeps(), event, stage);
+  if (result.suspended && state.autoResolveReactions) {
+    autoResolveReactionWindows(state, reactionDeps());
+    return !!(state.reactions && state.reactions.window);
+  }
+  return result.suspended;
+}
+
+/** Renderer callback: the player answered a reaction prompt. */
+function resolveReactionChoice(state, offerId) {
+  if (!state.reactions || !state.reactions.window) return false;
+  resolveReactionWindow(state, reactionDeps(), offerId || null);
+  // The event queue was parked mid-drain; finish it and settle the command.
+  processAllEvents(state);
+  settleAfterReactions(state);
+  return true;
+}
+
+function refreshReactionLinks(state) {
+  if (!reactionsEnabled(state)) return;
+  refreshLinks(state, reactionDeps());
+}
+
+function reactionModel(state) {
+  if (!state.reactions) return null;
+  return describeReactions(state, reactionDeps());
 }
 
 /** Compiled mission scripts, keyed by the id stored on battle state. Kept out
@@ -25328,8 +25736,8 @@ test("Grayfield slice", "The whole reversal runs from mission data alone", () =>
   const kellId = kell.id;
   const reyesId = reyes.id;
   const reyesStart = { x: reyes.x, y: reyes.y };
+  // Wound Vale so the scripted repair has something to restore.
   vale.currentHp = Math.max(1, vale.currentHp - 50);
-  const valeHpBeforeRepair = vale.currentHp;
 
   /* the turn */
   const outcome = runBattle(state, 400);
@@ -25344,11 +25752,17 @@ test("Grayfield slice", "The whole reversal runs from mission data alone", () =>
     reyes.x !== reyesStart.x || reyes.y !== reyesStart.y,
     "Reyes actually moved"
   );
-  assert(
-    state.battleLog.some((entry) => entry.type === "healResolved" && entry.data && entry.data.unitId === vale.id),
-    "and repaired Vale through the real heal path"
+  const repairEntry = state.battleLog.find(
+    (entry) => entry.type === "healResolved" && entry.data && entry.data.unitId === vale.id
   );
-  assert(vale.currentHp > valeHpBeforeRepair || vale.currentHp === 0, "Vale's HP went up");
+  assert(repairEntry, "and repaired Vale through the real heal path");
+  // Assert on what the repair restored, not on Vale's HP at the end of the
+  // battle — he keeps fighting afterwards, so terminal HP says nothing about
+  // whether the scripted repair worked.
+  assert(
+    (repairEntry.data.amount || 0) > 0,
+    "the repair actually restored HP (restored " + repairEntry.data.amount + ")"
+  );
 
   assertEqual(kell.id, kellId, "Kell was never recreated");
   assertEqual(reyes.id, reyesId, "Reyes was never recreated");
@@ -25469,8 +25883,930 @@ test("Mission authoring", "The shipped Grayfield fixture validates cleanly", () 
   );
   const script = MISSION_CONTENT.scriptsByEncounter[GRAYFIELD_ENCOUNTER];
   assertEqual(script.phases.length, 3);
-  assertEqual(script.beats.length, 4);
+  assertEqual(script.beats.length, 5);
   assertEqual(script.objectives.length, 3);
+});
+
+/* =========================================================================
+ * REACTION FRAMEWORK
+ *
+ * The acceptance target is the Section Seven Link: Vale, Kell and Reyes
+ * executing their combat link entirely through generic reaction definitions
+ * consuming authoritative simulation events, with no character-specific
+ * branches in the combat engine. These tests cover the mechanism, then the
+ * Link, then its restoration during Grayfield.
+ * =======================================================================*/
+
+/** Discovery probe: the same call the runtime makes, exposed for tests so a
+ *  single event can be examined without driving a whole battle. */
+function STATUS_ZERO_DISCOVER(state, event) {
+  return discoverReactions(state, reactionDeps(), event);
+}
+
+/** Pure derivation probe, so the before/after stage rules can be tested
+ *  without a battle. */
+function deriveReactionEventsForTest(simEvent, stage, view) {
+  return deriveReactionEvents(simEvent, stage, view);
+}
+
+/** Executes one offer directly, the way a resolved window would, so the
+ *  stale-actor and stale-faction paths can be exercised precisely. */
+function resolveReactionWindowForTest(state, offer, event) {
+  state.reactions.window = {
+    id: "test",
+    stage: "after",
+    event,
+    offers: [offer],
+    deferred: [],
+    remaining: []
+  };
+  return resolveReactionWindow(state, reactionDeps(), offer.id);
+}
+
+const S7_ENCOUNTER = "file:fixture-section-seven";
+
+function linkBattle(seed, options) {
+  return createBattle(S7_ENCOUNTER, seed == null ? 5 : seed, {
+    autoResolveScenes: true,
+    ...options
+  });
+}
+
+/** Stages the trio and one target so a Link chain can be driven precisely. */
+function stageLinkChain(state, options) {
+  const opts = options || {};
+  const vale = unitByRef(state, "vale");
+  const kell = unitByRef(state, "kell");
+  const reyes = unitByRef(state, "reyes");
+  const target = unitByRef(state, opts.targetRef || "drillA");
+  vale.x = 7;
+  vale.y = 10;
+  kell.x = 6;
+  kell.y = 12;
+  reyes.x = 8;
+  reyes.y = 12;
+  target.x = 7;
+  target.y = 7;
+  return { vale, kell, reyes, target };
+}
+
+function reactionLogOf(state) {
+  return state.battleLog.filter((entry) => entry.type === "reaction").map((entry) => entry.text);
+}
+
+function poolOf(state, poolId) {
+  return state.reactions.economy.pools[poolId || "sectionSevenLink"];
+}
+
+/* ---- discovery and legality ---- */
+
+test("Reactions", "Discovery is indexed by trigger rather than scanning every unit", () => {
+  const index = REACTION_INDEX;
+  assert(index.byTrigger.targetMarked, "the mark trigger is indexed");
+  assert(index.triggers.has("unitDestroyed"), "so is the destruction trigger");
+  // Nothing is registered for an event nobody reacts to, so the window for it
+  // costs one Set lookup.
+  assertEqual(index.triggers.has("activationEnded"), false);
+  for (const reaction of REACTION_CONTENT.reactions) {
+    assert(index.reactionById[reaction.id], reaction.id + " is addressable by id");
+  }
+});
+
+test("Reactions", "A reaction is only discovered when its conditions hold", () => {
+  const state = linkBattle(21);
+  const { vale, target } = stageLinkChain(state);
+
+  const markedByVale = {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "probe1"
+  };
+  const offers = STATUS_ZERO_DISCOVER(state, markedByVale);
+  assertEqual(offers.length, 1, "Kell's mark shot is offered");
+  assertEqual(offers[0].reactionId, "sectionSevenMarkShot");
+  assertEqual(offers[0].reactorRef, "kell");
+
+  // Same event, marked by somebody who is not Vale.
+  const markedByOther = { ...markedByVale, sourceRef: "reyes", sourceUnitId: unitByRef(state, "reyes").id, __seq: "probe2" };
+  assertEqual(STATUS_ZERO_DISCOVER(state, markedByOther).length, 0, "the condition on the source holds");
+});
+
+test("Reactions", "An inactive link removes its reactions entirely", () => {
+  const state = linkBattle(23);
+  const { vale, target } = stageLinkChain(state);
+  const event = {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "probe3"
+  };
+  assertEqual(STATUS_ZERO_DISCOVER(state, event).length, 1);
+
+  setLinkStateById(state, reactionDeps(), "sectionSeven", { enabled: false });
+  assertEqual(
+    STATUS_ZERO_DISCOVER(state, { ...event, __seq: "probe4" }).length,
+    0,
+    "a disabled link is not merely unaffordable, it does not exist"
+  );
+});
+
+test("Reactions", "A dead or dormant reactor is never offered a reaction", () => {
+  const state = linkBattle(29);
+  const { vale, kell, target } = stageLinkChain(state);
+  const event = {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "probe5"
+  };
+  assertEqual(STATUS_ZERO_DISCOVER(state, event).length, 1);
+  kell.alive = false;
+  refreshReactionLinks(state);
+  assertEqual(STATUS_ZERO_DISCOVER(state, { ...event, __seq: "probe6" }).length, 0);
+});
+
+/* ---- timing stages ---- */
+
+test("Reactions", "Attack declared fires before resolution and attack resolved after", () => {
+  const state = linkBattle(31);
+  const target = unitByRef(state, "drillA");
+  const source = unitByRef(state, "vale");
+  const view = {
+    unitRefById: (id) => (state.units[id] ? state.units[id].ref : id),
+    unitTeam: (id) => state.units[id].teamId,
+    hpPercent: () => 100,
+    statusTags: () => []
+  };
+  const simEvent = { type: "abilityUsed", sourceUnitId: source.id, abilityId: "scatterShot", targetUnitIds: [target.id] };
+
+  const before = deriveReactionEventsForTest(simEvent, "before", view);
+  const after = deriveReactionEventsForTest(simEvent, "after", view);
+  assertEqual(before.map((entry) => entry.type).join(), "attackDeclared");
+  assertEqual(after.map((entry) => entry.type).join(), "attackResolved");
+});
+
+test("Reactions", "A before-stage reaction resolves ahead of the event it interrupts", () => {
+  // A defensive guard is only worth anything if it is in place before the
+  // damage is computed. This registers a before-stage reaction that reinforces
+  // the target, and compares the damage dealt with and without it.
+  const guardContent = {
+    reactions: [
+      {
+        id: "guardProbe",
+        owner: "drillA",
+        // Mitigation belongs on `attackDeclared`, not on `unitDamaged`: by the
+        // time a damage event exists its amount is already computed, so a
+        // brace applied then changes nothing. Declaring is the last moment a
+        // defence can still matter.
+        trigger: "attackDeclared",
+        priority: 90,
+        conditions: [],
+        cost: {},
+        effect: { type: "reactionStatus", statusId: "reinforced", targetFrom: "self" }
+      }
+    ],
+    links: [],
+    pools: []
+  };
+  const guardDeps = {
+    content: guardContent,
+    index: buildReactionIndex(guardContent),
+    engine: REACTION_ENGINE
+  };
+
+  const damageTaken = (useGuard) => {
+    const state = linkBattle(37);
+    const target = unitByRef(state, "drillA");
+    const attacker = unitByRef(state, "vale");
+    target.x = attacker.x;
+    target.y = attacker.y - 1;
+    const before = target.currentHp;
+    const simEvent = {
+      type: "abilityUsed",
+      sourceUnitId: attacker.id,
+      abilityId: "scatterShot",
+      target: { x: target.x, y: target.y },
+      targetUnitIds: [target.id],
+      __seq: "guardProbeEvent"
+    };
+    // Exactly what processNextEvent does: before stage, then the handler.
+    if (useGuard) runReactionStage(state, guardDeps, simEvent, "before");
+    EVENT_HANDLERS.abilityUsed(state, simEvent);
+    processAllEvents(state);
+    void before;
+    // Read the damage the pipeline computed rather than the HP delta, which
+    // floors at zero once the target dies and would hide the difference.
+    const entry = state.battleLog.find(
+      (line) => line.type === "damageResolved" && line.data && line.data.unitId === target.id
+    );
+    return entry ? entry.data.amount : 0;
+  };
+
+  const unguarded = damageTaken(false);
+  const guarded = damageTaken(true);
+  assert(unguarded > 0, "the control run took damage");
+  assert(
+    guarded < unguarded,
+    "the guard applied in the before stage reduced the damage that followed (" +
+      guarded + " vs " + unguarded + ")"
+  );
+});
+
+/* ---- economy ---- */
+
+test("Reactions", "A reaction costs from the shared pool and the pool is authoritative state", () => {
+  const state = linkBattle(41);
+  const { vale, target } = stageLinkChain(state);
+  assertEqual(poolOf(state).current, 2, "the pool starts full");
+  assertEqual(poolOf(state).available, true);
+
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  assert(poolOf(state).current < 2, "the chain spent from the pool");
+  assertEqual(
+    serializeBattle(state).includes('"sectionSevenLink"'),
+    true,
+    "and the pool is in the save"
+  );
+});
+
+test("Reactions", "An empty shared pool blocks further reactions", () => {
+  const state = linkBattle(43);
+  const { vale, target } = stageLinkChain(state);
+
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  // Emptied after the activation, because a participant taking a turn is
+  // exactly what refills the pool.
+  poolOf(state).current = 0;
+  const hpBefore = target.currentHp;
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  assertEqual(target.currentHp, hpBefore, "Kell could not afford to fire");
+  assertEqual(reactionLogOf(state).length, 0);
+});
+
+test("Reactions", "One event can never fire the same reaction twice", () => {
+  const state = linkBattle(47);
+  const { vale, target } = stageLinkChain(state);
+  const event = {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "sameEvent"
+  };
+  const deps = reactionDeps();
+  const first = STATUS_ZERO_DISCOVER(state, event);
+  assertEqual(first.length, 1);
+  // Simulate the reaction having fired against this exact event.
+  state.reactions.economy.eventFired["sectionSevenMarkShot@sameEvent"] = true;
+  assertEqual(STATUS_ZERO_DISCOVER(state, event).length, 0, "the per-event guard holds");
+  void deps;
+});
+
+test("Reactions", "A once-per-activation limit survives across separate events", () => {
+  const state = linkBattle(53);
+  const { vale, target } = stageLinkChain(state);
+  state.reactions.economy.activationCounts["sectionSevenMarkShot@" + state.activationCount] = 1;
+  const event = {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "otherEvent"
+  };
+  assertEqual(STATUS_ZERO_DISCOVER(state, event).length, 0, "used up for this activation");
+  state.activationCount += 1;
+  assertEqual(
+    STATUS_ZERO_DISCOVER(state, { ...event, __seq: "laterEvent" }).length,
+    1,
+    "and available again in the next"
+  );
+});
+
+test("Reactions", "The shared pool refreshes when a participant activates, capped at max", () => {
+  const state = linkBattle(59);
+  poolOf(state).current = 0;
+  const kell = unitByRef(state, "kell");
+  reactionsOnUnitActivated(state, reactionDeps(), kell.id);
+  assertEqual(poolOf(state).current, 1, "one point back per participant turn");
+  reactionsOnUnitActivated(state, reactionDeps(), kell.id);
+  assertEqual(poolOf(state).current, 2);
+  reactionsOnUnitActivated(state, reactionDeps(), kell.id);
+  assertEqual(poolOf(state).current, 2, "never past the cap");
+});
+
+test("Reactions", "A non-participant activating does not refresh the link pool", () => {
+  const state = linkBattle(61);
+  poolOf(state).current = 0;
+  const outsider = unitByRef(state, "drillA");
+  reactionsOnUnitActivated(state, reactionDeps(), outsider.id);
+  assertEqual(poolOf(state).current, 0);
+});
+
+/* ---- ordering and control ---- */
+
+test("Reactions", "Offers are ordered deterministically", () => {
+  const state = linkBattle(67);
+  const { vale, target } = stageLinkChain(state);
+  const event = {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "orderProbe"
+  };
+  const runOne = STATUS_ZERO_DISCOVER(state, event).map((offer) => offer.id).join(",");
+  const runTwo = STATUS_ZERO_DISCOVER(state, event).map((offer) => offer.id).join(",");
+  assertEqual(runOne, runTwo, "discovery is stable");
+});
+
+test("Reactions", "An optional player reaction suspends into a window instead of firing", () => {
+  const state = linkBattle(71, { autoResolveReactions: false });
+  const { vale, target } = stageLinkChain(state);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  const hpBefore = target.currentHp;
+
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: vale.id,
+    abilityId: "targetMark",
+    target: { unitId: target.id }
+  });
+
+  assertEqual(result.pendingReaction, true, "the command reports a pending choice");
+  assert(state.reactions.window, "a window is open");
+  assertEqual(target.currentHp, hpBefore, "and nothing has resolved while it waits");
+
+  const model = reactionModel(state);
+  assertEqual(model.window.offers.length, 1);
+  assertEqual(model.window.offers[0].reactorRef, "kell");
+  assertEqual(model.window.offers[0].costText, "1 from sectionSevenLink");
+
+  resolveReactionChoice(state, model.window.offers[0].id);
+  assert(target.currentHp < hpBefore, "accepting resolved the reaction authoritatively");
+});
+
+test("Reactions", "Declining a window costs nothing and resolves nothing", () => {
+  const state = linkBattle(73, { autoResolveReactions: false });
+  const { vale, target } = stageLinkChain(state);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  const hpBefore = target.currentHp;
+  const poolBefore = poolOf(state).current;
+
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+  resolveReactionChoice(state, null);
+
+  assertEqual(target.currentHp, hpBefore, "declining leaves the target alone");
+  assertEqual(poolOf(state).current, poolBefore, "and costs nothing");
+  assertEqual(!!state.reactions.window, false, "the window closed");
+});
+
+test("Reactions", "AI-controlled reactions use the same legality path as the player's", () => {
+  const state = linkBattle(79, { autoResolveReactions: false });
+  const { vale, kell, target } = stageLinkChain(state);
+  // Hand Section Seven to the AI: the same reaction must now resolve without
+  // a window, through the AI hook rather than a prompt.
+  const team = state.teams.find((entry) => entry.id === kell.teamId);
+  team.controller = "ai";
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  const hpBefore = target.currentHp;
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: vale.id,
+    abilityId: "targetMark",
+    target: { unitId: target.id }
+  });
+  assertEqual(result.pendingReaction, false, "no prompt for an AI reactor");
+  assert(target.currentHp < hpBefore, "but the reaction still resolved");
+});
+
+/* ---- safety ---- */
+
+test("Reactions", "Cascades are bounded by depth rather than suppressed", () => {
+  const state = linkBattle(83);
+  const { vale, target } = stageLinkChain(state);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  const fired = reactionLogOf(state);
+  // Mark -> Kell fires -> the kill -> Vale advances. A two-link chain is the
+  // point; it must not be flattened to one.
+  assert(fired.length >= 2, "the cascade ran more than one level: " + fired.join(" | "));
+  assertEqual(state.reactions.depth, 0, "and unwound cleanly");
+  assertEqual((state.reactions.guards || []).length, 0, "without tripping a guard");
+});
+
+test("Reactions", "A runaway chain trips the depth guard instead of hanging", () => {
+  const state = linkBattle(89);
+  // A reaction that re-triggers its own trigger type, with no once-limit.
+  const loopContent = {
+    reactions: [
+      {
+        id: "loopProbe",
+        owner: "vale",
+        trigger: "unitDamaged",
+        priority: 50,
+        conditions: [],
+        cost: {},
+        limits: { perActivation: null },
+        effect: { type: "reactionAttack", targetFrom: "subject", power: 5, formula: "physical" }
+      }
+    ],
+    links: [],
+    pools: []
+  };
+  const loopDeps = {
+    content: loopContent,
+    index: buildReactionIndex(loopContent),
+    engine: REACTION_ENGINE
+  };
+  const target = unitByRef(state, "drillA");
+  const vale = unitByRef(state, "vale");
+  target.x = vale.x;
+  target.y = vale.y - 1;
+
+  let depthSeen = 0;
+  for (let i = 0; i < 20; i += 1) {
+    const event = {
+      type: "unitDamaged",
+      unitRef: "drillA",
+      unitId: target.id,
+      sourceRef: "vale",
+      sourceUnitId: vale.id,
+      amount: 5,
+      __seq: "loop" + i
+    };
+    runReactionStage(state, loopDeps, { type: "damageResolved", __seq: "sim" + i }, "after");
+    depthSeen = Math.max(depthSeen, state.reactions.depth);
+    void event;
+  }
+  assertEqual(state.reactions.depth, 0, "depth always unwinds");
+  assert(depthSeen <= REACTION_LIMITS.maxDepth, "and never exceeds the ceiling");
+  assertEqual(state.errors.length, 0, "without corrupting battle state");
+});
+
+test("Reactions", "A reaction whose actor dies mid-chain is refunded, not half-applied", () => {
+  const state = linkBattle(97);
+  const { vale, kell, target } = stageLinkChain(state);
+  const poolBefore = poolOf(state).current;
+  const offer = STATUS_ZERO_DISCOVER(state, {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "staleProbe"
+  })[0];
+  assert(offer, "the offer existed when the window opened");
+
+  // Between the offer and its execution, Kell is destroyed.
+  kell.alive = false;
+  kell.currentHp = 0;
+  const hpBefore = target.currentHp;
+  resolveReactionWindowForTest(state, offer, {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "staleProbe"
+  });
+
+  assertEqual(target.currentHp, hpBefore, "the dead unit did not fire");
+  assertEqual(poolOf(state).current, poolBefore, "and nothing was charged");
+});
+
+test("Reactions", "A faction change between offer and execution invalidates the reaction", () => {
+  const state = linkBattle(101);
+  const { vale, target } = stageLinkChain(state);
+  const event = {
+    type: "targetMarked",
+    unitRef: "drillA",
+    unitId: target.id,
+    sourceRef: "vale",
+    sourceUnitId: vale.id,
+    statusId: "marked",
+    __seq: "factionProbe"
+  };
+  const offer = STATUS_ZERO_DISCOVER(state, event)[0];
+  assert(offer, "legal at offer time");
+
+  // The target stops being an enemy before the shot resolves.
+  setRelationship(state.factions, "player", "foe", "allied");
+  const hpBefore = target.currentHp;
+  const poolBefore = poolOf(state).current;
+  resolveReactionWindowForTest(state, offer, event);
+
+  assertEqual(target.currentHp, hpBefore, "no shot at a unit that is no longer hostile");
+  assertEqual(poolOf(state).current, poolBefore, "and no cost");
+});
+
+/* ---- the Section Seven Link ---- */
+
+test("Section Seven", "Vale's mark lets Kell fire out of turn without spending his activation", () => {
+  const state = linkBattle(103);
+  const { vale, kell, target } = stageLinkChain(state);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  const hpBefore = target.currentHp;
+
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  assert(target.currentHp < hpBefore, "Kell fired on the mark");
+  assert(
+    reactionLogOf(state).some((line) => /kell reacts: Fire on the Mark/.test(line)),
+    "through the reaction path: " + reactionLogOf(state).join(" | ")
+  );
+  assert(state.activeUnitId !== kell.id, "Kell is not the active unit");
+  assertEqual(
+    state.activation && state.activation.unitId,
+    vale.id,
+    "the activation still belongs to Vale"
+  );
+});
+
+test("Section Seven", "Kell's kill gives Vale a real move into the opening, never a teleport", () => {
+  const state = linkBattle(107);
+  const { vale, target } = stageLinkChain(state);
+  const start = { x: vale.x, y: vale.y };
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  assertEqual(target.alive, false, "the target died");
+  assert(vale.x !== start.x || vale.y !== start.y, "Vale moved");
+  const moveEntry = state.battleLog.find(
+    (entry) => entry.type === "unitMoved" && entry.data && entry.data.unitId === vale.id
+  );
+  assert(moveEntry, "through a real move event, not a placement");
+  assert(moveEntry.data.tiles >= 1, "covering real ground");
+  // A free advance must not consume the move he still owes his own turn.
+  assertEqual(state.activation.moved, false, "and it did not spend Vale's own movement");
+});
+
+test("Section Seven", "The advance degrades gracefully when the opening cannot be entered", () => {
+  const state = linkBattle(109);
+  const { vale, kell, target } = stageLinkChain(state);
+  // Wall Vale in so no legal tile brings him closer.
+  const map = CONTENT.maps[state.mapId];
+  void map;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    state.terrainOverrides[tileKey(vale.x + dx, vale.y + dy)] = { terrainId: "wall" };
+  }
+  const poolBefore = poolOf(state).current;
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [target.id],
+    power: 400,
+    formula: "physical"
+  });
+  assertEqual(state.errors.length, 0, "the simulation did not fail");
+  assertEqual(vale.x, 7, "Vale did not teleport");
+  assert(poolOf(state).current >= poolBefore - 1, "a no-op advance was not charged twice");
+});
+
+test("Section Seven", "Reyes's repair grants the repaired frame one partial action", () => {
+  const state = linkBattle(113);
+  const vale = unitByRef(state, "vale");
+  const reyes = unitByRef(state, "reyes");
+  const target = unitByRef(state, "drillA");
+  vale.x = 7;
+  vale.y = 9;
+  reyes.x = 7;
+  reyes.y = 10;
+  target.x = 7;
+  target.y = 7;
+  vale.currentHp = 40;
+
+  reyes.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: reyes.id });
+  const targetHpBefore = target.currentHp;
+  executeCommand(state, { type: "useAbility", unitId: reyes.id, abilityId: "fieldRepair", target: { unitId: vale.id } });
+
+  assert(vale.currentHp > 40, "Vale was repaired");
+  assert(
+    reactionLogOf(state).some((line) => /Back in the Fight/.test(line)),
+    "and the Link converted it into tempo: " + reactionLogOf(state).join(" | ")
+  );
+  assert(target.currentHp < targetHpBefore, "the partial action was a real attack");
+  // Explicitly bounded: one basic ability, nothing else.
+  assertEqual(state.activeUnitId, reyes.id, "the activation still belongs to Reyes");
+});
+
+test("Section Seven", "A repair that restores nothing does not buy a partial action", () => {
+  const state = linkBattle(127);
+  const vale = unitByRef(state, "vale");
+  const reyes = unitByRef(state, "reyes");
+  vale.x = 7;
+  vale.y = 9;
+  reyes.x = 7;
+  reyes.y = 10;
+  // Vale is undamaged, so the repair restores zero.
+  reyes.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: reyes.id });
+  const poolBefore = poolOf(state).current;
+  executeCommand(state, { type: "useAbility", unitId: reyes.id, abilityId: "fieldRepair", target: { unitId: vale.id } });
+  assertEqual(poolOf(state).current, poolBefore, "no tempo for a token repair");
+});
+
+test("Section Seven", "The link needs all three, allied and able to act", () => {
+  const state = linkBattle(131);
+  const links = () => reactionModel(state).links[0];
+  assertEqual(links().active, true, "active with the trio deployed and allied");
+
+  const reyes = unitByRef(state, "reyes");
+  reyes.alive = false;
+  refreshReactionLinks(state);
+  assertEqual(links().active, false);
+  assertEqual(links().reason, "a participant is down or dormant");
+  assertEqual(links().pool.available, false, "and the shared pool goes with it");
+
+  reyes.alive = true;
+  refreshReactionLinks(state);
+  assertEqual(links().active, true, "and comes back when she does");
+  assertEqual(links().pool.current, links().pool.max, "with the pool refreshed");
+});
+
+test("Section Seven", "Breaking the alliance breaks the link", () => {
+  const state = linkBattle(137);
+  const kell = unitByRef(state, "kell");
+  MISSION_ENGINE.setUnitTeam(state, kell.id, "foe");
+  refreshReactionLinks(state);
+  const link = reactionModel(state).links[0];
+  assertEqual(link.active, false);
+  assertEqual(link.reason, "participants are not allied");
+});
+
+test("Section Seven", "The whole chain spends the shared pool, not per-unit capacity", () => {
+  const state = linkBattle(139);
+  const { vale, target } = stageLinkChain(state);
+  assertEqual(poolOf(state).current, 2);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  const fired = reactionLogOf(state).length;
+  assertEqual(poolOf(state).current, 2 - fired, "one point per reaction, from the shared pool");
+});
+
+/* ---- save, load and replay ---- */
+
+test("Reactions", "Reaction state round-trips through a save", () => {
+  const state = linkBattle(149);
+  const { vale, target } = stageLinkChain(state);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  const saved = serializeBattle(state);
+  const restored = deserializeBattle(saved);
+  assert(restored, "the save loaded");
+  assertEqual(serializeBattle(restored), saved, "byte-identical");
+  assertEqual(restored.reactions.economy.pools.sectionSevenLink.current, poolOf(state).current);
+  assertEqual(restored.reactions.links.sectionSeven.active, state.reactions.links.sectionSeven.active);
+});
+
+test("Reactions", "A save taken with a reaction pending resumes without duplicating it", () => {
+  const state = linkBattle(151, { autoResolveReactions: false });
+  const { vale, target } = stageLinkChain(state);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  assert(state.reactions.window, "a window is pending");
+  const saved = serializeBattle(state);
+  const restored = deserializeBattle(saved);
+  assert(restored.reactions.window, "the pending window survived the save");
+  assertEqual(
+    restored.reactions.window.offers[0].reactionId,
+    state.reactions.window.offers[0].reactionId
+  );
+
+  const targetInRestored = unitByRef(restored, "drillA");
+  const hpBefore = targetInRestored.currentHp;
+  resolveReactionChoice(restored, restored.reactions.window.offers[0].id);
+  assert(targetInRestored.currentHp < hpBefore, "resuming resolved it once");
+
+  // Resolving again must do nothing: the window is gone and the event is spent.
+  const hpAfter = targetInRestored.currentHp;
+  resolveReactionChoice(restored, restored.reactions.window ? restored.reactions.window.offers[0].id : null);
+  assertEqual(targetInRestored.currentHp, hpAfter, "and never twice");
+});
+
+test("Reactions", "Reloading after a chain never replays it", () => {
+  const state = linkBattle(157);
+  const { vale, target } = stageLinkChain(state);
+  vale.nextActionTime = state.currentTime;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
+
+  const restored = deserializeBattle(serializeBattle(state));
+  const poolAfterLoad = restored.reactions.economy.pools.sectionSevenLink.current;
+  const valePosition = { x: unitByRef(restored, "vale").x, y: unitByRef(restored, "vale").y };
+
+  processAllEvents(restored);
+  runMissionScript(restored);
+
+  assertEqual(restored.reactions.economy.pools.sectionSevenLink.current, poolAfterLoad, "no extra cost");
+  assertEqual(unitByRef(restored, "vale").x, valePosition.x, "no extra movement");
+  assertEqual(unitByRef(restored, "vale").y, valePosition.y);
+});
+
+test("Reactions", "A reaction-driven battle replays identically from the same seed", () => {
+  const runOne = linkBattle(163);
+  const resultOne = runBattle(runOne, 400);
+  const runTwo = linkBattle(163);
+  const resultTwo = runBattle(runTwo, 400);
+  assertEqual(resultOne.winner, resultTwo.winner);
+  assertEqual(resultOne.activations, resultTwo.activations);
+  assertEqual(serializeBattle(runOne), serializeBattle(runTwo), "identical authoritative state");
+  assert(
+    runOne.battleLog.filter((entry) => entry.type === "reaction").length > 0,
+    "and reactions actually fired during it"
+  );
+});
+
+test("Reactions", "The Section Seven fixture resolves headlessly with reactions active", () => {
+  const state = linkBattle(167);
+  const result = runBattle(state, 400);
+  assertEqual(result.hitCap, false, "the battle terminated");
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+  assertEqual((state.reactions.guards || []).length, 0, (state.reactions.guards || []).join(" | "));
+});
+
+/* ---- Grayfield: the link restored mid-battle ---- */
+
+test("Section Seven", "Grayfield starts with the link unavailable and restores it in the same battle", () => {
+  const state = grayfieldBattle(7);
+  const link = () => reactionModel(state).links.find((entry) => entry.id === "sectionSeven");
+
+  assertEqual(link().active, false, "no link while Kell and Reyes are hostile");
+  assertEqual(link().pool.available, false, "and no shared pool");
+
+  runBattle(state, 400);
+
+  assertEqual(state.mission.phaseId, "counterattack", "the reversal ran");
+  assertEqual(state.mission.facts.sectionSevenLinkRestored, true, "the restoration beat fired");
+  assertEqual(link().enabled, true, "mission scripting re-enabled the link");
+  assertEqual(link().unlocked, true);
+  assert(
+    state.battleLog.some((entry) => entry.type === "reactionLink" && /is available/.test(entry.text)),
+    "and the link came online during the battle"
+  );
+});
+
+test("Section Seven", "The faction change alone does not restore the link — the script does", () => {
+  const state = grayfieldBattle(11);
+  const deps = reactionDeps();
+  // Flip the factions without running the mission script's setLinkState.
+  setRelationship(state.factions, "sectionSeven", "player", "allied");
+  setRelationship(state.factions, "sectionSeven", "foe", "hostile");
+  refreshReactionLinks(state);
+  const link = () => reactionModel(state).links.find((entry) => entry.id === "sectionSeven");
+  assertEqual(link().active, false, "allied is not enough");
+  assertEqual(link().reason, "disabled");
+
+  setLinkStateById(state, deps, "sectionSeven", { enabled: true, unlocked: true });
+  assertEqual(link().active, true, "the script is what brings it back");
+  assertEqual(link().pool.available, true, "and the pool is immediately usable");
+  assertEqual(link().pool.current, link().pool.max);
+});
+
+test("Section Seven", "A Link reaction executes after Grayfield restores it", () => {
+  const state = grayfieldBattle(13);
+  // Drive straight to the restoration rather than fighting the battle out,
+  // so the counterattack still has hostiles left to react against.
+  state.activationCount = 99;
+  checkObjectives(state);
+  runMissionScript(state);
+  const link = reactionModel(state).links.find((entry) => entry.id === "sectionSeven");
+  assertEqual(link.enabled, true, "the link is enabled after the turn");
+
+  const vale = unitByRef(state, "vale");
+  const kell = unitByRef(state, "kell");
+  const reyes = unitByRef(state, "reyes");
+  if (!vale || !kell || !reyes || !vale.alive || !kell.alive || !reyes.alive) {
+    // The AI-vs-AI counterattack can kill a participant; revive for the probe
+    // so the assertion is about the framework, not about balance.
+    for (const unit of [vale, kell, reyes]) {
+      if (unit) {
+        unit.alive = true;
+        unit.currentHp = Math.max(unit.currentHp, 60);
+      }
+    }
+  }
+  const enemy = state.unitOrder
+    .map((id) => state.units[id])
+    .find((unit) => unit.alive && unit.teamId === "foe");
+  assert(enemy, "something hostile is still on the field");
+
+  vale.x = enemy.x;
+  vale.y = Math.min(21, enemy.y + 2);
+  kell.x = Math.max(0, enemy.x - 1);
+  kell.y = Math.min(21, enemy.y + 3);
+  reyes.x = Math.min(19, enemy.x + 1);
+  reyes.y = Math.min(21, enemy.y + 3);
+  refreshReactionLinks(state);
+  assertEqual(
+    reactionModel(state).links.find((entry) => entry.id === "sectionSeven").active,
+    true,
+    "the link is active with the trio together and allied"
+  );
+
+  state.reactions.economy.pools.sectionSevenLink.current = 2;
+  const hpBefore = enemy.currentHp;
+  vale.nextActionTime = state.currentTime;
+  state.activeUnitId = null;
+  state.activation = null;
+  executeCommand(state, { type: "activateUnit", unitId: vale.id });
+  executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: enemy.id } });
+
+  assert(
+    state.battleLog.some((entry) => entry.type === "reaction"),
+    "a Link reaction fired in the same battle: " + reactionLogOf(state).join(" | ")
+  );
+  assert(enemy.currentHp < hpBefore, "and it did authoritative damage");
+});
+
+test("Section Seven", "No engine or renderer source names the link or its members", () => {
+  const sources = engineSourceEntries().map((entry) => entry.source).join("\n");
+  assertEqual(sources.includes("sectionSeven"), false, "engine code must not name the link");
+  assertEqual(sources.includes("sectionSevenMarkShot"), false, "nor its reactions");
+  const ui = Object.keys(UI_COMPONENTS)
+    .map((name) => UI_COMPONENTS[name].toString())
+    .join("\n");
+  assertEqual(ui.includes("sectionSeven"), false, "and the renderer must not either");
+});
+
+test("Reactions", "The reaction vocabulary is internally consistent", () => {
+  // Every event a reaction can trigger on must exist, every effect must have a
+  // handler, and every condition the registry offers must be evaluable.
+  for (const entry of REACTION_EVENT_TYPES) {
+    assert(Array.isArray(entry.from) && entry.from.length, entry.id + " names no source event");
+    assert(Array.isArray(entry.stages) && entry.stages.length, entry.id + " declares no stage");
+    for (const stage of entry.stages) {
+      assert(["before", "after"].includes(stage), entry.id + ' has unknown stage "' + stage + '"');
+    }
+  }
+  for (const id of Object.keys(REACTION_EFFECT_REGISTRY)) {
+    assert(typeof REACTION_EFFECT_REGISTRY[id].run === "function", id + " has no run()");
+  }
+  for (const id of Object.keys(REACTION_CONDITION_REGISTRY)) {
+    assert(typeof REACTION_CONDITION_REGISTRY[id].evaluate === "function", id + " has no evaluate()");
+  }
+  assert(LINK_IDS.includes("sectionSeven"), "the link content is registered");
+  assert(REACTION_LIMITS.maxDepth >= 2, "cascades of at least two levels are allowed");
+});
+
+test("Reactions", "Every reaction definition validates against the registries", () => {
+  for (const reaction of REACTION_CONTENT.reactions) {
+    assert(reaction.id, "a reaction needs an id");
+    assert(reactionEventTypeById(reaction.trigger), reaction.id + ' has unknown trigger "' + reaction.trigger + '"');
+    const effectProblems = validateReactionEffect(reaction.effect, reaction.id);
+    assertEqual(effectProblems.length, 0, effectProblems.join(" | "));
+    const conditionProblems = validateReactionCondition(reaction.conditions, reaction.id);
+    assertEqual(conditionProblems.length, 0, conditionProblems.join(" | "));
+    if (reaction.owner) {
+      assert(typeof reaction.owner === "string", reaction.id + " owner must be a unit ref");
+    }
+    if (reaction.cost && reaction.cost.pool) {
+      assert(
+        REACTION_INDEX.poolDefinitions.some((pool) => pool.id === reaction.cost.pool.id),
+        reaction.id + ' draws on undeclared pool "' + reaction.cost.pool.id + '"'
+      );
+    }
+  }
+  for (const link of REACTION_CONTENT.links) {
+    for (const id of link.reactions || []) {
+      assert(REACTION_INDEX.reactionById[id], link.id + ' lists unknown reaction "' + id + '"');
+    }
+  }
 });
 
 test("Progression", "Persistent damage creates a finite repair decision and repair consumes supplies", () => {
@@ -28908,6 +30244,140 @@ function ResultsScreen({ result, onContinue, onRetry }) {
   );
 }
 
+/**
+ * Compact prompt for an optional out-of-turn reaction.
+ *
+ * Deliberately not a modal: it sits above the bottom strip, states what
+ * triggered it, who would react and what it costs, and gets out of the way.
+ * Automatic and mandatory reactions never reach here — they resolve in the
+ * simulation and are reported in the log.
+ */
+function ReactionPrompt({ model, onChoose, onDecline }) {
+  const appSettings = React.useContext(SettingsContext);
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !model) return undefined;
+    const onKey = (event) => {
+      if (appSettings && appSettings.settingsOpen) return;
+      if (event.repeat) return;
+      const index = Number(event.key) - 1;
+      if (index >= 0 && index < model.offers.length) {
+        event.preventDefault();
+        onChoose(model.offers[index].id);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        onDecline();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [model, onChoose, onDecline, appSettings && appSettings.settingsOpen]);
+
+  if (!model) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-[120px] z-[70] flex justify-center">
+      <div className="pointer-events-auto min-w-[420px] max-w-[720px] border border-amber-300/70 bg-slate-950/95 px-4 py-3 shadow-2xl">
+        <FrameCorners />
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-300">Reaction</span>
+          <span className="text-[12px] text-slate-300">{model.triggerText}</span>
+        </div>
+        <div className="space-y-1">
+          {model.offers.map((offer, index) => (
+            <button
+              key={offer.id}
+              onClick={() => onChoose(offer.id)}
+              className="flex w-full items-center gap-3 border border-amber-300/40 bg-slate-900/80 px-3 py-2 text-left transition hover:border-amber-200 hover:bg-amber-950/40"
+            >
+              <span className="text-[10px] text-slate-500">{index + 1}</span>
+              <span className="flex-1">
+                <span className="block text-[13px] text-amber-100">{offer.name}</span>
+                <span className="block text-[11px] text-slate-400">{offer.description}</span>
+              </span>
+              <span className="text-right">
+                <span className="block text-[11px] uppercase tracking-wider text-sky-300">{offer.reactorRef}</span>
+                <span className="block text-[10px] text-slate-500">{offer.costText}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="mt-2 flex items-center justify-between">
+          <span className="text-[10px] text-slate-600">Optional · number keys to accept, Esc to decline</span>
+          <Button size="sm" onClick={onDecline}>
+            Decline
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Persistent readout for combat relationships: whether each link is live, why
+ * not when it is not, and how much shared tempo is left.
+ */
+function LinkStrip({ model, top }) {
+  if (!model || !model.links.length) return null;
+  const pools = Object.fromEntries(model.economy.pools.map((pool) => [pool.id, pool]));
+  return (
+    <div className="pointer-events-none absolute left-1/2 z-[45] -translate-x-1/2" style={{ top }}>
+      <div className="flex gap-2">
+        {model.links.map((link) => {
+          const pool = link.pool ? pools[link.pool.id] : null;
+          return (
+            <div
+              key={link.id}
+              title={link.active ? link.description : link.name + " — " + link.reason}
+              className={
+                "flex items-center gap-2 border px-2 py-1 text-[11px] " +
+                (link.active
+                  ? "border-amber-300/70 bg-amber-950/50 text-amber-100"
+                  : "border-slate-700 bg-slate-950/80 text-slate-600")
+              }
+            >
+              <span>{link.icon}</span>
+              <span className="uppercase tracking-wider">{link.name}</span>
+              {pool ? (
+                <span className="flex items-center gap-0.5">
+                  {Array.from({ length: pool.max }, (unused, index) => (
+                    <span
+                      key={index}
+                      className={
+                        "inline-block h-2 w-2 rounded-full " +
+                        (link.active && index < pool.current ? "bg-amber-300" : "bg-slate-700")
+                      }
+                    />
+                  ))}
+                </span>
+              ) : null}
+              {!link.active ? <span className="text-[10px] italic">{link.reason}</span> : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Last few resolutions, so a fast cascade stays readable. */
+function ReactionTicker({ model, bottom }) {
+  if (!model || !model.recent.length) return null;
+  const entries = model.recent.filter((entry) => entry.ok).slice(0, 3);
+  if (!entries.length) return null;
+  return (
+    <div className="pointer-events-none absolute right-3 z-[45] space-y-1 text-right" style={{ bottom }}>
+      {entries.map((entry, index) => (
+        <div
+          key={entry.reactionId + index}
+          className="inline-block border border-amber-300/30 bg-slate-950/85 px-2 py-0.5 text-[10px] text-amber-200/90"
+          style={{ opacity: 1 - index * 0.3 }}
+        >
+          ◈ {entry.reactorRef} · {entry.detail || entry.reactionId}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CombatDialogueOverlay({ entry, onDismiss }) {
   const appSettings = React.useContext(SettingsContext);
   const [lineIndex, setLineIndex] = React.useState(0);
@@ -29381,7 +30851,10 @@ function TacticalBattleContent({ viewport }) {
   if (!battleRef.current) {
     battleRef.current = createBattle(
       MISSION_CONTENT.playtestEncounterId || deploymentEncounterId(),
-      GAME_CONFIG.defaults.seed
+      GAME_CONFIG.defaults.seed,
+      // The player is present, so optional reactions ask rather than
+      // auto-resolving. Headless runs keep the deterministic policy.
+      { autoResolveReactions: false }
     );
   }
   const state = battleRef.current;
@@ -29423,6 +30896,10 @@ function TacticalBattleContent({ viewport }) {
   React.useEffect(() => {
     if (typeof window === "undefined" || !window.STATUS_ZERO) return;
     window.STATUS_ZERO.liveBattle = () => battleRef.current;
+    // Lets a console or an acceptance script that drove the simulation
+    // directly tell the view to catch up. The normal command path does this
+    // itself; nothing in the app reads these back.
+    window.STATUS_ZERO.refreshUi = () => setVersion((value) => value + 1);
   });
 
   const touch = () => setVersion((value) => value + 1);
@@ -29740,7 +31217,8 @@ function TacticalBattleContent({ viewport }) {
     presentation.queue.length > 0 ||
     combatDialogueQueue.length > 0 ||
     !!missionScene ||
-    !!(state.mission && state.mission.wait);
+    !!(state.mission && state.mission.wait) ||
+    !!(state.reactions && state.reactions.window);
 
   const threatZone = React.useMemo(() => {
     if (!input.threatUnitId || !state.units[input.threatUnitId]) return null;
@@ -29755,6 +31233,21 @@ function TacticalBattleContent({ viewport }) {
     return createThreatSummary(state, input.threatUnitId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, input.threatUnitId, presentation, version]);
+
+  const reactions = React.useMemo(
+    () => reactionModel(state),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state, version, presentation]
+  );
+
+  const answerReaction = React.useCallback(
+    (offerId) => {
+      resolveReactionChoice(state, offerId || null);
+      touch();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state]
+  );
 
   const view = React.useMemo(
     () =>
@@ -30273,7 +31766,8 @@ function TacticalBattleContent({ viewport }) {
     clearTimers();
     battleRef.current = createBattle(activeEncounterId(), Number(nextSeed), {
       roster: rosterRef.current,
-      rosterTeamId: "player"
+      rosterTeamId: "player",
+      autoResolveReactions: false
     });
     setInput(createInputState());
     setPresentation({ queue: [], index: 0 });
@@ -30677,7 +32171,8 @@ function TacticalBattleContent({ viewport }) {
           clearTimers();
           battleRef.current = createBattle(activeEncounterId(), Number(seed), {
             roster,
-            rosterTeamId: "player"
+            rosterTeamId: "player",
+            autoResolveReactions: false
           });
           setInput(createInputState());
           setPresentation({ queue: [], index: 0 });
@@ -30916,6 +32411,15 @@ function TacticalBattleContent({ viewport }) {
       />
 
 
+      <LinkStrip model={reactions} top={HUD_LAYOUT.reserved.top + 6} />
+      <ReactionTicker model={reactions} bottom={HUD_LAYOUT.reserved.bottom + 12} />
+      {reactions && reactions.window ? (
+        <ReactionPrompt
+          model={reactions.window}
+          onChoose={(offerId) => answerReaction(offerId)}
+          onDecline={() => answerReaction(null)}
+        />
+      ) : null}
       {missionScene ? (
         <CombatDialogueOverlay entry={missionScene} onDismiss={dismissMissionScene} />
       ) : null}
@@ -31185,6 +32689,9 @@ const UI_COMPONENTS = {
   ResultsScreen,
   EndOfPrototype,
   DeploymentScreen,
+  ReactionPrompt,
+  LinkStrip,
+  ReactionTicker,
   AbilityTooltip,
   MechHud,
   TileBlock,
@@ -31259,11 +32766,26 @@ if (typeof window !== "undefined") {
     runMissionScript,
     missionScriptFor,
     missionEngine: MISSION_ENGINE,
+    reactionEngine: REACTION_ENGINE,
+    reactionModel,
+    resolveReactionChoice,
+    refreshReactionLinks,
+    discoverReactions: (state, event) => discoverReactions(state, reactionDeps(), event),
+    reactionDeps,
     missionRegistries: {
       actions: ACTION_REGISTRY,
       conditions: CONDITION_REGISTRY,
       events: MISSION_EVENT_TYPES,
       adapterContract: ENGINE_ADAPTER_CONTRACT
+    },
+    reactionRegistries: {
+      content: REACTION_CONTENT,
+      index: REACTION_INDEX,
+      effects: REACTION_EFFECT_REGISTRY,
+      conditions: REACTION_CONDITION_REGISTRY,
+      events: REACTION_EVENT_TYPES,
+      linkIds: LINK_IDS,
+      limits: REACTION_LIMITS
     }
   };
 }

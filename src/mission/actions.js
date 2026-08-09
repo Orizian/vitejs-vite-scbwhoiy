@@ -431,6 +431,40 @@ const simulationActions = {
     }
   },
 
+  setLinkState: {
+    authority: "simulation",
+    name: "Set combat link state",
+    fields: ["linkId", "enabled", "unlocked"],
+    summary:
+      "Enables, disables or unlocks a combat relationship. This is how Grayfield restores Section Seven mid-battle — the link's shared reaction pool becomes available immediately.",
+    validate(action, refs) {
+      const problems = [];
+      if (!action.linkId) problems.push("setLinkState needs a `linkId`.");
+      else if (refs.links && refs.links.size && !refs.links.has(action.linkId)) {
+        problems.push('setLinkState references unknown link "' + action.linkId + '".');
+      }
+      if (action.enabled === undefined && action.unlocked === undefined) {
+        problems.push("setLinkState needs `enabled` and/or `unlocked`.");
+      }
+      return problems;
+    },
+    run(action, ctx) {
+      if (!ctx.engine.setLinkState) {
+        return { error: "the host does not support combat links" };
+      }
+      const changed = ctx.engine.setLinkState(ctx.state, action.linkId, {
+        enabled: action.enabled,
+        unlocked: action.unlocked
+      });
+      ctx.log(
+        "Combat link " + action.linkId + ": " +
+          (action.unlocked !== undefined ? "unlocked=" + action.unlocked + " " : "") +
+          (action.enabled !== undefined ? "enabled=" + action.enabled : ""),
+        { linkId: action.linkId, changed }
+      );
+    }
+  },
+
   applyStatus: {
     authority: "simulation",
     name: "Apply status",

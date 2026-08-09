@@ -129,6 +129,7 @@ Routed through the same machinery ordinary gameplay uses, so they produce real e
 | `performRepair` | A real repair through the heal path. |
 | `modifyTerrain` | Replaces terrain across a region or tile list. |
 | `applyStatus` | Applies a status through the effect pipeline. |
+| `setLinkState` | Enables, disables or unlocks a combat relationship. This is how Grayfield restores Section Seven mid-battle; the link's shared reaction pool becomes available in the same instant. See [`REACTIONS.md`](REACTIONS.md). |
 
 ### ▷ Presentation — never touches battle state
 

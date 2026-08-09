@@ -1,5 +1,8 @@
 # STATUS ZERO — ENGINE ANALYSIS
 
+> **Updated after the reaction/Link phase.** ACT-01 and LINK-01 are now met — see
+> `docs/REACTIONS.md`. The note below from the previous phase still applies.
+>
 > **Updated after the mission-scripting phase.** §3's table now reflects what is built. The
 > scripting layer described as the critical gap in §4 (R-01), the faction matrix (R-02) and
 > mid-mission save (R-05) have since been implemented — see `docs/MISSION_SCRIPTING.md`.
@@ -106,7 +109,7 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 |---|---|---|---|
 | SIM-01 | Deterministic authoritative simulation | **Met** | Enforced by the architecture audit. |
 | TIM-01 | Recovery timeline | **Met** | Constants need a large-map pass (§2.2). |
-| ACT-01 | Action + reaction framework | **Partial** | Move + primary action + quick actions exist. **No reaction system at all.** Every trio Link mechanic depends on this. It is the next phase's work, and it will consume the same authoritative event stream the mission scripting layer now uses. |
+| ACT-01 | Action + reaction framework | **Met** | **[CLOSED]** Move, primary action and out-of-turn reactions coexist. Reactions consume the authoritative event queue with before/after stages, a per-unit and shared-pool economy, deterministic ordering, and depth/per-event ceilings so cascades are bounded rather than suppressed. |
 | RES-01 | Generic resource framework | **Partial** | Per-unit resources exist with max/current and spend/restore effects. **No squad-wide resources** (Stock), no charge/solution states, no reaction pools. |
 | STA-01 | Status/component framework | **Partial** | Timed statuses work well. **No subsystem damage** — nothing models a damaged sensor, radiator, weapon or comms, which Kell's solution-breaking, Nyx's venting and Becker's whole character need. |
 | FAC-01 | Multi-faction hostility matrix | **Met** | **[CLOSED]** A per-battle relationship matrix (`src/mission/factions.js`) with allied / neutral / hostile, mutable mid-battle, serialized with the save. Elimination now resolves on hostility rather than team identity. Defaults reproduce the old rule exactly, so existing content is unaffected. |
@@ -137,13 +140,13 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 | KELL-01 | Firing solution + remote shot | **Missing** | No anchor/charge/fire state, no thermal reveal, no firing on another unit's sensors. |
 | REYES-01 | Stock + field engineering | **Missing** | Repair abilities exist; the Stock economy, salvage and strain do not. |
 | NYX-01 | Thermal headroom + cloak | **Missing** | A binary `cloak` status stands in. |
-| LINK-01 | Relationship link / reaction pool | **Missing** | Blocked on ACT-01. |
+| LINK-01 | Relationship link / reaction pool | **Met** | **[CLOSED]** A generic combat-link framework (participants, unlock/enable/active gates, shared pools, reactions) with Section Seven as its first entry. Mission scripting toggles a link through `setLinkState`; Grayfield restores it mid-battle. Adding Vale/Nyx or Becker/Reyes is a content edit. |
 | BRN-01 | Outcome fact/flag system | **Met** | The best-implemented advanced requirement in the project. Facts are derived from battle state, and the architecture audit *tests* that a dialogue promise does not set the flag. |
 | SAV-01 | Mid-mission save/resume | **Met** | **[CLOSED]** `serializeBattle` / `deserializeBattle` cover RNG state, timeline, terrain overrides, factions, the objective stack and the whole mission runtime including the half-executed beat. Verified in a browser: saving mid-cinematic and reloading resumes at the same action and never replays it. |
 | AUD-01 | Contextual audio control | **Partial** | Per-screen and per-mission music with fallback chains. No per-phase changes or stingers. |
 | DBG-01 | Mission authoring/debug tools | **Partial** | Strong developer panel, validation panel, soak tests, replay check. No phase jump, flag setting, group spawning or AI-knowledge inspection. |
 
-**Tally after the mission-scripting phase: 15 met, 12 partial, 13 missing.** (Was 7 / 13 / 20.)
+**Tally after the reaction/Link phase: 17 met, 11 partial, 12 missing.** (Was 15 / 12 / 13 after mission scripting, and 7 / 13 / 20 at the original audit.)
 
 That reads worse than it is. Of the 20 missing, roughly twelve are downstream of just **three** systems: the mission script layer (SCR-01/02, CIN-02, OBJ-02, SPN-01, BOS-01), the faction matrix (FAC-01, CAP-01, CIV-01), and the reaction framework (ACT-01, LINK-01, and all four character kits).
 
@@ -191,7 +194,10 @@ This single change unblocks SCR-01, SCR-02, CIN-02, OBJ-02, SPN-01 and BOS-01 �
 
 **Fix:** replace with a per-battle `hostility[teamA][teamB]` matrix, defaulted from the encounter and mutable by phase actions. This is a small change with very large content reach, and it is a prerequisite for CAP-01 and CIV-01.
 
-### R-03 — No reaction framework
+### R-03 — No reaction framework  **[CLOSED]**
+
+> Implemented as `src/reactions/`. The Section Seven Link is the acceptance fixture; see `docs/REACTIONS.md`.
+
 
 Line 6047: `/** Generic hook reserved for Phase 4 reactions. */` — an empty comment.
 
