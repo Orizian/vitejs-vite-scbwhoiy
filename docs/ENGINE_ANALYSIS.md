@@ -116,10 +116,10 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 | MAP-01 | 2.5D tile battlefield | **Met** | Elevation, cover, facing, flanking, LOS, deterministic projection all present. |
 | MAP-02 | Large-map sectors & culling | **Missing** | No dormant groups, no sector activation, no render culling, no pathfinding budget. Every unit thinks every activation (`runAiTurn`, line 8273). |
 | MAP-03 | Interactive/destructible environment | **Missing** | `createTerrain`/`removeTerrain` effects exist and are capped at 64 overrides. **No doors, gates, interactables, hazards or scripted terrain replacement.** |
-| LOS-01 | Sensor/visibility model | **Partial** | Real LOS exists. **No shared sensor contacts, no remote targeting, no separation of concealment from targetability** beyond two status flags. |
-| AI-01 | Role-based tactical AI | **Partial** | Three profiles (`aggressive`, `cautious`, `support`) that are pure weight vectors. No hunter, escort, civilian, ace or objective-focused behaviour. |
-| AI-02 | Alert/search state | **Missing** | No dormant → alerted → searching → engaged. AI reads full battle state; there is no per-faction knowledge model at all. |
-| STL-01 | Three-state stealth | **Missing** | Concealment is a boolean derived from status flags `untargetable` / `hidden` (line 4758). No Suspected state, no last-known position, no heat, no counter-detection. Nyx's entire design is unimplemented. |
+| LOS-01 | Sensor/visibility model | **Met** | **[CLOSED]** Five observation channels (optical, thermal, signal, acoustic, intel), each declaring whether it needs line of sight, whether it pierces concealment, how precise a position it yields and how far up the knowledge ladder it can reach. Sensors and emissions are content on a chassis, status or loadout. Contacts are shared across a faction and handed between factions explicitly. Perception uses reciprocal line of sight; targeting keeps the existing directional check. |
+| AI-01 | Role-based tactical AI | **Partial** | Three profiles (`aggressive`, `cautious`, `support`) that are pure weight vectors. No hunter, escort, civilian or ace behaviour. Every profile now reasons over believed positions rather than the board. |
+| AI-02 | Alert/search state | **Met** | **[CLOSED]** A faction-scoped knowledge model (`src/perception/`) with unseen → suspected → acquired, decay counted in the believing faction's own activations, last-known positions, search leads and a bounded reconnaissance escalation. AI targeting, threat scoring, objective pull and initial facing all read the believed world; `perception/view.js` is the only position API they may call. |
+| STL-01 | Three-state stealth | **Partial** | The information architecture is complete: three states, concealment that beats optics but not heat, transient signatures, scripted reveals and per-faction contacts. **Nyx's kit itself is still unbuilt** — no Heat economy, no cloak durations, no Velocity or Blade. None of it requires an architecture change. |
 | OBJ-01 | Composable objectives | **Met** | **[CLOSED]** An objective stack with required/optional entries, per-entry progress and per-entry status. Optional objectives record outcomes without ending the mission, which is what the Bellview brief needs. |
 | OBJ-02 | Dynamic objective mutation | **Met** | **[CLOSED]** `addObjective`, `removeObjective`, `replaceObjectives`, `completeObjective`, `failObjective`, plus per-phase objective sets. Hidden objectives are supported. |
 | SCR-01 | Mission phase state machine | **Met** | **[CLOSED]** Named phases with entry conditions, declarative objective/group sets, onEnter/onExit action lists and a `next` handoff. Phase state serializes and replays deterministically. |
@@ -144,11 +144,11 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 | BRN-01 | Outcome fact/flag system | **Met** | The best-implemented advanced requirement in the project. Facts are derived from battle state, and the architecture audit *tests* that a dialogue promise does not set the flag. |
 | SAV-01 | Mid-mission save/resume | **Met** | **[CLOSED]** `serializeBattle` / `deserializeBattle` cover RNG state, timeline, terrain overrides, factions, the objective stack and the whole mission runtime including the half-executed beat. Verified in a browser: saving mid-cinematic and reloading resumes at the same action and never replays it. |
 | AUD-01 | Contextual audio control | **Partial** | Per-screen and per-mission music with fallback chains. No per-phase changes or stingers. |
-| DBG-01 | Mission authoring/debug tools | **Partial** | Strong developer panel, validation panel, soak tests, replay check. No phase jump, flag setting, group spawning or AI-knowledge inspection. |
+| DBG-01 | Mission authoring/debug tools | **Partial** | Strong developer panel, validation panel, soak tests, replay check, a Knowledge tab showing every faction's contacts and clocks, and an Intel overlay marking last-known positions. No phase jump, flag setting or group spawning. |
 
-**Tally after the reaction/Link phase: 17 met, 11 partial, 12 missing.** (Was 15 / 12 / 13 after mission scripting, and 7 / 13 / 20 at the original audit.)
+**Tally after the knowledge phase: 19 met, 11 partial, 10 missing.** (Was 17 / 11 / 12 after reactions, 15 / 12 / 13 after mission scripting, and 7 / 13 / 20 at the original audit.)
 
-That reads worse than it is. Of the 20 missing, roughly twelve are downstream of just **three** systems: the mission script layer (SCR-01/02, CIN-02, OBJ-02, SPN-01, BOS-01), the faction matrix (FAC-01, CAP-01, CIV-01), and the reaction framework (ACT-01, LINK-01, and all four character kits).
+Of the ten still missing, most are downstream of the four character kits and the subsystem-damage model. The four foundational systems — mission scripting, the faction matrix, reactions and now perception — are all in place, and each of the remaining kits is content plus a resource economy on top of them rather than new architecture.
 
 ---
 
@@ -270,11 +270,11 @@ Event bus → phase state machine → action handler registry → authoritative 
 **Phase B — reactions and resources (R-03)**
 Interrupt queue with caps; squad-wide resources; charge/solution states. Then mid-mission save (R-05), because save correctness is far cheaper to build before four bespoke character resources exist than after.
 
-**Phase C — information model (R-04)**
-Per-faction knowledge, last-known positions, alert states, dormancy. Then Nyx's heat and three-state stealth on top.
+**Phase C — information model (R-04)**  **[DONE]**
+Per-faction knowledge, last-known positions, alert states, dormancy. Built — see `docs/PERCEPTION.md`. Nyx's heat and cloak economy sit on top of it and need no further architecture.
 
-**Phase D — the trio**
-Vale's Authority and datalink; Kell's firing solution and remote targeting; the Section Seven Link. These are the payoff for A–C and should be cheap once those exist.
+**Phase D — the trio**  *(the Link is done; the three economies are next)*
+Vale's Authority and datalink; Kell's firing solution and remote targeting; the Section Seven Link. The Link is built. Vale's datalink is now a small system rather than a large one — sharing a mark across the squad is `shareKnowledge` plus a resource, and Kell firing on another unit's sensors is an ability whose legality reads the faction's contacts instead of the shooter's own line.
 
 **Phase E onward** — as the GDD has it: Reyes's Stock and the Workshop, then large-map sectors and destructibles, then hub capabilities and skill trees.
 
@@ -347,6 +347,8 @@ One pre-existing failing test was fixed: a bookkeeping assertion that the Presen
 3. **Then reactions**, because the four character documents are all reaction mechanics wearing different hats, and none of them can be prototyped until interrupts exist.
 
 Everything else — stealth states, Stock, Authority, firing solutions, submaps, salvage — is downstream and can be scheduled normally.
+
+**Since that was written, 2 and 3 are done, and so is the information model that 2's follow-on work depends on.** The remaining engine-shaped work before content is the item that was always first and is still first: the large-map retune and the App.jsx split. Everything after that is character kits — resource economies and ability content on top of four systems that already exist.
 
 **What you can start on right now, in parallel, safely:** portraits, music, UI art, character writing, scene dialogue, and mission *layout* using the editor (map geometry survives a retune far better than encounter tuning does).
 

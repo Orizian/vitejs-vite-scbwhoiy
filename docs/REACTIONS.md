@@ -70,7 +70,9 @@ Optional flags: `mandatory: true` (cannot be declined), `automatic: true` (resol
 
 ### Conditions
 
-`all`, `any`, `not`, `sourceUnit`, `subjectUnit`, `subjectRelation`, `sourceRelation`, `linkActive`, `reactorHpBelow`, `subjectAlive`, `withinRange`, `abilityId`, `statusId`, `reactorHasStatus`, `missionFact`, `amountAtLeast`.
+`all`, `any`, `not`, `sourceUnit`, `subjectUnit`, `subjectRelation`, `sourceRelation`, `linkActive`, `reactorHpBelow`, `subjectAlive`, `withinRange`, `abilityId`, `statusId`, `reactorHasStatus`, `missionFact`, `amountAtLeast`, `knowsSubject`.
+
+`knowsSubject` asks whether the reactor's *faction* holds at least a given knowledge state on the event's subject. Any reaction that responds to a hostile should carry one: without it an overwatch shot is a detection oracle that tells the player exactly where an invisible unit is standing. See [`PERCEPTION.md`](PERCEPTION.md).
 
 Conditions are re-evaluated **immediately before execution**, not just at discovery — by then an earlier reaction in the same chain may have killed the actor, moved the target or flipped a faction.
 

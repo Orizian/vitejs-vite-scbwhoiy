@@ -130,6 +130,9 @@ Routed through the same machinery ordinary gameplay uses, so they produce real e
 | `modifyTerrain` | Replaces terrain across a region or tile list. |
 | `applyStatus` | Applies a status through the effect pipeline. |
 | `setLinkState` | Enables, disables or unlocks a combat relationship. This is how Grayfield restores Section Seven mid-battle; the link's shared reaction pool becomes available in the same instant. See [`REACTIONS.md`](REACTIONS.md). |
+| `setKnowledge` | Sets what one faction believes about specific units: `acquired` reveals, `suspected` plants a contact to investigate, `unseen` erases. `atLastKnown: true` leaves an existing believed position alone. |
+| `shareKnowledge` | Hands one faction's contacts to another, optionally capped by `maxState`. Nothing shares knowledge implicitly — a unit changing sides brings itself, not its old side's map — so a defection that comes with intel is this action, fired deliberately. |
+| `emitSignature` | Makes units detectable on one observation channel for a while: a thermal vent venting, an alarm sounding, a transponder keyed. Anyone with a sensor on that channel picks them up on the next sweep. |
 
 ### ▷ Presentation — never touches battle state
 
@@ -141,6 +144,23 @@ Routed through the same machinery ordinary gameplay uses, so they produce real e
 | `queueBark` | A non-blocking callout. |
 
 In a headless run (tests, soaks, replay) blocking requests resolve instantly with their authored default, and the authoritative outcome is **identical** — scenes never touch battle state, and a choice resolves to `defaultOptionId` (or the first option) rather than a random pick.
+
+### ▷ Reacting to what a faction knows
+
+`knowledgeChanged` is an ordinary trigger and `knowledgeState` an ordinary condition, so "the moment the garrison spots you" is one beat:
+
+```jsonc
+{
+  "trigger": "knowledgeChanged",
+  "factionId": "garrison", "unitRef": "nyx", "to": "acquired",
+  "once": true,
+  "actions": [ { "type": "startPhase", "phaseRef": "alarm" } ]
+}
+
+{ "knowledgeState": "nyx", "factionId": "garrison", "atLeast": "suspected" }
+```
+
+`reason` distinguishes how it moved: `observed`, `contactLost`, `decayed`, `recon`, `script` or `shared`. See [`PERCEPTION.md`](PERCEPTION.md).
 
 ---
 
