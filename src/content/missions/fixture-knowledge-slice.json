@@ -1,0 +1,245 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-knowledge-slice",
+  "name": "Vent Row (knowledge slice)",
+  "scale": "S",
+  "summary": "ENGINE ACCEPTANCE FIXTURE, not campaign content. A sealed service corridor used to prove the faction knowledge model end to end: an infiltrator crosses a garrison's sightlines and is seen, is lost behind a bulkhead, is hunted from the last-known tile, and is finally given away by a thermal vent rather than by anything the engine knows about her. Balance, dialogue and art are placeholders.",
+  "map": {
+    "name": "Vent Row",
+    "width": 18,
+    "height": 14,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "..................",
+      "..................",
+      ".....######.......",
+      "..................",
+      "..................",
+      "...####....####...",
+      "..................",
+      "..................",
+      "...####....####...",
+      "..................",
+      "..................",
+      ".....######.......",
+      "..~~~~~~~~~~~~~~..",
+      ".................."
+    ]
+  },
+  "teams": [
+    { "id": "player", "name": "Infiltration", "controller": "human", "marker": "▲", "accent": "emerald" },
+    { "id": "foe", "name": "Garrison", "controller": "ai", "marker": "■", "accent": "rose" }
+  ],
+  "units": [
+    {
+      "ref": "infiltrator",
+      "definitionId": "stealthMech",
+      "teamId": "player",
+      "x": 2,
+      "y": 13,
+      "facing": "northeast",
+      "note": "The unit the garrison has to find. Nothing about her is special-cased; she is an ordinary chassis whose knowledge state the fixture drives."
+    },
+    {
+      "ref": "overwatch",
+      "definitionId": "sniperMech",
+      "teamId": "player",
+      "x": 4,
+      "y": 13,
+      "facing": "northeast",
+      "note": "A second player unit, so the mission is not a single-unit special case."
+    },
+    {
+      "ref": "sentry",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 9,
+      "y": 0,
+      "facing": "southwest",
+      "note": "Plain optics. Sees what is in front of it and nothing else."
+    },
+    {
+      "ref": "scanner",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 12,
+      "y": 0,
+      "facing": "southwest",
+      "equipment": { "utilitySystem": "thermalOptics" },
+      "note": "The counter-stealth tier, expressed entirely as a loadout: a sensor range on a channel that pierces concealment."
+    },
+    {
+      "ref": "listener",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 15,
+      "y": 0,
+      "facing": "southwest",
+      "equipment": { "utilitySystem": "signalScanner" },
+      "note": "Hears emissions through walls, and can never turn that into a firing solution."
+    }
+  ],
+  "regions": [
+    {
+      "id": "ventRow",
+      "name": "Vent Row",
+      "color": "#f97316",
+      "kind": "trigger",
+      "tiles": [
+        { "x": 2, "y": 12 }, { "x": 3, "y": 12 }, { "x": 4, "y": 12 }, { "x": 5, "y": 12 },
+        { "x": 6, "y": 12 }, { "x": 7, "y": 12 }, { "x": 8, "y": 12 }, { "x": 9, "y": 12 },
+        { "x": 10, "y": 12 }, { "x": 11, "y": 12 }, { "x": 12, "y": 12 }, { "x": 13, "y": 12 },
+        { "x": 14, "y": 12 }, { "x": 15, "y": 12 }
+      ]
+    }
+  ],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Clear the corridor",
+    "teamId": "player",
+    "opposingTeamId": "foe"
+  },
+  "factions": { "relationships": [] },
+  "groups": [],
+  "objectives": [
+    {
+      "id": "clearCorridor",
+      "type": "defeatAllEnemies",
+      "text": "Clear the corridor",
+      "required": true,
+      "startsActive": true,
+      "teamId": "player",
+      "opposingTeamId": "foe"
+    }
+  ],
+  "phases": [
+    {
+      "id": "approach",
+      "name": "A — Unseen",
+      "objectives": ["clearCorridor"],
+      "onEnter": [
+        {
+          "type": "setKnowledge",
+          "factionId": "foe",
+          "unitRefs": ["infiltrator", "overwatch"],
+          "state": "unseen"
+        },
+        { "type": "setMissionFact", "fact": "phase", "value": "approach" }
+      ]
+    },
+    {
+      "id": "contact",
+      "name": "B — Acquired",
+      "objectives": ["clearCorridor"],
+      "onEnter": [{ "type": "setMissionFact", "fact": "phase", "value": "contact" }]
+    },
+    {
+      "id": "lost",
+      "name": "C — Contact lost",
+      "objectives": ["clearCorridor"],
+      "onEnter": [{ "type": "setMissionFact", "fact": "phase", "value": "lost" }]
+    },
+    {
+      "id": "hunt",
+      "name": "D — Reacquisition",
+      "objectives": ["clearCorridor"],
+      "onEnter": [
+        { "type": "setMissionFact", "fact": "phase", "value": "hunt" },
+        {
+          "type": "emitSignature",
+          "unitRefs": ["infiltrator"],
+          "channel": "thermal",
+          "strength": 2,
+          "duration": 2
+        }
+      ]
+    },
+    {
+      "id": "cold",
+      "name": "E — Gone cold",
+      "objectives": ["clearCorridor"],
+      "onEnter": [{ "type": "setMissionFact", "fact": "phase", "value": "cold" }]
+    }
+  ],
+  "startPhaseId": "approach",
+  "beats": [
+    {
+      "id": "spotted",
+      "name": "The garrison makes contact",
+      "trigger": "knowledgeChanged",
+      "factionId": "foe",
+      "unitRef": "infiltrator",
+      "to": "acquired",
+      "once": true,
+      "actions": [
+        { "type": "setMissionFact", "fact": "everSpotted", "value": true },
+        { "type": "startPhase", "phaseRef": "contact" }
+      ]
+    },
+    {
+      "id": "slippedAway",
+      "name": "The garrison loses her",
+      "trigger": "knowledgeChanged",
+      "factionId": "foe",
+      "unitRef": "infiltrator",
+      "to": "suspected",
+      "reason": "contactLost",
+      "once": true,
+      "conditions": [{ "missionFact": "everSpotted", "is": true }],
+      "actions": [
+        { "type": "setMissionFact", "fact": "everLost", "value": true },
+        { "type": "startPhase", "phaseRef": "lost" }
+      ]
+    },
+    {
+      "id": "ventOpens",
+      "name": "A thermal vent opens under her",
+      "trigger": "unitEnteredRegion",
+      "unitRef": "infiltrator",
+      "regionRef": "ventRow",
+      "once": true,
+      "conditions": [{ "missionFact": "everLost", "is": true }],
+      "actions": [{ "type": "startPhase", "phaseRef": "hunt" }]
+    },
+    {
+      "id": "wentCold",
+      "name": "The lead goes cold",
+      "trigger": "knowledgeChanged",
+      "factionId": "foe",
+      "unitRef": "infiltrator",
+      "to": "unseen",
+      "once": true,
+      "conditions": [{ "missionFact": "everLost", "is": true }],
+      "actions": [
+        { "type": "setMissionFact", "fact": "wentCold", "value": true },
+        { "type": "startPhase", "phaseRef": "cold" }
+      ]
+    },
+    {
+      "id": "handOverTheDossier",
+      "name": "The garrison shares what it has",
+      "trigger": "knowledgeChanged",
+      "factionId": "foe",
+      "unitRef": "infiltrator",
+      "to": "acquired",
+      "once": true,
+      "conditions": [{ "knowledgeState": "infiltrator", "factionId": "foe", "atLeast": "acquired" }],
+      "actions": [
+        {
+          "type": "shareKnowledge",
+          "fromFactionId": "foe",
+          "toFactionId": "player",
+          "maxState": "suspected"
+        }
+      ]
+    }
+  ],
+  "scenes": {},
+  "sequences": { "briefing": [], "victory": [], "defeat": [] },
+  "midBattle": []
+}

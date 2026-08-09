@@ -7,17 +7,28 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node scripts/run-tests.mjs",
+    "test:serve": "node scripts/run-tests.mjs --serve",
+    "editor": "vite --open /editor.html",
+    "check:grayfield": "node scripts/grayfield-check.mjs",
+    "check:reactions": "node scripts/reaction-check.mjs",
+    "check:knowledge": "node scripts/knowledge-check.mjs",
+    "check:questions": "node scripts/knowledge-questions.mjs",
+    "bench:knowledge": "node scripts/knowledge-bench.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
     "oxlint": "^1.76.0",
+    "playwright": "^1.62.1",
+    "tailwindcss": "^4.3.3",
     "vite": "^8.2.0"
   }
 }

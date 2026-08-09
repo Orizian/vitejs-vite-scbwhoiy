@@ -1,0 +1,1810 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "act1-02-bellview-pump-station",
+  "name": "Bellview Pump Station",
+  "scale": "M",
+  "summary": "Defend the pumps and the work crew from a raider assault down two lanes. NOTE: the GDD wants losing one pump to be survivable and only a total loss to fail. The engine's protectUnits objective fails on the first loss, so this file uses the strict version until OBJ-01 gains partial-failure objectives (see docs/ENGINE_ANALYSIS.md).",
+  "map": {
+    "name": "Bellview Pump Station",
+    "width": 34,
+    "height": 44,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+      "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+      "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+      "....~~~~~~~~..........~~~~~~~~....",
+      "..................................",
+      "...#######.#..........#.#######...",
+      "...#~~~~~#.#..........#.#~~~~~#...",
+      "...#~~~~~#.#.########.#.#~~~~~#...",
+      "...#~~~~~#.#.#~~~~~~#.#.#~~~~~#...",
+      "...###.###.#.#~~~~~~#.#.###.###...",
+      ".............#~~~~~~#.............",
+      "...........#.#~~~~~~#.#...........",
+      "...........#.###..###.#...........",
+      "...........#..........#...........",
+      "..................................",
+      "..................................",
+      "..................................",
+      "~~~~~..~~~~~~~~~..~~~~~~~~~..~~~~~",
+      "~~~~~..~~~~~~~~~..~~~~~~~~~..~~~~~",
+      "..................................",
+      "......##########..##########......",
+      "......#....................#......",
+      "......#....................#......",
+      "......#..#####......#####..#......",
+      "......#..#~~~#......#~~~#..#......",
+      ".........#~~~#......#~~~#..#......",
+      ".........##.##.####.##.##..#......",
+      "......#........#~~#........#......",
+      "......#........#.##........#......",
+      "......#....................#......",
+      "......#....................#......",
+      "......##########..##########......",
+      "..................................",
+      "..................................",
+      "..................................",
+      "..................................",
+      "..~~~~~~~~..~~~~..~~~~~..~~~~~~~..",
+      "..~~~~~~~~..~~~~..~~~~~..~~~~~~~..",
+      "..................................",
+      "..##.###...................##.###.",
+      "..#~~~~#...................#~~~~#.",
+      "..#~~~~#...................#~~~~#.",
+      "..######...................######.",
+      ".................................."
+    ],
+    "elevationRows": [
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000001111111111111111111111000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000",
+      "0000000000000000000000000000000000"
+    ]
+  },
+  "teams": [
+    {
+      "id": "player",
+      "name": "Section Seven",
+      "controller": "human",
+      "marker": "▲",
+      "accent": "emerald"
+    },
+    {
+      "id": "foe",
+      "name": "Raiders",
+      "controller": "ai",
+      "marker": "■",
+      "accent": "rose"
+    }
+  ],
+  "units": [
+    {
+      "ref": "squad1",
+      "definitionId": "assaultMech",
+      "teamId": "player",
+      "x": 15,
+      "y": 40,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": null,
+      "note": ""
+    },
+    {
+      "ref": "squad2",
+      "definitionId": "supportMech",
+      "teamId": "player",
+      "x": 17,
+      "y": 40,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": null,
+      "note": ""
+    },
+    {
+      "ref": "squad3",
+      "definitionId": "sniperMech",
+      "teamId": "player",
+      "x": 19,
+      "y": 41,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": null,
+      "note": ""
+    },
+    {
+      "ref": "squad4",
+      "definitionId": "stealthMech",
+      "teamId": "player",
+      "x": 13,
+      "y": 41,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": null,
+      "note": ""
+    },
+    {
+      "ref": "pumpWest",
+      "definitionId": "supplyDepot",
+      "teamId": "player",
+      "x": 11,
+      "y": 29,
+      "facing": null,
+      "aiProfile": null,
+      "group": null,
+      "note": ""
+    },
+    {
+      "ref": "pumpEast",
+      "definitionId": "supplyDepot",
+      "teamId": "player",
+      "x": 22,
+      "y": 29,
+      "facing": null,
+      "aiProfile": null,
+      "group": null,
+      "note": ""
+    },
+    {
+      "ref": "workerCrew",
+      "definitionId": "civilianTransport",
+      "teamId": "player",
+      "x": 16,
+      "y": 29,
+      "facing": null,
+      "aiProfile": "cautious",
+      "group": null,
+      "note": ""
+    },
+    {
+      "ref": "raiderW1",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 6,
+      "y": 4,
+      "facing": "southeast",
+      "aiProfile": "aggressive",
+      "group": "westLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderW2",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 8,
+      "y": 4,
+      "facing": "southeast",
+      "aiProfile": "aggressive",
+      "group": "westLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderW3",
+      "definitionId": "lightPursuit",
+      "teamId": "foe",
+      "x": 5,
+      "y": 11,
+      "facing": "southeast",
+      "aiProfile": "aggressive",
+      "group": "westLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderW4",
+      "definitionId": "heavyEnforcer",
+      "teamId": "foe",
+      "x": 8,
+      "y": 13,
+      "facing": "southeast",
+      "aiProfile": "aggressive",
+      "group": "westLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderE1",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 26,
+      "y": 4,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "eastLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderE2",
+      "definitionId": "lightPursuit",
+      "teamId": "foe",
+      "x": 28,
+      "y": 11,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "eastLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderE3",
+      "definitionId": "heavyEnforcer",
+      "teamId": "foe",
+      "x": 25,
+      "y": 13,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "eastLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderE4",
+      "definitionId": "missileCarrier",
+      "teamId": "foe",
+      "x": 29,
+      "y": 2,
+      "facing": "southwest",
+      "aiProfile": "cautious",
+      "group": "eastLane",
+      "note": ""
+    },
+    {
+      "ref": "raiderC1",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 16,
+      "y": 14,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "centre",
+      "note": ""
+    },
+    {
+      "ref": "raiderC2",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 18,
+      "y": 14,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "centre",
+      "note": ""
+    },
+    {
+      "ref": "raiderDrone",
+      "definitionId": "governmentDrone",
+      "teamId": "foe",
+      "x": 17,
+      "y": 9,
+      "facing": "southwest",
+      "aiProfile": "support",
+      "group": "centre",
+      "note": ""
+    }
+  ],
+  "regions": [
+    {
+      "id": "westLane",
+      "name": "West Lane",
+      "color": "#f59e0b",
+      "kind": "trigger",
+      "tiles": [
+        {
+          "x": 2,
+          "y": 10
+        },
+        {
+          "x": 3,
+          "y": 10
+        },
+        {
+          "x": 4,
+          "y": 10
+        },
+        {
+          "x": 5,
+          "y": 10
+        },
+        {
+          "x": 6,
+          "y": 10
+        },
+        {
+          "x": 7,
+          "y": 10
+        },
+        {
+          "x": 8,
+          "y": 10
+        },
+        {
+          "x": 9,
+          "y": 10
+        },
+        {
+          "x": 10,
+          "y": 10
+        },
+        {
+          "x": 2,
+          "y": 11
+        },
+        {
+          "x": 3,
+          "y": 11
+        },
+        {
+          "x": 4,
+          "y": 11
+        },
+        {
+          "x": 5,
+          "y": 11
+        },
+        {
+          "x": 6,
+          "y": 11
+        },
+        {
+          "x": 7,
+          "y": 11
+        },
+        {
+          "x": 8,
+          "y": 11
+        },
+        {
+          "x": 9,
+          "y": 11
+        },
+        {
+          "x": 10,
+          "y": 11
+        },
+        {
+          "x": 2,
+          "y": 12
+        },
+        {
+          "x": 3,
+          "y": 12
+        },
+        {
+          "x": 4,
+          "y": 12
+        },
+        {
+          "x": 5,
+          "y": 12
+        },
+        {
+          "x": 6,
+          "y": 12
+        },
+        {
+          "x": 7,
+          "y": 12
+        },
+        {
+          "x": 8,
+          "y": 12
+        },
+        {
+          "x": 9,
+          "y": 12
+        },
+        {
+          "x": 10,
+          "y": 12
+        },
+        {
+          "x": 2,
+          "y": 13
+        },
+        {
+          "x": 3,
+          "y": 13
+        },
+        {
+          "x": 4,
+          "y": 13
+        },
+        {
+          "x": 5,
+          "y": 13
+        },
+        {
+          "x": 6,
+          "y": 13
+        },
+        {
+          "x": 7,
+          "y": 13
+        },
+        {
+          "x": 8,
+          "y": 13
+        },
+        {
+          "x": 9,
+          "y": 13
+        },
+        {
+          "x": 10,
+          "y": 13
+        },
+        {
+          "x": 2,
+          "y": 14
+        },
+        {
+          "x": 3,
+          "y": 14
+        },
+        {
+          "x": 4,
+          "y": 14
+        },
+        {
+          "x": 5,
+          "y": 14
+        },
+        {
+          "x": 6,
+          "y": 14
+        },
+        {
+          "x": 7,
+          "y": 14
+        },
+        {
+          "x": 8,
+          "y": 14
+        },
+        {
+          "x": 9,
+          "y": 14
+        },
+        {
+          "x": 10,
+          "y": 14
+        },
+        {
+          "x": 2,
+          "y": 15
+        },
+        {
+          "x": 3,
+          "y": 15
+        },
+        {
+          "x": 4,
+          "y": 15
+        },
+        {
+          "x": 5,
+          "y": 15
+        },
+        {
+          "x": 6,
+          "y": 15
+        },
+        {
+          "x": 7,
+          "y": 15
+        },
+        {
+          "x": 8,
+          "y": 15
+        },
+        {
+          "x": 9,
+          "y": 15
+        },
+        {
+          "x": 10,
+          "y": 15
+        }
+      ]
+    },
+    {
+      "id": "eastLane",
+      "name": "East Lane",
+      "color": "#f43f5e",
+      "kind": "trigger",
+      "tiles": [
+        {
+          "x": 23,
+          "y": 10
+        },
+        {
+          "x": 24,
+          "y": 10
+        },
+        {
+          "x": 25,
+          "y": 10
+        },
+        {
+          "x": 26,
+          "y": 10
+        },
+        {
+          "x": 27,
+          "y": 10
+        },
+        {
+          "x": 28,
+          "y": 10
+        },
+        {
+          "x": 29,
+          "y": 10
+        },
+        {
+          "x": 30,
+          "y": 10
+        },
+        {
+          "x": 31,
+          "y": 10
+        },
+        {
+          "x": 23,
+          "y": 11
+        },
+        {
+          "x": 24,
+          "y": 11
+        },
+        {
+          "x": 25,
+          "y": 11
+        },
+        {
+          "x": 26,
+          "y": 11
+        },
+        {
+          "x": 27,
+          "y": 11
+        },
+        {
+          "x": 28,
+          "y": 11
+        },
+        {
+          "x": 29,
+          "y": 11
+        },
+        {
+          "x": 30,
+          "y": 11
+        },
+        {
+          "x": 31,
+          "y": 11
+        },
+        {
+          "x": 23,
+          "y": 12
+        },
+        {
+          "x": 24,
+          "y": 12
+        },
+        {
+          "x": 25,
+          "y": 12
+        },
+        {
+          "x": 26,
+          "y": 12
+        },
+        {
+          "x": 27,
+          "y": 12
+        },
+        {
+          "x": 28,
+          "y": 12
+        },
+        {
+          "x": 29,
+          "y": 12
+        },
+        {
+          "x": 30,
+          "y": 12
+        },
+        {
+          "x": 31,
+          "y": 12
+        },
+        {
+          "x": 23,
+          "y": 13
+        },
+        {
+          "x": 24,
+          "y": 13
+        },
+        {
+          "x": 25,
+          "y": 13
+        },
+        {
+          "x": 26,
+          "y": 13
+        },
+        {
+          "x": 27,
+          "y": 13
+        },
+        {
+          "x": 28,
+          "y": 13
+        },
+        {
+          "x": 29,
+          "y": 13
+        },
+        {
+          "x": 30,
+          "y": 13
+        },
+        {
+          "x": 31,
+          "y": 13
+        },
+        {
+          "x": 23,
+          "y": 14
+        },
+        {
+          "x": 24,
+          "y": 14
+        },
+        {
+          "x": 25,
+          "y": 14
+        },
+        {
+          "x": 26,
+          "y": 14
+        },
+        {
+          "x": 27,
+          "y": 14
+        },
+        {
+          "x": 28,
+          "y": 14
+        },
+        {
+          "x": 29,
+          "y": 14
+        },
+        {
+          "x": 30,
+          "y": 14
+        },
+        {
+          "x": 31,
+          "y": 14
+        },
+        {
+          "x": 23,
+          "y": 15
+        },
+        {
+          "x": 24,
+          "y": 15
+        },
+        {
+          "x": 25,
+          "y": 15
+        },
+        {
+          "x": 26,
+          "y": 15
+        },
+        {
+          "x": 27,
+          "y": 15
+        },
+        {
+          "x": 28,
+          "y": 15
+        },
+        {
+          "x": 29,
+          "y": 15
+        },
+        {
+          "x": 30,
+          "y": 15
+        },
+        {
+          "x": 31,
+          "y": 15
+        }
+      ]
+    },
+    {
+      "id": "pumpYard",
+      "name": "Pump Yard",
+      "color": "#38bdf8",
+      "kind": "trigger",
+      "tiles": [
+        {
+          "x": 7,
+          "y": 21
+        },
+        {
+          "x": 8,
+          "y": 21
+        },
+        {
+          "x": 9,
+          "y": 21
+        },
+        {
+          "x": 10,
+          "y": 21
+        },
+        {
+          "x": 11,
+          "y": 21
+        },
+        {
+          "x": 12,
+          "y": 21
+        },
+        {
+          "x": 13,
+          "y": 21
+        },
+        {
+          "x": 14,
+          "y": 21
+        },
+        {
+          "x": 15,
+          "y": 21
+        },
+        {
+          "x": 16,
+          "y": 21
+        },
+        {
+          "x": 17,
+          "y": 21
+        },
+        {
+          "x": 18,
+          "y": 21
+        },
+        {
+          "x": 19,
+          "y": 21
+        },
+        {
+          "x": 20,
+          "y": 21
+        },
+        {
+          "x": 21,
+          "y": 21
+        },
+        {
+          "x": 22,
+          "y": 21
+        },
+        {
+          "x": 23,
+          "y": 21
+        },
+        {
+          "x": 24,
+          "y": 21
+        },
+        {
+          "x": 25,
+          "y": 21
+        },
+        {
+          "x": 26,
+          "y": 21
+        },
+        {
+          "x": 7,
+          "y": 22
+        },
+        {
+          "x": 8,
+          "y": 22
+        },
+        {
+          "x": 9,
+          "y": 22
+        },
+        {
+          "x": 10,
+          "y": 22
+        },
+        {
+          "x": 11,
+          "y": 22
+        },
+        {
+          "x": 12,
+          "y": 22
+        },
+        {
+          "x": 13,
+          "y": 22
+        },
+        {
+          "x": 14,
+          "y": 22
+        },
+        {
+          "x": 15,
+          "y": 22
+        },
+        {
+          "x": 16,
+          "y": 22
+        },
+        {
+          "x": 17,
+          "y": 22
+        },
+        {
+          "x": 18,
+          "y": 22
+        },
+        {
+          "x": 19,
+          "y": 22
+        },
+        {
+          "x": 20,
+          "y": 22
+        },
+        {
+          "x": 21,
+          "y": 22
+        },
+        {
+          "x": 22,
+          "y": 22
+        },
+        {
+          "x": 23,
+          "y": 22
+        },
+        {
+          "x": 24,
+          "y": 22
+        },
+        {
+          "x": 25,
+          "y": 22
+        },
+        {
+          "x": 26,
+          "y": 22
+        },
+        {
+          "x": 7,
+          "y": 23
+        },
+        {
+          "x": 8,
+          "y": 23
+        },
+        {
+          "x": 14,
+          "y": 23
+        },
+        {
+          "x": 15,
+          "y": 23
+        },
+        {
+          "x": 16,
+          "y": 23
+        },
+        {
+          "x": 17,
+          "y": 23
+        },
+        {
+          "x": 18,
+          "y": 23
+        },
+        {
+          "x": 19,
+          "y": 23
+        },
+        {
+          "x": 25,
+          "y": 23
+        },
+        {
+          "x": 26,
+          "y": 23
+        },
+        {
+          "x": 7,
+          "y": 24
+        },
+        {
+          "x": 8,
+          "y": 24
+        },
+        {
+          "x": 10,
+          "y": 24
+        },
+        {
+          "x": 11,
+          "y": 24
+        },
+        {
+          "x": 12,
+          "y": 24
+        },
+        {
+          "x": 14,
+          "y": 24
+        },
+        {
+          "x": 15,
+          "y": 24
+        },
+        {
+          "x": 16,
+          "y": 24
+        },
+        {
+          "x": 17,
+          "y": 24
+        },
+        {
+          "x": 18,
+          "y": 24
+        },
+        {
+          "x": 19,
+          "y": 24
+        },
+        {
+          "x": 21,
+          "y": 24
+        },
+        {
+          "x": 22,
+          "y": 24
+        },
+        {
+          "x": 23,
+          "y": 24
+        },
+        {
+          "x": 25,
+          "y": 24
+        },
+        {
+          "x": 26,
+          "y": 24
+        },
+        {
+          "x": 7,
+          "y": 25
+        },
+        {
+          "x": 8,
+          "y": 25
+        },
+        {
+          "x": 10,
+          "y": 25
+        },
+        {
+          "x": 11,
+          "y": 25
+        },
+        {
+          "x": 12,
+          "y": 25
+        },
+        {
+          "x": 14,
+          "y": 25
+        },
+        {
+          "x": 15,
+          "y": 25
+        },
+        {
+          "x": 16,
+          "y": 25
+        },
+        {
+          "x": 17,
+          "y": 25
+        },
+        {
+          "x": 18,
+          "y": 25
+        },
+        {
+          "x": 19,
+          "y": 25
+        },
+        {
+          "x": 21,
+          "y": 25
+        },
+        {
+          "x": 22,
+          "y": 25
+        },
+        {
+          "x": 23,
+          "y": 25
+        },
+        {
+          "x": 25,
+          "y": 25
+        },
+        {
+          "x": 26,
+          "y": 25
+        },
+        {
+          "x": 7,
+          "y": 26
+        },
+        {
+          "x": 8,
+          "y": 26
+        },
+        {
+          "x": 11,
+          "y": 26
+        },
+        {
+          "x": 14,
+          "y": 26
+        },
+        {
+          "x": 19,
+          "y": 26
+        },
+        {
+          "x": 22,
+          "y": 26
+        },
+        {
+          "x": 25,
+          "y": 26
+        },
+        {
+          "x": 26,
+          "y": 26
+        },
+        {
+          "x": 7,
+          "y": 27
+        },
+        {
+          "x": 8,
+          "y": 27
+        },
+        {
+          "x": 9,
+          "y": 27
+        },
+        {
+          "x": 10,
+          "y": 27
+        },
+        {
+          "x": 11,
+          "y": 27
+        },
+        {
+          "x": 12,
+          "y": 27
+        },
+        {
+          "x": 13,
+          "y": 27
+        },
+        {
+          "x": 14,
+          "y": 27
+        },
+        {
+          "x": 16,
+          "y": 27
+        },
+        {
+          "x": 17,
+          "y": 27
+        },
+        {
+          "x": 19,
+          "y": 27
+        },
+        {
+          "x": 20,
+          "y": 27
+        },
+        {
+          "x": 21,
+          "y": 27
+        },
+        {
+          "x": 22,
+          "y": 27
+        },
+        {
+          "x": 23,
+          "y": 27
+        },
+        {
+          "x": 24,
+          "y": 27
+        },
+        {
+          "x": 25,
+          "y": 27
+        },
+        {
+          "x": 26,
+          "y": 27
+        },
+        {
+          "x": 7,
+          "y": 28
+        },
+        {
+          "x": 8,
+          "y": 28
+        },
+        {
+          "x": 9,
+          "y": 28
+        },
+        {
+          "x": 10,
+          "y": 28
+        },
+        {
+          "x": 11,
+          "y": 28
+        },
+        {
+          "x": 12,
+          "y": 28
+        },
+        {
+          "x": 13,
+          "y": 28
+        },
+        {
+          "x": 14,
+          "y": 28
+        },
+        {
+          "x": 16,
+          "y": 28
+        },
+        {
+          "x": 19,
+          "y": 28
+        },
+        {
+          "x": 20,
+          "y": 28
+        },
+        {
+          "x": 21,
+          "y": 28
+        },
+        {
+          "x": 22,
+          "y": 28
+        },
+        {
+          "x": 23,
+          "y": 28
+        },
+        {
+          "x": 24,
+          "y": 28
+        },
+        {
+          "x": 25,
+          "y": 28
+        },
+        {
+          "x": 26,
+          "y": 28
+        },
+        {
+          "x": 7,
+          "y": 29
+        },
+        {
+          "x": 8,
+          "y": 29
+        },
+        {
+          "x": 9,
+          "y": 29
+        },
+        {
+          "x": 10,
+          "y": 29
+        },
+        {
+          "x": 11,
+          "y": 29
+        },
+        {
+          "x": 12,
+          "y": 29
+        },
+        {
+          "x": 13,
+          "y": 29
+        },
+        {
+          "x": 14,
+          "y": 29
+        },
+        {
+          "x": 15,
+          "y": 29
+        },
+        {
+          "x": 16,
+          "y": 29
+        },
+        {
+          "x": 17,
+          "y": 29
+        },
+        {
+          "x": 18,
+          "y": 29
+        },
+        {
+          "x": 19,
+          "y": 29
+        },
+        {
+          "x": 20,
+          "y": 29
+        },
+        {
+          "x": 21,
+          "y": 29
+        },
+        {
+          "x": 22,
+          "y": 29
+        },
+        {
+          "x": 23,
+          "y": 29
+        },
+        {
+          "x": 24,
+          "y": 29
+        },
+        {
+          "x": 25,
+          "y": 29
+        },
+        {
+          "x": 26,
+          "y": 29
+        },
+        {
+          "x": 7,
+          "y": 30
+        },
+        {
+          "x": 8,
+          "y": 30
+        },
+        {
+          "x": 9,
+          "y": 30
+        },
+        {
+          "x": 10,
+          "y": 30
+        },
+        {
+          "x": 11,
+          "y": 30
+        },
+        {
+          "x": 12,
+          "y": 30
+        },
+        {
+          "x": 13,
+          "y": 30
+        },
+        {
+          "x": 14,
+          "y": 30
+        },
+        {
+          "x": 15,
+          "y": 30
+        },
+        {
+          "x": 16,
+          "y": 30
+        },
+        {
+          "x": 17,
+          "y": 30
+        },
+        {
+          "x": 18,
+          "y": 30
+        },
+        {
+          "x": 19,
+          "y": 30
+        },
+        {
+          "x": 20,
+          "y": 30
+        },
+        {
+          "x": 21,
+          "y": 30
+        },
+        {
+          "x": 22,
+          "y": 30
+        },
+        {
+          "x": 23,
+          "y": 30
+        },
+        {
+          "x": 24,
+          "y": 30
+        },
+        {
+          "x": 25,
+          "y": 30
+        },
+        {
+          "x": 26,
+          "y": 30
+        }
+      ]
+    },
+    {
+      "id": "deployZone",
+      "name": "Deployment",
+      "color": "#34d399",
+      "kind": "deployment",
+      "tiles": [
+        {
+          "x": 12,
+          "y": 39
+        },
+        {
+          "x": 13,
+          "y": 39
+        },
+        {
+          "x": 14,
+          "y": 39
+        },
+        {
+          "x": 15,
+          "y": 39
+        },
+        {
+          "x": 16,
+          "y": 39
+        },
+        {
+          "x": 17,
+          "y": 39
+        },
+        {
+          "x": 18,
+          "y": 39
+        },
+        {
+          "x": 19,
+          "y": 39
+        },
+        {
+          "x": 20,
+          "y": 39
+        },
+        {
+          "x": 21,
+          "y": 39
+        },
+        {
+          "x": 12,
+          "y": 40
+        },
+        {
+          "x": 13,
+          "y": 40
+        },
+        {
+          "x": 14,
+          "y": 40
+        },
+        {
+          "x": 15,
+          "y": 40
+        },
+        {
+          "x": 16,
+          "y": 40
+        },
+        {
+          "x": 17,
+          "y": 40
+        },
+        {
+          "x": 18,
+          "y": 40
+        },
+        {
+          "x": 19,
+          "y": 40
+        },
+        {
+          "x": 20,
+          "y": 40
+        },
+        {
+          "x": 21,
+          "y": 40
+        },
+        {
+          "x": 12,
+          "y": 41
+        },
+        {
+          "x": 13,
+          "y": 41
+        },
+        {
+          "x": 14,
+          "y": 41
+        },
+        {
+          "x": 15,
+          "y": 41
+        },
+        {
+          "x": 16,
+          "y": 41
+        },
+        {
+          "x": 17,
+          "y": 41
+        },
+        {
+          "x": 18,
+          "y": 41
+        },
+        {
+          "x": 19,
+          "y": 41
+        },
+        {
+          "x": 20,
+          "y": 41
+        },
+        {
+          "x": 21,
+          "y": 41
+        },
+        {
+          "x": 12,
+          "y": 42
+        },
+        {
+          "x": 13,
+          "y": 42
+        },
+        {
+          "x": 14,
+          "y": 42
+        },
+        {
+          "x": 15,
+          "y": 42
+        },
+        {
+          "x": 16,
+          "y": 42
+        },
+        {
+          "x": 17,
+          "y": 42
+        },
+        {
+          "x": 18,
+          "y": 42
+        },
+        {
+          "x": 19,
+          "y": 42
+        },
+        {
+          "x": 20,
+          "y": 42
+        },
+        {
+          "x": 21,
+          "y": 42
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "type": "protectUnits",
+    "text": "Keep both pumps and the work crew intact, and drive off the raiders",
+    "teamId": "player",
+    "opposingTeamId": "foe",
+    "unitRefs": [
+      "pumpWest",
+      "pumpEast",
+      "workerCrew"
+    ],
+    "regionRef": null,
+    "activations": null,
+    "allowElimination": true,
+    "phases": []
+  },
+  "phases": [],
+  "scenes": {
+    "briefing": {
+      "title": "Real Alarm",
+      "location": "Bellview Pump Station",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "government",
+          "text": "Bellview's pump station is under coordinated raider assault. Water for four districts runs through it."
+        },
+        {
+          "speaker": "commander",
+          "text": "This one is real. Personnel first, then the pumps."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Finally, an order that makes sense."
+        },
+        {
+          "speaker": "kell",
+          "text": "Let us see whether the attackers do."
+        }
+      ],
+      "choices": []
+    },
+    "aftermath": {
+      "title": "A Useful Victory",
+      "location": "Bellview Pump Station",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "commander",
+          "text": "Station holds. Get the crew inside and the west housing sealed."
+        },
+        {
+          "speaker": "broadcast",
+          "text": "A massive offensive was shattered today by the vigilance of the Chancellor's defence network."
+        },
+        {
+          "speaker": "kell",
+          "text": "Eleven attackers. No reserve, no extraction plan, matching serial mounts."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Real people needed us. That does not make the report honest."
+        }
+      ],
+      "choices": []
+    },
+    "defeat": {
+      "title": "Station Lost",
+      "location": "Bellview Pump Station",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "We are losing the yard. Pull back before the crew is trapped in there."
+        }
+      ],
+      "choices": []
+    }
+  },
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "midBattle": [
+    {
+      "id": "pumpOpening",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "commander",
+      "text": "Two lanes into the yard. Reyes, keep the crew side covered — Kell, take the berm.",
+      "followUpLines": [],
+      "priority": 90,
+      "pauseBattle": true,
+      "once": true,
+      "when": null,
+      "actions": []
+    },
+    {
+      "id": "westLaneContact",
+      "trigger": {
+        "type": "unitEnteredZone",
+        "regionRef": "westLane",
+        "teamId": "foe"
+      },
+      "speaker": "kell",
+      "text": "West lane is moving. Four of them, tight formation, no scouts out.",
+      "followUpLines": [],
+      "priority": 75,
+      "pauseBattle": false,
+      "once": true,
+      "when": null,
+      "actions": []
+    },
+    {
+      "id": "droneSpotted",
+      "trigger": {
+        "type": "unitOfTagSpotted",
+        "definitionIds": [
+          "governmentDrone"
+        ],
+        "afterActivations": 1
+      },
+      "speaker": "reyes",
+      "text": "That repair drone is government issue with the crest ground off.",
+      "followUpLines": [
+        {
+          "speaker": "kell",
+          "text": "Raiders with a service contract."
+        }
+      ],
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true,
+      "when": null,
+      "actions": []
+    },
+    {
+      "id": "crewUnderFire",
+      "trigger": {
+        "type": "protectedUnitHpBelowPercent",
+        "unitRefs": [
+          "workerCrew"
+        ],
+        "percent": 60
+      },
+      "speaker": "reyes",
+      "text": "Crew transport is taking hits. I need someone between it and that lane, now.",
+      "followUpLines": [],
+      "priority": 95,
+      "pauseBattle": true,
+      "once": true,
+      "when": null,
+      "actions": []
+    },
+    {
+      "id": "yardBreached",
+      "trigger": {
+        "type": "unitEnteredZone",
+        "regionRef": "pumpYard",
+        "teamId": "foe"
+      },
+      "speaker": "commander",
+      "text": "They're inside the wall. Forget the lanes — everything falls back to the housings.",
+      "followUpLines": [],
+      "priority": 85,
+      "pauseBattle": true,
+      "once": true,
+      "when": null,
+      "actions": []
+    },
+    {
+      "id": "lastStand",
+      "trigger": {
+        "type": "enemyCountThreshold",
+        "remainingAtMost": 3
+      },
+      "speaker": "commander",
+      "text": "They came in without supplies or a way out. Who attacks like this?",
+      "followUpLines": [
+        {
+          "speaker": "kell",
+          "text": "People who were told they'd be met."
+        }
+      ],
+      "priority": 60,
+      "pauseBattle": true,
+      "once": true,
+      "when": null,
+      "actions": []
+    }
+  ]
+}

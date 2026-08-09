@@ -1,0 +1,533 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-section-seven",
+  "name": "Section Seven Qualification (link slice)",
+  "scale": "S",
+  "summary": "ENGINE ACCEPTANCE FIXTURE, not campaign content. An Act-I-style exercise with Vale, Kell and Reyes serving together, used to prove the Section Seven Link executes entirely through generic reaction definitions. Balance, dialogue and art are placeholders.",
+  "map": {
+    "name": "Yard Test (slice)",
+    "width": 16,
+    "height": 18,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "................",
+      "................",
+      "................",
+      "................",
+      ".......##.......",
+      "................",
+      "................",
+      "...##......##...",
+      "...##......##...",
+      "................",
+      "~~~~.~~~.~~~.~~~",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................",
+      "................"
+    ],
+    "elevationRows": [
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000",
+      "0000000000000000"
+    ]
+  },
+  "teams": [
+    {
+      "id": "player",
+      "name": "Section Seven",
+      "controller": "human",
+      "marker": "▲",
+      "accent": "emerald"
+    },
+    {
+      "id": "foe",
+      "name": "Drill Opposition",
+      "controller": "ai",
+      "marker": "■",
+      "accent": "rose"
+    }
+  ],
+  "units": [
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "player",
+      "x": 7,
+      "y": 15,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": "sectionSeven",
+      "note": ""
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "player",
+      "x": 5,
+      "y": 16,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": "sectionSeven",
+      "note": ""
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "player",
+      "x": 9,
+      "y": 16,
+      "facing": "northwest",
+      "aiProfile": null,
+      "group": "sectionSeven",
+      "note": ""
+    },
+    {
+      "ref": "drillA",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 7,
+      "y": 8,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "drill",
+      "note": ""
+    },
+    {
+      "ref": "drillB",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 4,
+      "y": 5,
+      "facing": "southeast",
+      "aiProfile": "aggressive",
+      "group": "drill",
+      "note": ""
+    },
+    {
+      "ref": "drillC",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 11,
+      "y": 5,
+      "facing": "southwest",
+      "aiProfile": "aggressive",
+      "group": "drill",
+      "note": ""
+    }
+  ],
+  "regions": [
+    {
+      "id": "range",
+      "name": "Firing Range",
+      "color": "#38bdf8",
+      "kind": "trigger",
+      "tiles": [
+        {
+          "x": 2,
+          "y": 3
+        },
+        {
+          "x": 3,
+          "y": 3
+        },
+        {
+          "x": 4,
+          "y": 3
+        },
+        {
+          "x": 5,
+          "y": 3
+        },
+        {
+          "x": 6,
+          "y": 3
+        },
+        {
+          "x": 7,
+          "y": 3
+        },
+        {
+          "x": 8,
+          "y": 3
+        },
+        {
+          "x": 9,
+          "y": 3
+        },
+        {
+          "x": 10,
+          "y": 3
+        },
+        {
+          "x": 11,
+          "y": 3
+        },
+        {
+          "x": 12,
+          "y": 3
+        },
+        {
+          "x": 13,
+          "y": 3
+        },
+        {
+          "x": 2,
+          "y": 4
+        },
+        {
+          "x": 3,
+          "y": 4
+        },
+        {
+          "x": 4,
+          "y": 4
+        },
+        {
+          "x": 5,
+          "y": 4
+        },
+        {
+          "x": 6,
+          "y": 4
+        },
+        {
+          "x": 9,
+          "y": 4
+        },
+        {
+          "x": 10,
+          "y": 4
+        },
+        {
+          "x": 11,
+          "y": 4
+        },
+        {
+          "x": 12,
+          "y": 4
+        },
+        {
+          "x": 13,
+          "y": 4
+        },
+        {
+          "x": 2,
+          "y": 5
+        },
+        {
+          "x": 3,
+          "y": 5
+        },
+        {
+          "x": 4,
+          "y": 5
+        },
+        {
+          "x": 5,
+          "y": 5
+        },
+        {
+          "x": 6,
+          "y": 5
+        },
+        {
+          "x": 7,
+          "y": 5
+        },
+        {
+          "x": 8,
+          "y": 5
+        },
+        {
+          "x": 9,
+          "y": 5
+        },
+        {
+          "x": 10,
+          "y": 5
+        },
+        {
+          "x": 11,
+          "y": 5
+        },
+        {
+          "x": 12,
+          "y": 5
+        },
+        {
+          "x": 13,
+          "y": 5
+        },
+        {
+          "x": 2,
+          "y": 6
+        },
+        {
+          "x": 3,
+          "y": 6
+        },
+        {
+          "x": 4,
+          "y": 6
+        },
+        {
+          "x": 5,
+          "y": 6
+        },
+        {
+          "x": 6,
+          "y": 6
+        },
+        {
+          "x": 7,
+          "y": 6
+        },
+        {
+          "x": 8,
+          "y": 6
+        },
+        {
+          "x": 9,
+          "y": 6
+        },
+        {
+          "x": 10,
+          "y": 6
+        },
+        {
+          "x": 11,
+          "y": 6
+        },
+        {
+          "x": 12,
+          "y": 6
+        },
+        {
+          "x": 13,
+          "y": 6
+        },
+        {
+          "x": 2,
+          "y": 7
+        },
+        {
+          "x": 5,
+          "y": 7
+        },
+        {
+          "x": 6,
+          "y": 7
+        },
+        {
+          "x": 7,
+          "y": 7
+        },
+        {
+          "x": 8,
+          "y": 7
+        },
+        {
+          "x": 9,
+          "y": 7
+        },
+        {
+          "x": 10,
+          "y": 7
+        },
+        {
+          "x": 13,
+          "y": 7
+        },
+        {
+          "x": 2,
+          "y": 8
+        },
+        {
+          "x": 5,
+          "y": 8
+        },
+        {
+          "x": 6,
+          "y": 8
+        },
+        {
+          "x": 7,
+          "y": 8
+        },
+        {
+          "x": 8,
+          "y": 8
+        },
+        {
+          "x": 9,
+          "y": 8
+        },
+        {
+          "x": 10,
+          "y": 8
+        },
+        {
+          "x": 13,
+          "y": 8
+        }
+      ]
+    }
+  ],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Clear the range",
+    "teamId": "player",
+    "opposingTeamId": "foe",
+    "unitRefs": [],
+    "regionRef": null,
+    "activations": null,
+    "allowElimination": true,
+    "phases": []
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Qualification",
+      "location": "Section Seven range",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "commander",
+          "text": "Standard chain drill. I mark, Kell fires, I take the ground."
+        },
+        {
+          "speaker": "kell",
+          "text": "And Reyes puts whoever gets hit back on their feet."
+        }
+      ],
+      "choices": []
+    },
+    "aftermath": {
+      "title": "Qualified",
+      "location": "Section Seven range",
+      "kind": "aftermath",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "Nobody is going to believe the numbers again."
+        }
+      ],
+      "choices": []
+    },
+    "defeat": {
+      "title": "Failed",
+      "location": "Section Seven range",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "Run it again."
+        }
+      ],
+      "choices": []
+    }
+  },
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "midBattle": [],
+  "factions": {
+    "relationships": [
+      {
+        "a": "player",
+        "b": "foe",
+        "relationship": "hostile",
+        "symmetric": true
+      }
+    ]
+  },
+  "groups": [
+    {
+      "id": "sectionSeven",
+      "name": "Section Seven",
+      "teamId": "player",
+      "startsActive": true,
+      "deployment": "field"
+    },
+    {
+      "id": "drill",
+      "name": "Drill opposition",
+      "teamId": "foe",
+      "startsActive": true,
+      "deployment": "field"
+    }
+  ],
+  "objectives": [
+    {
+      "id": "clearRange",
+      "type": "defeatAllEnemies",
+      "text": "Clear the range",
+      "required": true,
+      "hidden": false,
+      "startsActive": true,
+      "teamId": "player",
+      "opposingTeamId": "foe",
+      "unitRefs": [],
+      "regionRef": null,
+      "activations": null,
+      "allowElimination": true,
+      "phases": []
+    }
+  ],
+  "phases": [
+    {
+      "id": "exercise",
+      "name": "Qualification",
+      "enterWhen": null,
+      "next": null,
+      "objectives": [
+        "clearRange"
+      ],
+      "activateGroups": [],
+      "deactivateGroups": [],
+      "onEnter": [
+        {
+          "type": "setLinkState",
+          "linkId": "sectionSeven",
+          "enabled": true,
+          "unlocked": true
+        }
+      ],
+      "onExit": [],
+      "music": null
+    }
+  ],
+  "beats": [],
+  "startPhaseId": "exercise"
+}
