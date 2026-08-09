@@ -58,7 +58,22 @@ const TABS = [
 const AUTOSAVE_KEY = "statuszero.editor.draft";
 const HISTORY_LIMIT = 60;
 
-export default function Editor() {
+/**
+ * @param onExit  Supplied when the editor is mounted as a route inside the
+ *                game shell: leaving is then a state change, not a page load.
+ *                Standalone (`editor.html`) there is no such handler, so the
+ *                same control navigates to the game's front door instead.
+ *                Either way the button is present and does the obvious thing.
+ */
+export default function Editor({ onExit }) {
+  const leaveEditor = React.useCallback(() => {
+    if (typeof onExit === "function") {
+      onExit();
+      return;
+    }
+    if (typeof window !== "undefined") window.location.href = "/";
+  }, [onExit]);
+
   const [mission, setMission] = React.useState(() => {
     try {
       const stored = localStorage.getItem(AUTOSAVE_KEY);
@@ -363,6 +378,10 @@ export default function Editor() {
     <div className="flex h-screen w-screen flex-col bg-slate-950 text-slate-200">
       {/* ---- top bar ---- */}
       <header className="flex items-center gap-2 border-b border-slate-800 bg-slate-900/70 px-3 py-2">
+        <Btn onClick={leaveEditor} title="Back to the title screen">
+          ‹ Main Menu
+        </Btn>
+        <span className="mx-2 h-5 w-px bg-slate-700" />
         <span className="mr-2 text-[11px] font-bold uppercase tracking-[0.2em] text-sky-400">
           Status Zero · Mission Editor
         </span>

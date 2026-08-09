@@ -4,9 +4,10 @@ A long-form tactical RPG built on a deterministic, data-driven battle engine.
 
 ```bash
 npm install
-npm run dev       # game at http://localhost:5173/ , editor at /editor.html
+npm run dev       # main menu at http://localhost:5173/ , editor also at /editor.html
 npm run editor    # opens the mission editor directly
 npm test          # runs the full suite headlessly (needs a dev server on :5173)
+npm run check:menu        # browser acceptance: the front door, menu to base to editor
 npm run check:grayfield   # browser acceptance: mission scripting end to end
 npm run check:reactions   # browser acceptance: Section Seven + Grayfield link restore
 npm run check:knowledge   # browser acceptance: the contact lifecycle, unseen to cold
@@ -21,7 +22,7 @@ npm run lint
 
 | | |
 |---|---|
-| `src/App.jsx` | Content, engine, presentation adapter, UI and the 427-test suite. Everything below the `EDITABLE CONTENT ABOVE / ENGINE BELOW` divider is renderer-free and knows no concrete content id — `auditArchitecture()` enforces that on every run. |
+| `src/App.jsx` | Content, engine, presentation adapter, UI and the 436-test suite. Everything below the `EDITABLE CONTENT ABOVE / ENGINE BELOW` divider is renderer-free and knows no concrete content id — `auditArchitecture()` enforces that on every run. |
 | `src/content/missions/*.json` | Mission files. Drop one in and it is in the game. |
 | `src/content/mission-format.js` | Mission schema, validator and compiler. Shared by the game and the editor. |
 | `src/content/mission-registry.js` | Loads mission files and the editor's playtest slot into the content registry. |
@@ -39,6 +40,21 @@ npm run lint
 - **[`docs/MISSION_SCRIPTING.md`](docs/MISSION_SCRIPTING.md)** — phases, triggers, actions, factions and groups: how a battle changes shape mid-mission.
 - **[`docs/REACTIONS.md`](docs/REACTIONS.md)** — out-of-turn reactions, the reaction economy, and the combat-link framework behind Section Seven.
 - **[`docs/PERCEPTION.md`](docs/PERCEPTION.md)** — what each faction believes, why the AI cannot cheat, and the architecture Nyx's stealth kit will consume.
+
+## Starting the game
+
+The application opens on the **main menu**.
+
+| | |
+|---|---|
+| **Continue** | Resumes the saved campaign. Disabled, with a reason, when there is nothing to resume. |
+| **New Game** | A fresh campaign. Nothing is written to disk until you save, so backing out costs nothing — if a save already exists it asks first. |
+| **Mission Editor** | The editor below, mounted in place. Authoring only; it cannot touch a campaign. |
+| **Settings** | The same Escape overlay the game uses — display scale, master and music volume. |
+
+Escape opens Settings anywhere in the game, and offers **Return to main menu** once you are in a campaign.
+
+Two things skip the menu on purpose: the editor's **Playtest** button, which boots straight into the battle you just painted, and `?boot=game` / `?boot=editor`, which is how a test harness asks for a screen by name.
 
 ## Authoring a mission
 

@@ -1,5 +1,10 @@
 import React from "react";
-import { MISSION_CONTENT, missionFileScript, clearPlaytestMission } from "./content/mission-registry.js";
+import {
+  MISSION_CONTENT,
+  missionFileScript,
+  clearPlaytestMission,
+  PLAYTEST_STORAGE_KEY
+} from "./content/mission-registry.js";
 import { catalogDriftIssues } from "./content/mission-format.js";
 import {
   createFactionState,
@@ -19478,6 +19483,66 @@ function saveCampaign(campaign) {
   return JSON.stringify({ ...campaign, version: CAMPAIGN_SAVE_VERSION });
 }
 
+/**
+ * Where a campaign save actually lives.
+ *
+ * The save/load buttons used to call `window.storage`, a host-provided API that
+ * does not exist in an ordinary browser — every write threw and was swallowed,
+ * and every read reported "No save found". That was invisible while the only
+ * way to load was a button you had to press on purpose; it is not invisible
+ * once a main menu offers Continue.
+ *
+ * `localStorage` is the backend. `window.storage` is still honoured first when
+ * it exists, so a host that provides one keeps working. Everything is
+ * synchronous and total: a browser with storage disabled reports no save
+ * rather than throwing into a render.
+ */
+const CAMPAIGN_SAVE_KEY = "statuszero.campaign.save";
+
+function readCampaignSlot() {
+  try {
+    if (typeof localStorage !== "undefined") {
+      const value = localStorage.getItem(CAMPAIGN_SAVE_KEY);
+      if (value) return value;
+    }
+  } catch {
+    /* storage can be disabled; that is not an error worth surfacing */
+  }
+  return null;
+}
+
+function writeCampaignSlot(serialized) {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(CAMPAIGN_SAVE_KEY, serialized);
+      return true;
+    }
+  } catch {
+    /* quota or privacy mode */
+  }
+  return false;
+}
+
+function clearCampaignSlot() {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.removeItem(CAMPAIGN_SAVE_KEY);
+  } catch {
+    /* nothing to do */
+  }
+}
+
+/** The saved campaign, or null when there is nothing usable to continue. */
+function loadCampaignSlot() {
+  const serialized = readCampaignSlot();
+  if (!serialized) return null;
+  return loadCampaign(serialized);
+}
+
+/** Cheap enough to call during a render: does Continue have anything to do? */
+function hasCampaignSlot() {
+  return loadCampaignSlot() !== null;
+}
+
 function loadCampaign(serialized) {
   try {
     const parsed = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
@@ -21440,6 +21505,168 @@ test("Interaction", "Replaying the same seed produces the same engine outcome", 
     return [outcome.winner, outcome.activations, summary.totalDamage, summary.totalHealing].join(":");
   });
   assertEqual(results[0], results[1]);
+});
+
+/* =========================================================================
+ * FRONT DOOR
+ *
+ * Startup routing and the campaign slot behind Continue. The DOM-level flows
+ * — clicking through the menu, in and out of the editor — live in
+ * `npm run check:menu`, because they are about a real browser.
+ * =======================================================================*/
+
+/** Runs a body with the campaign slot emptied, then puts back whatever was
+ *  there. A test must never eat the developer's actual save. */
+function withEmptyCampaignSlot(body) {
+  const previous = readCampaignSlot();
+  clearCampaignSlot();
+  try {
+    return body();
+  } finally {
+    if (previous) writeCampaignSlot(previous);
+    else clearCampaignSlot();
+  }
+}
+
+test("Front door", "The application starts on the main menu", () => {
+  assertEqual(resolveStartupRoute("", null), "menu", "a plain visit lands on the title screen");
+  assertEqual(resolveStartupRoute("?", null), "menu");
+  assertEqual(resolveStartupRoute("?other=1", null), "menu", "an unrelated query changes nothing");
+});
+
+test("Front door", "A harness can ask for a route by name", () => {
+  assertEqual(resolveStartupRoute("?boot=game", null), "game");
+  assertEqual(resolveStartupRoute("?boot=editor", null), "editor");
+  assertEqual(resolveStartupRoute("?seed=3&boot=game", null), "game", "position does not matter");
+  assertEqual(resolveStartupRoute("?boot=nonsense", null), "menu", "an unknown route is ignored");
+  assertEqual(resolveStartupRoute("?boot=GAME", null), "game", "case does not matter");
+});
+
+test("Front door", "A pending playtest outranks the menu, and an explicit route outranks it", () => {
+  // Paint a tile, press play, stand on it. Routing that through a title screen
+  // would make the editor a worse tool.
+  assertEqual(resolveStartupRoute("", "fixture-grayfield-slice"), "game");
+  assertEqual(
+    resolveStartupRoute("?boot=editor", "fixture-grayfield-slice"),
+    "editor",
+    "an explicit request still wins"
+  );
+});
+
+test("Front door", "Continue has nothing to do without a save", () => {
+  withEmptyCampaignSlot(() => {
+    assertEqual(hasCampaignSlot(), false, "no slot, no Continue");
+    assertEqual(loadCampaignSlot(), null);
+  });
+});
+
+test("Front door", "Continue resumes the saved campaign rather than a fresh one", () => {
+  withEmptyCampaignSlot(() => {
+    const campaign = createCampaignState();
+    const firstOperator = Object.keys(campaign.roster)[0];
+    const advanced = {
+      ...campaign,
+      supplies: campaign.supplies + 250,
+      completed: ["act1-01-hollowmere-perimeter"],
+      flags: { ...campaign.flags, resumeProbe: true },
+      roster: {
+        ...campaign.roster,
+        [firstOperator]: { ...campaign.roster[firstOperator], xp: 480, rank: 3 }
+      }
+    };
+
+    assertEqual(writeCampaignSlot(saveCampaign(advanced)), true, "the slot accepted the write");
+    assertEqual(hasCampaignSlot(), true, "and Continue now has something to do");
+
+    const resumed = loadCampaignSlot();
+    assert(resumed, "the save loaded");
+    assertEqual(resumed.supplies, advanced.supplies, "resources came back");
+    assertEqual(resumed.flags.resumeProbe, true, "story flags came back");
+    assertEqual(resumed.roster[firstOperator].rank, 3, "and so did the roster");
+    assert(
+      resumed.completed.includes("act1-01-hollowmere-perimeter"),
+      "a finished operation stays finished"
+    );
+    // The point of the test: this is not just a new campaign wearing a hat.
+    assert(
+      resumed.supplies !== createCampaignState().supplies ||
+        resumed.roster[firstOperator].rank !== 1,
+      "Continue must differ from a fresh campaign"
+    );
+  });
+});
+
+test("Front door", "New Game starts clean and writes nothing on its own", () => {
+  withEmptyCampaignSlot(() => {
+    writeCampaignSlot(saveCampaign({ ...createCampaignState(), supplies: 9999 }));
+
+    // Starting a new campaign is what New Game hands to the game route.
+    const fresh = createCampaignState();
+    assertEqual(fresh.completed.length, 0, "nothing is completed yet");
+    assertEqual(fresh.activeMissionId, null, "and nothing is in progress");
+    assertEqual(Object.keys(fresh.flags).length, 0, "no story flags carried over");
+    assert(fresh.available.length > 0, "the first operation is offered");
+    for (const operatorId of Object.keys(fresh.roster)) {
+      assertEqual(fresh.roster[operatorId].rank, 1, operatorId + " starts at rank 1");
+      assertEqual(fresh.roster[operatorId].xp, 0, operatorId + " starts with no XP");
+    }
+
+    // And the existing save is still there: a new campaign only reaches disk
+    // when the player saves it, so backing out of one costs nothing.
+    const stillSaved = loadCampaignSlot();
+    assert(stillSaved, "the previous save survived starting a new game");
+    assertEqual(stillSaved.supplies, 9999, "untouched");
+  });
+});
+
+test("Front door", "A corrupt or foreign slot reports no save rather than throwing", () => {
+  withEmptyCampaignSlot(() => {
+    writeCampaignSlot("{ this is not json");
+    assertEqual(loadCampaignSlot(), null, "garbage is not a save");
+    assertEqual(hasCampaignSlot(), false, "and Continue stays disabled");
+
+    writeCampaignSlot(JSON.stringify({ version: 999, roster: {} }));
+    assertEqual(loadCampaignSlot(), null, "nor is a save from a future version");
+  });
+});
+
+test("Front door", "Saving and reloading a campaign round-trips through the slot", () => {
+  withEmptyCampaignSlot(() => {
+    const campaign = createCampaignState();
+    writeCampaignSlot(saveCampaign(campaign));
+    const reloaded = loadCampaignSlot();
+    assert(reloaded, "reloaded");
+    assertEqual(
+      JSON.stringify(Object.keys(reloaded.roster).sort()),
+      JSON.stringify(Object.keys(campaign.roster).sort()),
+      "the roster survives the round trip"
+    );
+    clearCampaignSlot();
+    assertEqual(hasCampaignSlot(), false, "and clearing it really clears it");
+  });
+});
+
+test("Front door", "Entering the editor cannot touch the campaign slot", () => {
+  withEmptyCampaignSlot(() => {
+    writeCampaignSlot(saveCampaign({ ...createCampaignState(), supplies: 4242 }));
+    const before = readCampaignSlot();
+
+    // The editor's own persistence is a different key entirely. Authoring a
+    // mission is content work; it is not campaign state and must not look
+    // like it.
+    assert(
+      PLAYTEST_STORAGE_KEY !== CAMPAIGN_SAVE_KEY,
+      "the playtest slot is not the campaign slot"
+    );
+    assert(
+      !PLAYTEST_STORAGE_KEY.startsWith(CAMPAIGN_SAVE_KEY),
+      "and does not live underneath it"
+    );
+
+    clearPlaytestMission();
+    assertEqual(readCampaignSlot(), before, "clearing a playtest leaves the campaign alone");
+    assertEqual(loadCampaignSlot().supplies, 4242, "still resumable");
+  });
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
@@ -32126,7 +32353,11 @@ function AppMusicPlayer({ request, enabled, masterVolume, musicVolume, onStatus 
   );
 }
 
-function SettingsMenu({ open, onClose, uiScaleId, onUiScale, masterVolume, onMasterVolume, musicVolume, onMusicVolume, musicEnabled, onMusicEnabled, musicRequest, musicStatus, windowViewport, logicalViewport }) {
+function SettingsMenu({ open, onClose, uiScaleId, onUiScale, masterVolume, onMasterVolume, musicVolume, onMusicVolume, musicEnabled, onMusicEnabled, musicRequest, musicStatus, windowViewport, logicalViewport, onReturnToMenu, canReturnToMenu }) {
+  const [confirmingExit, setConfirmingExit] = React.useState(false);
+  React.useEffect(() => {
+    if (!open) setConfirmingExit(false);
+  }, [open]);
   if (!open) return null;
   const context = musicRequest && musicRequest.context ? musicRequest.context : "base";
   const requestedCandidates = musicCandidatesFor(musicRequest || { context });
@@ -32182,6 +32413,41 @@ function SettingsMenu({ open, onClose, uiScaleId, onUiScale, masterVolume, onMas
               <p className="mt-1 break-all text-[9px] text-slate-600">Loaded: {musicStatus.src || "none"}</p>
             </div>
           </section>
+
+          {canReturnToMenu ? (
+            <section className="border-t border-slate-800 pt-6">
+              <p className="mb-3 text-[11px] uppercase tracking-[0.28em] text-sky-300/70">Session</p>
+              {confirmingExit ? (
+                <div className="border border-amber-300/40 bg-amber-950/20 p-4">
+                  <p className="text-[12px] leading-relaxed text-amber-200">
+                    Return to the title screen? Nothing is written on the way out, so anything
+                    since your last save is discarded — including a battle in progress.
+                  </p>
+                  <div className="mt-4 flex gap-3">
+                    <button
+                      onClick={onReturnToMenu}
+                      className="h-11 border border-amber-300/60 bg-amber-300/10 px-5 text-[11px] uppercase tracking-[0.18em] text-amber-100 hover:bg-amber-300/20"
+                    >
+                      Return to main menu
+                    </button>
+                    <button
+                      onClick={() => setConfirmingExit(false)}
+                      className="h-11 border border-slate-600 px-5 text-[11px] uppercase tracking-[0.18em] text-slate-300 hover:border-sky-300 hover:text-sky-100"
+                    >
+                      Stay
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmingExit(true)}
+                  className="h-11 w-full border border-slate-600 bg-slate-900 px-5 text-left text-[11px] uppercase tracking-[0.18em] text-slate-200 hover:border-sky-300/70 hover:text-sky-100"
+                >
+                  Return to main menu
+                </button>
+              )}
+            </section>
+          ) : null}
         </div>
       </div>
     </div>
@@ -32208,14 +32474,16 @@ function UiScaleControl({ scaleId, onScale, windowViewport, logicalViewport }) {
   );
 }
 
-function TacticalBattleContent({ viewport }) {
+function TacticalBattleContent({ viewport, initialCampaign }) {
   const appSettings = React.useContext(SettingsContext);
   const [deployment, setDeployment] = React.useState(null);
   const [deployed, setDeployed] = React.useState(false);
   const rosterRef = React.useRef(null);
 
-  // Campaign layer: screens, story flags and persistence.
-  const [campaign, setCampaign] = React.useState(() => createCampaignState());
+  // Campaign layer: screens, story flags and persistence. `initialCampaign`
+  // is what Continue hands in; null means a fresh run, which is both what New
+  // Game wants and what a bare mount (playtest, a harness) has always done.
+  const [campaign, setCampaign] = React.useState(() => initialCampaign || createCampaignState());
   // The editor's Playtest button drops a mission into sessionStorage and opens
   // the game; when that slot is filled we boot straight into the battle instead
   // of the hub, so painting a tile and standing on it are one click apart.
@@ -32227,7 +32495,9 @@ function TacticalBattleContent({ viewport }) {
   );
   const [missionResult, setMissionResult] = React.useState(null);
   const [pendingOutcome, setPendingOutcome] = React.useState(null);
-  const [saveNote, setSaveNote] = React.useState("Campaign not saved yet.");
+  const [saveNote, setSaveNote] = React.useState(
+    initialCampaign ? "Campaign loaded from your last save." : "Campaign not saved yet."
+  );
   const [storyLog, setStoryLog] = React.useState([]);
   const [combatDialogueQueue, setCombatDialogueQueue] = React.useState([]);
   // The mission runtime's blocking scene, if the battle is suspended on one.
@@ -33452,24 +33722,19 @@ function TacticalBattleContent({ viewport }) {
         onChoosePerk={(operatorId, perkId) => setCampaign((current) => chooseCampaignPerk(current, operatorId, perkId))}
         onSave={() => {
           const serialized = saveCampaign(campaign);
-          try {
-            window.storage.set("campaignSave", serialized);
-          } catch (error) {
-            /* storage is optional */
-          }
-          setSaveNote("Campaign saved (" + serialized.length + " bytes).");
+          const written = writeCampaignSlot(serialized);
+          setSaveNote(
+            written
+              ? "Campaign saved (" + serialized.length + " bytes)."
+              : "Could not save — browser storage is unavailable."
+          );
         }}
-        onLoad={async () => {
-          try {
-            const stored = await window.storage.get("campaignSave");
-            const loaded = stored ? loadCampaign(stored.value) : null;
-            if (loaded) {
-              setCampaign(loaded);
-              setSaveNote("Campaign loaded.");
-            } else {
-              setSaveNote("No save found.");
-            }
-          } catch (error) {
+        onLoad={() => {
+          const loaded = loadCampaignSlot();
+          if (loaded) {
+            setCampaign(loaded);
+            setSaveNote("Campaign loaded.");
+          } else {
             setSaveNote("No save found.");
           }
         }}
@@ -33964,6 +34229,197 @@ function TacticalBattleContent({ viewport }) {
   );
 }
 
+/* =========================================================================
+ * FRONT DOOR
+ *
+ * The top-level shell. Three routes:
+ *
+ *   menu    the title screen — where the application now starts
+ *   game    the campaign, unchanged: base -> missions -> briefing -> battle
+ *   editor  the existing mission editor, mounted rather than reimplemented
+ *
+ * The campaign flow below `game` is untouched. This is the shell that was
+ * missing above it.
+ * =======================================================================*/
+
+const APP_ROUTES = ["menu", "game", "editor"];
+
+/**
+ * Where the application starts.
+ *
+ * Two things outrank the menu, both of them deliberate requests from a tool
+ * rather than a person:
+ *
+ *   the editor's Playtest slot — paint a tile, press play, stand on it. Making
+ *   that round trip pass through a title screen would be a worse tool.
+ *
+ *   ?boot=  — the explicit harness escape hatch. A test that needs the base
+ *   screen or the editor asks for it by name instead of clicking through.
+ */
+function resolveStartupRoute(search, playtestMissionId) {
+  const query = typeof search === "string" ? search : "";
+  const requested = (query.match(/[?&]boot=([a-z]+)/i) || [])[1];
+  if (requested && APP_ROUTES.includes(requested.toLowerCase())) {
+    return requested.toLowerCase();
+  }
+  const playtest =
+    playtestMissionId === undefined ? MISSION_CONTENT.playtestMissionId : playtestMissionId;
+  if (playtest) return "game";
+  return "menu";
+}
+
+function MenuItem({ label, hint, onClick, disabled, tone }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={
+        "group relative block w-full border px-6 py-4 text-left transition " +
+        (disabled
+          ? "cursor-not-allowed border-slate-800 bg-slate-950/40 text-slate-700"
+          : tone === "primary"
+          ? "border-sky-300/45 bg-sky-950/25 text-slate-100 hover:border-sky-200/80 hover:bg-sky-900/30"
+          : "border-slate-700 bg-slate-950/60 text-slate-200 hover:border-sky-300/50 hover:bg-slate-900/70")
+      }
+    >
+      <span className="font-display text-[19px] uppercase tracking-[0.14em]">{label}</span>
+      {hint ? (
+        <span className="mt-1 block text-[11px] leading-relaxed tracking-[0.04em] text-slate-500">
+          {hint}
+        </span>
+      ) : null}
+      {!disabled ? (
+        <span className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2 text-[15px] text-sky-300/0 transition group-hover:text-sky-300/70">
+          ▸
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function MenuGroup({ label, children }) {
+  return (
+    <div>
+      <p className="mb-3 text-[10px] uppercase tracking-[0.3em] text-slate-600">{label}</p>
+      <div className="space-y-3">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * The title screen.
+ *
+ * Deliberately built from the same primitives every other screen uses —
+ * `CinematicBackdrop`, `TitlePlaque`, `FrameCorners` — so it reads as part of
+ * the game rather than as a launcher bolted onto the front.
+ */
+function MainMenu({ hasSave, saveSummary, onContinue, onNewGame, onEditor, onSettings }) {
+  const [confirmingNew, setConfirmingNew] = React.useState(false);
+
+  return (
+    <CinematicBackdrop>
+      <div className="absolute inset-0 z-10 flex items-center">
+        <div className="w-full px-[110px]">
+          <div className="grid items-center gap-16" style={{ gridTemplateColumns: "minmax(0,1fr) 430px" }}>
+            <div>
+              <p className="font-display text-[13px] uppercase tracking-[0.42em] text-sky-300/70">
+                Tactical operations
+              </p>
+              <h1
+                className="mt-4 font-display uppercase leading-[0.9] text-slate-100"
+                style={{ fontSize: 104, letterSpacing: "0.04em" }}
+              >
+                Status<span className="text-sky-300"> Zero</span>
+              </h1>
+              <div className="mt-7 h-px w-[420px] bg-gradient-to-r from-sky-300/60 to-transparent" />
+              <p className="mt-7 max-w-[520px] text-[13px] leading-relaxed text-slate-500">
+                A deterministic tactical simulator. Every battle replays from its seed, every
+                mission is a file you can open, and every faction only knows what it can see.
+              </p>
+            </div>
+
+            <div className="relative border border-slate-700/80 bg-slate-950/75 p-8 shadow-[0_24px_70px_rgba(0,0,0,0.55)]">
+              <FrameCorners />
+              <div className="space-y-8">
+                <MenuGroup label="Play">
+                  <MenuItem
+                    label="Continue"
+                    tone="primary"
+                    hint={hasSave ? saveSummary : "No saved campaign yet."}
+                    disabled={!hasSave}
+                    onClick={onContinue}
+                  />
+                  {confirmingNew ? (
+                    <div className="border border-amber-300/40 bg-amber-950/20 px-5 py-4">
+                      <p className="text-[12px] leading-relaxed text-amber-200">
+                        A saved campaign already exists. Starting a new one leaves it on disk —
+                        it is only overwritten the next time you save.
+                      </p>
+                      <div className="mt-4 flex gap-3">
+                        <Button tone="primary" size="sm" onClick={onNewGame}>
+                          Start new campaign
+                        </Button>
+                        <Button size="sm" onClick={() => setConfirmingNew(false)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <MenuItem
+                      label="New Game"
+                      hint="Begin the campaign from the first operation."
+                      onClick={() => (hasSave ? setConfirmingNew(true) : onNewGame())}
+                    />
+                  )}
+                </MenuGroup>
+
+                <MenuGroup label="Tools">
+                  <MenuItem
+                    label="Mission Editor"
+                    hint="Paint a map, script it, playtest it. Authoring only — never touches your campaign."
+                    onClick={onEditor}
+                  />
+                </MenuGroup>
+
+                <MenuGroup label="System">
+                  <MenuItem
+                    label="Settings"
+                    hint="Display scale, master and music volume."
+                    onClick={onSettings}
+                  />
+                </MenuGroup>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer className="absolute bottom-6 left-[110px] z-20 text-[10px] uppercase tracking-[0.22em] text-slate-700">
+        Prototype build · press Esc for settings
+      </footer>
+    </CinematicBackdrop>
+  );
+}
+
+/** Loading state for the lazily-imported editor, in the game's own language. */
+function RouteLoading({ label }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-[#030811] font-mono text-[11px] uppercase tracking-[0.24em] text-slate-600">
+      {label}
+    </div>
+  );
+}
+
+/**
+ * The mission editor, kept out of the game bundle.
+ *
+ * Lazily imported so the tool's weight is only paid by someone who opens it,
+ * and so `editor.html` and this route render the exact same component. There
+ * is no second copy of the editor inside the game shell.
+ */
+const LazyMissionEditor = React.lazy(() => import("./editor/Editor.jsx"));
+
 export default function TacticalBattle() {
   const [windowViewport, setWindowViewport] = React.useState(() => ({
     width: typeof window === "undefined" ? UI_DESIGN_RESOLUTION.width : window.innerWidth,
@@ -33971,6 +34427,16 @@ export default function TacticalBattle() {
   }));
   const [uiScaleId, setUiScaleId] = React.useState(readUiScalePreference);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [route, setRoute] = React.useState(() =>
+    resolveStartupRoute(typeof window === "undefined" ? "" : window.location.search)
+  );
+  // The campaign the game route should open with. Null means "a fresh one",
+  // which is what New Game and the playtest slot both want.
+  const [bootCampaign, setBootCampaign] = React.useState(null);
+  // Remounts the campaign so New Game after Continue genuinely starts over
+  // rather than reusing the previous run's component state.
+  const [gameInstance, setGameInstance] = React.useState(0);
+  const [saveSlot, setSaveSlot] = React.useState(() => (route === "menu" ? hasCampaignSlot() : false));
   const [masterVolume, setMasterVolume] = React.useState(() => readStoredPercent("tactical-master-volume", 80));
   const [musicVolume, setMusicVolume] = React.useState(() => readStoredPercent("tactical-music-volume", 70));
   const [musicEnabled, setMusicEnabled] = React.useState(() => readStoredBoolean("tactical-music-enabled", true));
@@ -33989,6 +34455,9 @@ export default function TacticalBattle() {
     if (typeof window === "undefined") return undefined;
     const onKey = (event) => {
       if (event.key !== "Escape" || event.repeat) return;
+      // The editor owns its own keyboard. Stealing Escape from it to open the
+      // game's settings would be wrong in a tool where Escape cancels things.
+      if (route === "editor") return;
       event.preventDefault();
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
@@ -33996,7 +34465,7 @@ export default function TacticalBattle() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [route]);
 
   const selectedScale = UI_SCALE_OPTIONS.find((option) => option.id === uiScaleId) || UI_SCALE_OPTIONS[2];
   const uiFactor = selectedScale.factor;
@@ -34015,13 +34484,64 @@ export default function TacticalBattle() {
   const changeMusicVolume = (value) => { setMusicVolume(value); persistSetting("tactical-music-volume", value); };
   const changeMusicEnabled = (value) => { setMusicEnabled(value); persistSetting("tactical-music-enabled", value); };
 
+  /* ---- route actions ---- */
+
+  const openMenu = React.useCallback(() => {
+    setSettingsOpen(false);
+    // Going back to the title screen is unambiguously "done playtesting", and
+    // the slot outranks the menu at startup — leaving it set would send the
+    // next reload straight back into the battle you just walked out of.
+    clearPlaytestMission();
+    setRoute("menu");
+    // Re-read the slot on the way in, so Continue reflects anything the run
+    // that just ended saved.
+    setSaveSlot(hasCampaignSlot());
+  }, []);
+
+  const continueCampaign = React.useCallback(() => {
+    const loaded = loadCampaignSlot();
+    if (!loaded) {
+      // Continue is disabled without a save, so this only happens if the slot
+      // was cleared in another tab. Stay put rather than start a silent new run.
+      setSaveSlot(false);
+      return;
+    }
+    setBootCampaign(loaded);
+    setGameInstance((value) => value + 1);
+    setRoute("game");
+  }, []);
+
+  const startNewCampaign = React.useCallback(() => {
+    // No save is written here. A new campaign only reaches disk when the
+    // player saves it, so backing out of one costs nothing.
+    setBootCampaign(null);
+    setGameInstance((value) => value + 1);
+    setRoute("game");
+  }, []);
+
   const settingsContextValue = React.useMemo(() => ({
     settingsOpen,
     openSettings: () => setSettingsOpen(true),
     closeSettings: () => setSettingsOpen(false),
     setMusicRequest,
-    logicalViewport
-  }), [settingsOpen, logicalViewport]);
+    logicalViewport,
+    route,
+    returnToMenu: openMenu
+  }), [settingsOpen, logicalViewport, route, openMenu]);
+
+  // The editor is a dense tool, not a cinematic canvas: it takes the whole
+  // window rather than being letterboxed into 1920x1080 and scaled.
+  if (route === "editor") {
+    return (
+      <SettingsContext.Provider value={settingsContextValue}>
+        <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }} className="bg-[#020609]">
+          <React.Suspense fallback={<RouteLoading label="Loading mission editor…" />}>
+            <LazyMissionEditor onExit={openMenu} />
+          </React.Suspense>
+        </div>
+      </SettingsContext.Provider>
+    );
+  }
 
   return (
     <SettingsContext.Provider value={settingsContextValue}>
@@ -34040,7 +34560,22 @@ export default function TacticalBattle() {
             boxShadow: "0 0 0 1px rgba(82,132,171,0.42), 0 30px 100px rgba(0,0,0,0.9)"
           }}
         >
-          <TacticalBattleContent viewport={logicalViewport} />
+          {route === "menu" ? (
+            <MainMenu
+              hasSave={saveSlot}
+              saveSummary="Resume your saved campaign."
+              onContinue={continueCampaign}
+              onNewGame={startNewCampaign}
+              onEditor={() => setRoute("editor")}
+              onSettings={() => setSettingsOpen(true)}
+            />
+          ) : (
+            <TacticalBattleContent
+              key={gameInstance}
+              viewport={logicalViewport}
+              initialCampaign={bootCampaign}
+            />
+          )}
         </div>
 
         {(canvasPhysicalWidth < windowViewport.width - 2 || canvasPhysicalHeight < windowViewport.height - 2) ? (
@@ -34072,6 +34607,8 @@ export default function TacticalBattle() {
           musicStatus={musicStatus}
           windowViewport={windowViewport}
           logicalViewport={logicalViewport}
+          canReturnToMenu={route === "game"}
+          onReturnToMenu={openMenu}
         />
       </div>
     </SettingsContext.Provider>
@@ -34086,6 +34623,10 @@ function panelVisibleCoversHover(panel, hover) {
 /* Component registry for the architecture audit. */
 const UI_COMPONENTS = {
   GameFontStyles,
+  MainMenu,
+  MenuItem,
+  MenuGroup,
+  RouteLoading,
   Button,
   Panel,
   AssetImage,
@@ -34201,6 +34742,21 @@ if (typeof window !== "undefined") {
     },
     perceptionDeps,
     perceptionEngine: PERCEPTION_ENGINE,
+    // The campaign slot behind the main menu's Continue. Exposed so a harness
+    // can stage a real save instead of hand-writing a blob that only looks
+    // like one.
+    campaign: {
+      create: createCampaignState,
+      serialize: saveCampaign,
+      deserialize: loadCampaign,
+      read: readCampaignSlot,
+      write: writeCampaignSlot,
+      clear: clearCampaignSlot,
+      load: loadCampaignSlot,
+      has: hasCampaignSlot,
+      storageKey: CAMPAIGN_SAVE_KEY
+    },
+    resolveStartupRoute,
     // The AI's targeting and threat-scoring path, as source, so an external
     // check can assert it names no stealth concept.
     enumerateAiTargets,
