@@ -52,6 +52,14 @@ export const MISSION_EVENT_TYPES = [
   { id: "groupSpawned", name: "Group spawned", fields: ["groupRef"] },
   { id: "eliteSpotted", name: "Elite spotted", fields: ["unitRef", "teamId"], derived: true },
   { id: "factionChanged", name: "Faction relationship changed", fields: ["teamId", "otherTeamId", "relationship"] },
+  {
+    id: "knowledgeChanged",
+    name: "Faction knowledge changed",
+    // `from`/`to` are knowledge states, `reason` is why it moved: observed,
+    // contactLost, decayed, recon or a scripted source. This is the trigger an
+    // author reaches for to write "the moment they spot you".
+    fields: ["factionId", "unitRef", "teamId", "from", "to", "reason"]
+  },
   { id: "terrainDestroyed", name: "Terrain changed", fields: ["terrainId", "regionRef"] },
   { id: "phaseStarted", name: "Phase started", fields: ["phaseRef"] },
   { id: "phaseCompleted", name: "Phase completed", fields: ["phaseRef"] },
@@ -165,6 +173,18 @@ export function deriveMissionEvents(simEvent, view) {
       }
       break;
     }
+
+    case "knowledgeChanged":
+      out.push({
+        type: "knowledgeChanged",
+        factionId: simEvent.factionId,
+        unitRef: ref(simEvent.unitId),
+        teamId: team(simEvent.unitId),
+        from: simEvent.from,
+        to: simEvent.to,
+        reason: simEvent.reason || "observed"
+      });
+      break;
 
     case "healResolved":
       out.push({

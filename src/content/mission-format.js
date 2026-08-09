@@ -40,6 +40,7 @@ import { validateAction } from "../mission/actions.js";
 import { validateTrigger, validateCondition } from "../mission/conditions.js";
 import { normalizeRelationship, RELATIONSHIPS } from "../mission/factions.js";
 import { LINK_IDS } from "./reactions.js";
+import { CHANNEL_IDS, KNOWLEDGE_STATES } from "../perception/channels.js";
 
 export const FORMAT_ID = "statuszero.mission";
 export const FORMAT_VERSION = 1;
@@ -745,6 +746,8 @@ function buildScriptRefs(mission, catalog) {
     teams: new Set(mission.teams.map((team) => team.id)),
     terrains: new Set(TERRAIN_IDS),
     links: new Set((catalog && catalog.links) || LINK_IDS),
+    channels: new Set(CHANNEL_IDS),
+    knowledgeStates: new Set(KNOWLEDGE_STATES),
     abilities: new Set((catalog && catalog.abilities) || ABILITY_IDS),
     statuses: new Set((catalog && catalog.statuses) || STATUS_IDS)
   };

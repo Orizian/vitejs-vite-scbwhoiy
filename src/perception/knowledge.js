@@ -64,7 +64,7 @@ export const DEFAULT_PERCEPTION_CONFIG = {
  * -------------------------------------------------------------*/
 
 export function createPerceptionState(factionIds, options) {
-  const config = { ...DEFAULT_PERCEPTION_CONFIG, ...((options && options.config) || {}) };
+  const config = { ...DEFAULT_PERCEPTION_CONFIG, ...(options && options.config) };
   const factions = {};
   for (const factionId of factionIds || []) factions[factionId] = newFaction();
   return {

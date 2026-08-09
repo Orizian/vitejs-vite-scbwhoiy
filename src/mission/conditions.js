@@ -21,6 +21,7 @@
 
 import { MISSION_EVENT_TYPES, missionEventTypeById } from "./events.js";
 import { relationshipBetween } from "./factions.js";
+import { KNOWLEDGE_RANK } from "../perception/channels.js";
 
 /* ---------------------------------------------------------------
  * TRIGGERS
@@ -231,6 +232,26 @@ export const CONDITION_REGISTRY = {
       if (condition.atLeast != null && count < condition.atLeast) return false;
       if (condition.atMost != null && count > condition.atMost) return false;
       return true;
+    }
+  },
+
+  /**
+   * What a faction believes, as a condition.
+   *
+   * `atLeast` is the useful form: "the garrison has at least suspected Nyx" is
+   * one check whether they merely heard something or have a firing solution.
+   */
+  knowledgeState: {
+    fields: ["knowledgeState", "factionId", "is", "atLeast"],
+    summary:
+      "A faction's belief about a unit: unseen, suspected or acquired. " +
+      "`is` matches exactly; `atLeast` matches that state or better.",
+    evaluate(condition, ctx) {
+      if (!ctx.knowledgeState) return false;
+      const actual = ctx.knowledgeState(condition.factionId, condition.knowledgeState);
+      if (condition.is) return actual === condition.is;
+      const wanted = condition.atLeast || "suspected";
+      return KNOWLEDGE_RANK[actual] >= KNOWLEDGE_RANK[wanted];
     }
   },
 

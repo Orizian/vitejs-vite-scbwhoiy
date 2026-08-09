@@ -43,7 +43,8 @@ import {
 import { REACTION_EFFECT_REGISTRY, validateReactionEffect } from "./reactions/effects.js";
 import {
   REACTION_CONDITION_REGISTRY,
-  validateReactionCondition
+  validateReactionCondition,
+  evaluateReactionCondition
 } from "./reactions/conditions.js";
 import {
   REACTION_EVENT_TYPES,
@@ -56,8 +57,7 @@ import {
   CHANNEL_ORDER,
   KNOWLEDGE_STATES,
   DEFAULT_SENSOR_PROFILE,
-  DEFAULT_EMISSION_PROFILE,
-  rankOf as knowledgeRank
+  DEFAULT_EMISSION_PROFILE
 } from "./perception/channels.js";
 import {
   knowledgeOf,
@@ -65,8 +65,6 @@ import {
   setKnowledge,
   clearKnowledge,
   shareKnowledge,
-  describeFactionKnowledge,
-  countKnowledge,
   PERCEPTION_VERSION
 } from "./perception/knowledge.js";
 import { emitSignature } from "./perception/sensors.js";
@@ -1702,6 +1700,9 @@ const STATUSES = {
     // abilities cannot pick this unit, and opposing players cannot see it.
     untargetable: true,
     hidden: true,
+    // The same fact stated to the sensor model: it gives off no light. Heat is
+    // untouched, which is why a thermal optic still finds it.
+    perception: { emissions: { optical: 0 } },
     removedOnHostileAction: true,
     modifiers: {},
     triggers: []
@@ -1961,6 +1962,34 @@ const EQUIPMENT = {
     description: "Sensor package that sharpens every shot.",
     tags: ["sensor"],
     modifiers: [{ stat: "accuracy", mode: "flat", value: 6 }],
+    grantsAbilities: []
+  },
+
+  thermalOptics: {
+    name: "Thermal Optics",
+    slot: "utilitySystem",
+    compatibleClasses: [],
+    description:
+      "Reads heat instead of light. Sees a body through smoke and through a cloak field, " +
+      "but no better through a wall than anyone else.",
+    tags: ["sensor", "counterStealth"],
+    modifiers: [],
+    // The whole counter-stealth tier is this shape: a sensor range on a
+    // channel that pierces concealment. No ability, no status, no exception.
+    perception: { sensors: { thermal: { range: 8 } } },
+    grantsAbilities: []
+  },
+
+  signalScanner: {
+    name: "Signal Scanner",
+    slot: "utilitySystem",
+    compatibleClasses: [],
+    description:
+      "Passive EM listener. Terrain does not stop it, but a bearing is not a firing solution — " +
+      "it produces a contact to investigate, never a target.",
+    tags: ["sensor"],
+    modifiers: [],
+    perception: { sensors: { signal: { range: 14 } } },
     grantsAbilities: []
   },
 
@@ -8659,6 +8688,92 @@ const MISSION_ENGINE = {
     });
     queueEvent(state, { type: "unitChangedTeam", unitId, from, to: teamId });
     refreshReactionLinks(state);
+    // Deliberately no knowledge transfer. A defector brings themselves, not
+    // their old side's map; a betrayal that is meant to come with the dossier
+    // is an explicit `shareKnowledge` beat, which is the moment an author
+    // wants to control anyway.
+  },
+
+  /* ---- knowledge ---- */
+
+  setKnowledge(state, factionId, unitIds, next, options) {
+    if (!state.perception) return 0;
+    let changed = 0;
+    for (const unitId of unitIds) {
+      const unit = state.units[unitId];
+      if (!unit) continue;
+      const atLastKnown = options && options.atLastKnown;
+      const existing = knowledgeOf(state.perception, factionId, unitId);
+      const position =
+        atLastKnown && existing && existing.x != null
+          ? { x: existing.x, y: existing.y }
+          : { x: unit.x, y: unit.y };
+      const change = setKnowledge(state.perception, factionId, unitId, next, {
+        activation: (state.perception.factions[factionId] || {}).clock || 0,
+        x: position.x,
+        y: position.y,
+        accuracy: next === "acquired" ? "exact" : "approximate",
+        channels: ["intel"],
+        source: "script"
+      });
+      if (change) {
+        changed += 1;
+        queueEvent(state, {
+          type: "knowledgeChanged",
+          factionId,
+          unitId,
+          from: change.from,
+          to: change.to,
+          reason: "script",
+          x: change.record.x,
+          y: change.record.y
+        });
+      }
+    }
+    return changed;
+  },
+
+  shareKnowledge(state, fromFactionId, toFactionId, options) {
+    if (!state.perception) return 0;
+    const changes = shareKnowledge(state.perception, fromFactionId, toFactionId, {
+      activation: (state.perception.factions[toFactionId] || {}).clock || 0,
+      unitIds: (options && options.unitIds) || null,
+      maxState: (options && options.maxState) || "acquired"
+    });
+    for (const change of changes) {
+      queueEvent(state, {
+        type: "knowledgeChanged",
+        factionId: toFactionId,
+        unitId: change.unitId,
+        from: change.from,
+        to: change.to,
+        reason: "shared",
+        x: change.record.x,
+        y: change.record.y
+      });
+    }
+    return changes.length;
+  },
+
+  emitSignature(state, unitIds, channel, options) {
+    if (!state.perception) return 0;
+    let changed = 0;
+    for (const unitId of unitIds) {
+      if (!state.units[unitId]) continue;
+      if (
+        emitSignature(state.perception, unitId, channel, {
+          activation: state.activationCount,
+          strength: (options && options.strength) == null ? 1 : options.strength,
+          duration: (options && options.duration) == null ? 1 : options.duration
+        })
+      ) {
+        changed += 1;
+      }
+    }
+    // Sweep immediately: a vent that lights someone up should be seen in the
+    // same beat that opened it, not on whatever event happens to come next.
+    if (changed) refreshPerception(state, perceptionDeps());
+    return changed;
   },
 
   /** A scripted attack resolved through the real damage pipeline. */
@@ -8954,6 +9069,11 @@ function perceptionDeps() {
   return PERCEPTION_DEPS;
 }
 
+/** May this faction legitimately act against this unit right now? */
+function canPerceptionTarget(state, factionId, unitId) {
+  return factionCanActOn(state, perceptionDeps(), factionId, unitId);
+}
+
 /**
  * Units the mission itself names as targets, and the faction it names them to.
  *
@@ -9069,6 +9189,14 @@ const REACTION_ENGINE = {
     const unit = state.units[unitId];
     if (!unit) return 0;
     return (unit.currentHp / Math.max(1, calculateUnitStats(state, unitId).maxHp)) * 100;
+  },
+
+  /** What the viewer's faction believes about a unit. Non-hostiles are known. */
+  knowledgeState(state, viewerUnitId, subjectUnitId) {
+    const viewer = state.units[viewerUnitId];
+    if (!viewer || !state.perception || !state.perception.enabled) return "acquired";
+    if (!knowledgeGated(state, perceptionDeps(), viewer.teamId, subjectUnitId)) return "acquired";
+    return knowledgeStateOf(state.perception, viewer.teamId, subjectUnitId);
   },
 
   unitMovement(state, unitId) {
@@ -27808,6 +27936,606 @@ function measureSpeedFrequency(activations) {
     ) / 1000
   };
 }
+
+/* =========================================================================
+ * PERCEPTION AND KNOWLEDGE
+ *
+ * The acceptance target: AI decision-making may not use a hostile unit's true
+ * position unless that information is legitimately known to the acting
+ * faction. These tests cover the mechanism, then the gate, then the lifecycle,
+ * then the properties the stealth kit will depend on.
+ * =======================================================================*/
+
+/**
+ * Two units on an otherwise empty board, with knowledge swept from scratch.
+ *
+ * Row 0 of the proving grounds is clear all the way across, so the default
+ * placement has a genuine sightline and a wall dropped at x=4 genuinely takes
+ * it away.
+ */
+function perceptionBattle(options) {
+  const opts = options || {};
+  const state = testBattle(opts.seed == null ? 4242 : opts.seed);
+  isolate(state, ["u1", "u6"]);
+  place(state, "u1", opts.ax == null ? 1 : opts.ax, opts.ay == null ? 0 : opts.ay);
+  place(state, "u6", opts.bx == null ? 6 : opts.bx, opts.by == null ? 0 : opts.by);
+  // Deployment-time beliefs describe the deployment layout, not this one.
+  forgetEverything(state);
+  resweep(state);
+  return state;
+}
+
+function resweep(state) {
+  refreshPerception(state, perceptionDeps(), { emit: false });
+  return state;
+}
+
+function forgetEverything(state) {
+  for (const factionId of Object.keys(state.perception.factions)) {
+    state.perception.factions[factionId].units = {};
+  }
+  state.perception.signatures = {};
+  return state;
+}
+
+/** A solid wall column, so a test can take a sightline away deliberately. */
+function wallColumn(state, x, fromY, toY) {
+  for (let y = fromY; y <= toY; y += 1) {
+    state.terrainOverrides[tileKey(x, y)] = "wall";
+  }
+  return state;
+}
+
+function knowsAt(state, factionId, unitId) {
+  const record = knowledgeOf(state.perception, factionId, unitId);
+  return record ? record.state + "@" + record.x + "," + record.y : "unseen";
+}
+
+/** Runs `count` activations for one unit, so its faction's clock advances. */
+function idleActivations(state, unitId, count) {
+  for (let i = 0; i < count; i += 1) {
+    for (const id of state.unitOrder) {
+      if (id !== unitId) state.units[id].nextActionTime = state.currentTime + 100000;
+    }
+    activate(state, unitId);
+    executeCommand(state, { type: "wait", unitId });
+  }
+  return state;
+}
+
+function equip(state, unitId, slot, equipmentId) {
+  state.units[unitId].equipment = { ...state.units[unitId].equipment, [slot]: equipmentId };
+  return state;
+}
+
+/* --- Mechanism ------------------------------------------------- */
+
+test("Perception", "A clear line produces an acquired contact, held per faction", () => {
+  const state = perceptionBattle();
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "acquired");
+  assertEqual(knowledgeStateOf(state.perception, "player", "u6"), "acquired");
+  // Records are keyed by faction, and a faction never keeps one on its own.
+  assertEqual(knowledgeOf(state.perception, "foe", "u6"), null, "no record on own units");
+  assertEqual(knowledgeStateOf(state.perception, "player", "u1"), "unseen", "own units need no record");
+});
+
+test("Perception", "Terrain that blocks sight blocks knowledge", () => {
+  const state = perceptionBattle();
+  wallColumn(state, 4, 0, 7);
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "suspected", "acquired decays on contact loss");
+  resweep(state);
+  assertEqual(
+    believedPositionOf(state, perceptionDeps(), "foe", "u1", { minimumState: "acquired" }),
+    null,
+    "a walled-off unit yields no firing solution"
+  );
+});
+
+test("Perception", "Two hostile factions hold different knowledge about the same unit", () => {
+  // Three factions, mutually hostile. A wall hides u1 from one of them and not
+  // the other, so the same physical unit is acquired and unseen at once.
+  const state = testBattle(11);
+  isolate(state, ["u1", "u5", "u6"]);
+  MISSION_ENGINE.setUnitTeam(state, "u5", "thirdParty");
+  processAllEvents(state);
+  place(state, "u1", 1, 0);
+  place(state, "u6", 6, 0);
+  place(state, "u5", 3, 0);
+  wallColumn(state, 4, 0, 7);
+  forgetEverything(state);
+  resweep(state);
+
+  assertEqual(
+    knowledgeStateOf(state.perception, "thirdParty", "u1"),
+    "acquired",
+    "the near faction sees it"
+  );
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "unseen",
+    "the walled-off faction does not"
+  );
+  assert(
+    isHostile(state, "u5", "u1") && isHostile(state, "u6", "u1"),
+    "both observers are hostile to the subject"
+  );
+});
+
+test("Perception", "Concealment defeats optical but not thermal", () => {
+  const state = perceptionBattle();
+  resolveEffects(state, {
+    sourceUnitId: "u1",
+    targetUnitIds: ["u1"],
+    effects: [{ type: "applyStatus", statusId: "cloaked", chance: 1 }]
+  });
+  processAllEvents(state);
+  forgetEverything(state);
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen", "a cloak beats plain optics");
+
+  equip(state, "u6", "utilitySystem", "thermalOptics");
+  resweep(state);
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "acquired",
+    "heat is still heat under a cloak"
+  );
+});
+
+test("Perception", "A signal channel gives a contact through a wall, never a firing solution", () => {
+  const state = perceptionBattle();
+  wallColumn(state, 4, 0, 7);
+  equip(state, "u6", "utilitySystem", "signalScanner");
+  forgetEverything(state);
+  // Emission on the signal band: the scanner has nothing to hear otherwise.
+  emitSignature(state.perception, "u1", "signal", {
+    activation: state.activationCount,
+    strength: 1,
+    duration: 4
+  });
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "suspected");
+  assertEqual(canPerceptionTarget(state, "foe", "u1"), false, "a bearing is not a target");
+});
+
+test("Perception", "Firing gives a shooter away on the acoustic channel", () => {
+  const state = perceptionBattle();
+  wallColumn(state, 4, 0, 7);
+  forgetEverything(state);
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen", "walled off to begin with");
+
+  // u1 shoots at nothing in particular; the noise is what matters.
+  queueEvent(state, {
+    type: "abilityUsed",
+    sourceUnitId: "u1",
+    abilityId: "quickStrike",
+    targetUnitIds: []
+  });
+  processAllEvents(state);
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "suspected",
+    "they heard the shot through the wall"
+  );
+});
+
+test("Perception", "A scripted signature reveals a concealed unit to the right sensor", () => {
+  const state = perceptionBattle();
+  resolveEffects(state, {
+    sourceUnitId: "u1",
+    targetUnitIds: ["u1"],
+    effects: [{ type: "applyStatus", statusId: "cloaked", chance: 1 }]
+  });
+  processAllEvents(state);
+  forgetEverything(state);
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen");
+
+  // A thermal vent opening under the cloaked unit: a mission action, not an
+  // ability, and it names no character.
+  equip(state, "u6", "utilitySystem", "thermalOptics");
+  MISSION_ENGINE.emitSignature(state, ["u1"], "thermal", { strength: 2, duration: 2 });
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "acquired",
+    "the vent burns through the cloak"
+  );
+});
+
+/* --- The gate -------------------------------------------------- */
+
+test("Perception", "AI targeting cannot see an unknown hostile in range", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 4 });
+  const origin = { x: 3, y: 4 };
+  assert(
+    enumerateAiTargets(state, "u6", "quickStrike", origin).some((t) => t.unitId === "u1"),
+    "adjacent and visible: a legal candidate"
+  );
+
+  clearKnowledge(state.perception, "foe", "u1", 0);
+  assertEqual(
+    enumerateAiTargets(state, "u6", "quickStrike", origin).filter((t) => t.unitId === "u1").length,
+    0,
+    "unknown means absent from the candidate list entirely"
+  );
+});
+
+test("Perception", "A suspected contact is somewhere to go, never something to shoot", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 4 });
+  setKnowledge(state.perception, "foe", "u1", "suspected", {
+    activation: 0,
+    x: 3,
+    y: 3,
+    accuracy: "approximate"
+  });
+  assertEqual(
+    enumerateAiTargets(state, "u6", "quickStrike", { x: 3, y: 4 }).filter((t) => t.unitId === "u1").length,
+    0,
+    "suspected contacts are not targets"
+  );
+  const threats = perceivedThreats(state, perceptionDeps(), "foe");
+  assertEqual(threats.length, 1);
+  assertEqual(threats[0].targetable, false);
+  assertEqual(threats[0].threat, 0.5, "an unconfirmed contact weighs less");
+});
+
+test("Perception", "Tile scoring does not vary with an unknown hostile's true position", () => {
+  const state = perceptionBattle({ ax: 1, ay: 1, bx: 6, by: 6 });
+  clearKnowledge(state.perception, "foe", "u1", 0);
+  const weights = aiProfileFor(state, "u6");
+  const before = tilePositionScore(state, "u6", { x: 5, y: 5 }, weights);
+  // Move the hidden unit right next to the tile being scored. If any true
+  // coordinate leaked into the AI, this number would move.
+  place(state, "u1", 5, 4);
+  const after = tilePositionScore(state, "u6", { x: 5, y: 5 }, weights);
+  assertEqual(after, before, "an unseen hostile exerts no pull and no fear");
+});
+
+test("Perception", "A blind unit faces the map rather than an ambush it cannot have noticed", () => {
+  // The contact is south of the observer; the map's centre is north of it, so
+  // the two answers cannot coincide by accident.
+  const state = perceptionBattle({ ax: 3, ay: 7, bx: 3, by: 5 });
+  const seeing = nearestHostileFacing(state, "u6");
+  clearKnowledge(state.perception, "foe", "u1", 0);
+  const blind = nearestHostileFacing(state, "u6");
+  assertEqual(
+    seeing,
+    facingFromTiles(state.units.u6, { x: 3, y: 7 }, "southeast"),
+    "with a contact, it turns to face it"
+  );
+  assert(blind !== seeing, "with none, it falls back to the map default");
+});
+
+test("Perception", "An AI searches a last-known tile using only the record", () => {
+  const state = perceptionBattle({ ax: 1, ay: 0, bx: 6, by: 6 });
+  forgetEverything(state);
+  // Contact made, then the target vanishes to the far side of the board while
+  // the record still points at where it was.
+  setKnowledge(state.perception, "foe", "u1", "suspected", {
+    activation: 0,
+    x: 1,
+    y: 0,
+    accuracy: "approximate"
+  });
+  place(state, "u1", 7, 7);
+
+  const lead = searchTargetFor(state, perceptionDeps(), "u6");
+  assertEqual(lead.unitId, "u1");
+  assertEqual(lead.x + "," + lead.y, "1,0", "the searcher heads for the memory, not the unit");
+
+  const weights = aiProfileFor(state, "u6");
+  const towardMemory = tilePositionScore(state, "u6", { x: 2, y: 1 }, weights);
+  const towardTruth = tilePositionScore(state, "u6", { x: 6, y: 6 }, weights);
+  assert(towardMemory > towardTruth, "scoring pulls toward the last-known position");
+});
+
+/* --- Lifecycle ------------------------------------------------- */
+
+test("Perception", "Losing sight demotes to suspected and keeps the tile", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 5 });
+  assertEqual(knowsAt(state, "foe", "u1"), "acquired@3,3");
+  wallColumn(state, 3, 4, 4);
+  resweep(state);
+  assertEqual(knowsAt(state, "foe", "u1"), "suspected@3,3", "the memory survives the sightline");
+});
+
+test("Perception", "A stale contact is forgotten on the faction's own clock", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 5 });
+  wallColumn(state, 3, 4, 4);
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "suspected");
+
+  const limit = state.perception.config.suspectedDecayActivations;
+  idleActivations(state, "u6", limit - 1);
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "suspected",
+    "still inside the window"
+  );
+  idleActivations(state, "u6", 2);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen", "the lead went cold");
+  assertEqual(
+    believedPositionOf(state, perceptionDeps(), "foe", "u1"),
+    null,
+    "and takes its position with it"
+  );
+});
+
+test("Perception", "Decay counts the believer's activations, not everyone's", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 5 });
+  wallColumn(state, 3, 4, 4);
+  resweep(state);
+  const before = state.perception.factions.foe.clock;
+  // The *other* faction takes several turns. That must not age foe's memory.
+  idleActivations(state, "u1", state.perception.config.suspectedDecayActivations + 2);
+  assertEqual(state.perception.factions.foe.clock, before, "foe's clock did not move");
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "suspected",
+    "a busy enemy does not erode your memory"
+  );
+});
+
+test("Perception", "Searching an empty last-known tile retires the lead quickly", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 5 });
+  wallColumn(state, 3, 4, 4);
+  resweep(state);
+  // The searcher walks onto the last-known tile; the target is long gone and
+  // sealed off, so no sweep can hand the answer back.
+  place(state, "u6", 3, 3);
+  place(state, "u1", 0, 7);
+  wallColumn(state, 1, 0, 7);
+  searchTargetFor(state, perceptionDeps(), "u6");
+  const record = knowledgeOf(state.perception, "foe", "u1");
+  assertEqual(record.investigated, true, "standing on the lead counts as searching it");
+  idleActivations(state, "u6", state.perception.config.investigatedDecayActivations + 1);
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "unseen",
+    "a searched corner stops being interesting"
+  );
+});
+
+test("Perception", "Reacquiring restores a firing solution at the new position", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 5 });
+  wallColumn(state, 3, 4, 4);
+  resweep(state);
+  assertEqual(knowsAt(state, "foe", "u1"), "suspected@3,3");
+  delete state.terrainOverrides[tileKey(3, 4)];
+  delete state.terrainOverrides[tileKey(3, 5)];
+  place(state, "u1", 3, 2);
+  resweep(state);
+  assertEqual(knowsAt(state, "foe", "u1"), "acquired@3,2", "contact regained, position updated");
+});
+
+/* --- Factions and sharing -------------------------------------- */
+
+test("Perception", "Changing sides does not hand over the old faction's map", () => {
+  const state = perceptionBattle();
+  // A third party nobody can actually see, which the player has been briefed
+  // on. A defector's own eyes legitimately serve their new side — what must
+  // not travel is the part of the map that came from somewhere else.
+  state.units.u5.alive = true;
+  state.units.u5.currentHp = 40;
+  MISSION_ENGINE.setUnitTeam(state, "u5", "thirdParty");
+  processAllEvents(state);
+  place(state, "u5", 3, 3);
+  resolveEffects(state, {
+    sourceUnitId: "u5",
+    targetUnitIds: ["u5"],
+    effects: [{ type: "applyStatus", statusId: "cloaked", chance: 1 }]
+  });
+  processAllEvents(state);
+  forgetEverything(state);
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "player", "u5"), "unseen", "invisible to everyone");
+
+  MISSION_ENGINE.setKnowledge(state, "player", ["u5"], "acquired", {});
+  processAllEvents(state);
+  assert(
+    knowledgeStateOf(state.perception, "player", "u5") !== "unseen",
+    "the player was briefed on it"
+  );
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u5"), "unseen");
+
+  MISSION_ENGINE.setUnitTeam(state, "u1", "foe");
+  processAllEvents(state);
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u5"),
+    "unseen",
+    "a defector is not an intel handover"
+  );
+
+  // The same handover, done deliberately, does travel.
+  MISSION_ENGINE.shareKnowledge(state, "player", "foe", {});
+  processAllEvents(state);
+  assert(
+    knowledgeStateOf(state.perception, "foe", "u5") !== "unseen",
+    "an explicit share is how intel changes hands"
+  );
+});
+
+test("Perception", "Sharing knowledge is explicit, and can be capped", () => {
+  const state = perceptionBattle();
+  assertEqual(knowledgeStateOf(state.perception, "player", "u6"), "acquired");
+  const shared = MISSION_ENGINE.shareKnowledge(state, "player", "thirdParty", {
+    maxState: "suspected"
+  });
+  assert(shared > 0, "something was handed over");
+  assertEqual(
+    knowledgeStateOf(state.perception, "thirdParty", "u6"),
+    "suspected",
+    "capped on the way across"
+  );
+});
+
+/* --- Scripting and reactions ----------------------------------- */
+
+test("Perception", "Mission scripting can reveal, erase and read knowledge", () => {
+  const state = perceptionBattle();
+  wallColumn(state, 4, 0, 7);
+  forgetEverything(state);
+  resweep(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen");
+
+  assertEqual(MISSION_ENGINE.setKnowledge(state, "foe", ["u1"], "acquired", {}), 1);
+  processAllEvents(state);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "acquired");
+  assert(
+    state.battleLog.some((entry) => entry.type === "knowledgeChanged"),
+    "the transition reached the log"
+  );
+
+  assertEqual(MISSION_ENGINE.setKnowledge(state, "foe", ["u1"], "unseen", {}), 1);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen");
+});
+
+test("Perception", "A reaction gated on knowledge will not fire on an unseen unit", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 4 });
+  const condition = { knowsSubject: "acquired" };
+  const context = {
+    event: { unitId: "u1" },
+    knowledgeState: (id) => REACTION_ENGINE.knowledgeState(state, "u6", id)
+  };
+  assertEqual(evaluateReactionCondition(condition, context), true, "acquired: legal");
+
+  clearKnowledge(state.perception, "foe", "u1", 0);
+  assertEqual(evaluateReactionCondition(condition, context), false, "unseen: no reaction");
+
+  setKnowledge(state.perception, "foe", "u1", "suspected", { activation: 0, x: 3, y: 3 });
+  assertEqual(
+    evaluateReactionCondition(condition, context),
+    false,
+    "suspected is not a firing solution either"
+  );
+  assertEqual(
+    evaluateReactionCondition({ knowsSubject: "suspected" }, context),
+    true,
+    "but it satisfies a condition that only asks for a contact"
+  );
+});
+
+/* --- Save, replay and the off switch ---------------------------- */
+
+test("Perception", "Knowledge survives a save taken mid-search", () => {
+  const state = perceptionBattle({ ax: 3, ay: 3, bx: 3, by: 5 });
+  wallColumn(state, 3, 4, 4);
+  resweep(state);
+  assertEqual(knowsAt(state, "foe", "u1"), "suspected@3,3");
+
+  const reloaded = deserializeBattle(serializeBattle(state));
+  assertEqual(knowsAt(reloaded, "foe", "u1"), "suspected@3,3", "the contact rode along");
+  assertEqual(
+    reloaded.perception.factions.foe.clock,
+    state.perception.factions.foe.clock,
+    "and so did the clock the decay is measured on"
+  );
+  assertEqual(
+    JSON.stringify(reloaded.perception),
+    JSON.stringify(state.perception),
+    "knowledge round-trips byte-identically"
+  );
+});
+
+test("Perception", "Knowledge-driven battles stay deterministic", () => {
+  const runs = [0, 1].map(() => {
+    const state = createBattle(TEST_ENCOUNTER, 808);
+    const outcome = runBattle(state, 400);
+    return {
+      signature: outcome.winner + ":" + outcome.activations,
+      knowledge: JSON.stringify(describePerception(state, perceptionDeps()))
+    };
+  });
+  assertEqual(runs[0].signature, runs[1].signature);
+  assertEqual(runs[0].knowledge, runs[1].knowledge, "the same seed believes the same things");
+});
+
+test("Perception", "The system can be switched off, and then nothing is hidden", () => {
+  const state = createBattle(TEST_ENCOUNTER, 3, { perception: false });
+  wallColumn(state, 4, 0, 7);
+  assertEqual(state.perception.enabled, false);
+  const threats = perceivedThreats(state, perceptionDeps(), "foe");
+  const hostiles = state.unitOrder.filter(
+    (id) => state.units[id].alive && state.units[id].teamId === "player"
+  );
+  assertEqual(threats.length, hostiles.length, "every hostile is visible with knowledge disabled");
+  assert(threats.every((entry) => entry.targetable), "and every one of them is targetable");
+});
+
+test("Perception", "A blinded faction is handed contacts rather than standing still", () => {
+  const state = perceptionBattle({ ax: 1, ay: 1, bx: 6, by: 1 });
+  wallColumn(state, 4, 0, 7);
+  resweep(state);
+  idleActivations(state, "u6", state.perception.config.suspectedDecayActivations + 2);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen", "contact fully lost");
+
+  // Exactly on the configured threshold, counted from where the blind streak
+  // actually started — the escalation is a schedule, not a coin flip.
+  const foe = state.perception.factions.foe;
+  const remaining = state.perception.config.reconSweepActivations - foe.blindFor;
+  assert(remaining > 1, "the standoff is still running");
+  idleActivations(state, "u6", remaining - 1);
+  assertEqual(knowledgeStateOf(state.perception, "foe", "u1"), "unseen", "one activation short");
+  idleActivations(state, "u6", 1);
+  assertEqual(
+    knowledgeStateOf(state.perception, "foe", "u1"),
+    "suspected",
+    "reconnaissance breaks the standoff"
+  );
+  assertEqual(
+    canPerceptionTarget(state, "foe", "u1"),
+    false,
+    "and hands over a direction, not a target"
+  );
+});
+
+test("Perception", "Sensors and emissions are content, not engine features", () => {
+  const state = perceptionBattle();
+  const plain = sensorProfileFor(state, "u6").channels.thermal.range;
+  equip(state, "u6", "utilitySystem", "thermalOptics");
+  const equipped = sensorProfileFor(state, "u6").channels.thermal.range;
+  assertEqual(plain, 0, "no chassis has thermal by default");
+  assertEqual(equipped, CONTENT.equipment.thermalOptics.perception.sensors.thermal.range);
+
+  // Emissions compose multiplicatively, so nothing can out-stack a suppressor.
+  assertEqual(emissionProfileFor(state, "u1").optical, 1, "an ordinary body gives off light");
+  resolveEffects(state, {
+    sourceUnitId: "u1",
+    targetUnitIds: ["u1"],
+    effects: [{ type: "applyStatus", statusId: "cloaked", chance: 1 }]
+  });
+  processAllEvents(state);
+  const cloakedProfile = emissionProfileFor(state, "u1");
+  assertEqual(cloakedProfile.optical, 0, "a status can silence a channel");
+  assertEqual(cloakedProfile.thermal, 1, "and leave every other one alone");
+});
+
+test("Perception", "The knowledge model names no character, unit or mission", () => {
+  // The same discipline the mission and reaction layers are held to: the
+  // perception modules must be expressible against any content.
+  const sources = [
+    sensorProfileFor,
+    emissionProfileFor,
+    seedSearchAnchors,
+    grantObjectiveIntel,
+    briefedObjectiveTargets,
+    enumerateAiTargets,
+    tilePositionScore,
+    objectivePositionScore,
+    nearestHostileFacing
+  ]
+    .map((fn) => fn.toString())
+    .join("\n");
+  const offenders = [];
+  for (const registryName of ["units", "abilities", "statuses", "equipment", "encounters"]) {
+    for (const id of Object.keys(CONTENT[registryName])) {
+      if (sources.includes('"' + id + '"')) offenders.push(registryName + "." + id);
+    }
+  }
+  assertEqual(offenders.length, 0, offenders.join(", "));
+});
 
 /**
  * Replays the same seed twice and compares the resulting logs.

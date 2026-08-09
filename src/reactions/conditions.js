@@ -11,6 +11,8 @@
  * here is therefore cheap and side-effect free.
  * =======================================================================*/
 
+import { KNOWLEDGE_STATES as KNOWLEDGE_ORDER } from "../perception/channels.js";
+
 export const REACTION_CONDITION_REGISTRY = {
   all: {
     fields: ["all"],
@@ -109,6 +111,27 @@ export const REACTION_CONDITION_REGISTRY = {
       const targetId = condition.of === "source" ? ctx.event.sourceUnitId : ctx.event.unitId;
       const distance = ctx.distanceTo(targetId);
       return distance != null && distance <= condition.withinRange;
+    }
+  },
+
+  /**
+   * The reactor's faction knows the event's subject (or source) well enough.
+   *
+   * Without this, a reaction is a detection oracle: an overwatch shot that
+   * fires at a unit nobody can see tells the player exactly where it is. Any
+   * reaction that responds to a hostile should carry one of these.
+   */
+  knowsSubject: {
+    fields: ["knowsSubject", "of"],
+    summary:
+      "The reactor's faction holds at least this knowledge state on the event's subject " +
+      "(or its source, with `of: \"source\"`). Defaults to `acquired`.",
+    evaluate: (condition, ctx) => {
+      const targetId = condition.of === "source" ? ctx.event.sourceUnitId : ctx.event.unitId;
+      if (!targetId) return false;
+      const wanted = condition.knowsSubject === true ? "acquired" : condition.knowsSubject || "acquired";
+      const actual = ctx.knowledgeState(targetId);
+      return KNOWLEDGE_ORDER.indexOf(actual) >= KNOWLEDGE_ORDER.indexOf(wanted);
     }
   },
 

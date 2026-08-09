@@ -39,13 +39,13 @@ import {
 export function resolveSensorProfile(authored) {
   const channels = { ...DEFAULT_SENSOR_PROFILE.channels };
   for (const channelId of Object.keys((authored && authored.channels) || {})) {
-    channels[channelId] = { ...(channels[channelId] || {}), ...authored.channels[channelId] };
+    channels[channelId] = { ...channels[channelId], ...authored.channels[channelId] };
   }
   return { channels };
 }
 
 export function resolveEmissionProfile(authored) {
-  return { ...DEFAULT_EMISSION_PROFILE, ...(authored || {}) };
+  return { ...DEFAULT_EMISSION_PROFILE, ...authored };
 }
 
 /* ---------------------------------------------------------------

@@ -28,6 +28,7 @@
  * =======================================================================*/
 
 import { RELATIONSHIPS } from "./factions.js";
+import { KNOWLEDGE_STATES } from "../perception/channels.js";
 
 /**
  * ctx = {
@@ -57,6 +58,9 @@ export const ENGINE_ADAPTER_CONTRACT = [
   "unitStats",          // (state, unitId) -> stats
   "setUnitTeam",        // (state, unitId, teamId) -> void
   "queueEvent",         // (state, event) -> void
+  "setKnowledge",       // (state, factionId, unitIds, knowledgeState, opts) -> count
+  "shareKnowledge",     // (state, fromFactionId, toFactionId, opts) -> count
+  "emitSignature",      // (state, unitIds, channel, opts) -> count
   "logLine"             // (state, type, text, data) -> void
 ];
 
@@ -462,6 +466,146 @@ const simulationActions = {
           (action.enabled !== undefined ? "enabled=" + action.enabled : ""),
         { linkId: action.linkId, changed }
       );
+    }
+  },
+
+  /* ---------------------------------------------------------------
+   * KNOWLEDGE
+   *
+   * Missions author what a faction *believes*, not just what is true. A
+   * betrayal that comes with the traitor's dossier, an alarm that puts a
+   * garrison on alert, a jammer that wipes a contact — all of them are these
+   * four actions, and none of them needs a stealth-specific scripting layer.
+   * -------------------------------------------------------------*/
+
+  setKnowledge: {
+    authority: "simulation",
+    name: "Set faction knowledge",
+    fields: ["factionId", "unitRefs", "state", "atLastKnown"],
+    summary:
+      "Sets what one faction believes about specific units: `acquired` reveals them outright, " +
+      "`suspected` plants a contact to investigate, `unseen` erases what was known. " +
+      "By default the contact is placed at the unit's current tile; `atLastKnown: true` leaves " +
+      "an existing believed position alone so a scripted alert cannot silently retarget it.",
+    validate(action, refs) {
+      const problems = [];
+      if (!action.factionId) problems.push("setKnowledge needs a `factionId`.");
+      else if (refs.teams && refs.teams.size && !refs.teams.has(action.factionId)) {
+        problems.push('setKnowledge references unknown faction "' + action.factionId + '".');
+      }
+      if (!KNOWLEDGE_STATES.includes(action.state)) {
+        problems.push(
+          "setKnowledge needs a `state` of " + KNOWLEDGE_STATES.join(", ") + "."
+        );
+      }
+      if (!(action.unitRefs || []).length) problems.push("setKnowledge needs `unitRefs`.");
+      for (const ref of action.unitRefs || []) {
+        if (!refs.units.has(ref)) problems.push('setKnowledge references unknown unit "' + ref + '".');
+      }
+      return problems;
+    },
+    run(action, ctx) {
+      if (!ctx.engine.setKnowledge) {
+        return { error: "the host does not track battlefield knowledge" };
+      }
+      const unitIds = (action.unitRefs || []).map(ctx.resolveUnit).filter(Boolean);
+      if (!unitIds.length) return;
+      const changed = ctx.engine.setKnowledge(ctx.state, action.factionId, unitIds, action.state, {
+        atLastKnown: action.atLastKnown === true
+      });
+      ctx.log(
+        action.factionId + " knowledge -> " + action.state + " on " + unitIds.length + " unit(s)",
+        { factionId: action.factionId, unitIds, state: action.state, changed }
+      );
+    }
+  },
+
+  shareKnowledge: {
+    authority: "simulation",
+    name: "Share knowledge between factions",
+    fields: ["fromFactionId", "toFactionId", "unitRefs", "maxState"],
+    summary:
+      "Hands one faction's contacts to another. Nothing shares knowledge implicitly — a unit " +
+      "changing sides brings itself, not its old side's map — so a defection that comes with " +
+      "intel is this action, fired deliberately. `maxState` caps what is handed over.",
+    validate(action, refs) {
+      const problems = [];
+      if (!action.fromFactionId) problems.push("shareKnowledge needs a `fromFactionId`.");
+      if (!action.toFactionId) problems.push("shareKnowledge needs a `toFactionId`.");
+      if (action.fromFactionId && action.fromFactionId === action.toFactionId) {
+        problems.push("shareKnowledge cannot share a faction with itself.");
+      }
+      for (const key of ["fromFactionId", "toFactionId"]) {
+        const value = action[key];
+        if (value && refs.teams && refs.teams.size && !refs.teams.has(value)) {
+          problems.push('shareKnowledge references unknown faction "' + value + '".');
+        }
+      }
+      if (action.maxState && !KNOWLEDGE_STATES.includes(action.maxState)) {
+        problems.push("shareKnowledge `maxState` must be one of " + KNOWLEDGE_STATES.join(", ") + ".");
+      }
+      for (const ref of action.unitRefs || []) {
+        if (!refs.units.has(ref)) problems.push('shareKnowledge references unknown unit "' + ref + '".');
+      }
+      return problems;
+    },
+    run(action, ctx) {
+      if (!ctx.engine.shareKnowledge) {
+        return { error: "the host does not track battlefield knowledge" };
+      }
+      const unitIds = action.unitRefs ? action.unitRefs.map(ctx.resolveUnit).filter(Boolean) : null;
+      const changed = ctx.engine.shareKnowledge(ctx.state, action.fromFactionId, action.toFactionId, {
+        unitIds,
+        maxState: action.maxState || "acquired"
+      });
+      ctx.log(
+        action.fromFactionId + " shares intel with " + action.toFactionId,
+        { from: action.fromFactionId, to: action.toFactionId, changed }
+      );
+    }
+  },
+
+  emitSignature: {
+    authority: "simulation",
+    name: "Emit a detectable signature",
+    fields: ["unitRefs", "channel", "strength", "duration"],
+    summary:
+      "Makes units detectable on one observation channel for a while — a thermal vent venting, " +
+      "a transponder keyed, an alarm sounding. Anyone with a sensor on that channel and range " +
+      "picks them up on the next sweep. This is how a map hazard reveals a cloaked unit without " +
+      "the mission naming the unit's abilities.",
+    validate(action, refs) {
+      const problems = [];
+      if (!action.channel) problems.push("emitSignature needs a `channel`.");
+      else if (refs.channels && refs.channels.size && !refs.channels.has(action.channel)) {
+        problems.push(
+          'emitSignature references unknown observation channel "' + action.channel + '".'
+        );
+      }
+      if (!(action.unitRefs || []).length) problems.push("emitSignature needs `unitRefs`.");
+      for (const ref of action.unitRefs || []) {
+        if (!refs.units.has(ref)) problems.push('emitSignature references unknown unit "' + ref + '".');
+      }
+      if (action.duration != null && !(action.duration >= 0)) {
+        problems.push("emitSignature `duration` must be zero or more activations.");
+      }
+      return problems;
+    },
+    run(action, ctx) {
+      if (!ctx.engine.emitSignature) {
+        return { error: "the host does not track battlefield knowledge" };
+      }
+      const unitIds = (action.unitRefs || []).map(ctx.resolveUnit).filter(Boolean);
+      if (!unitIds.length) return;
+      const changed = ctx.engine.emitSignature(ctx.state, unitIds, action.channel, {
+        strength: action.strength == null ? 1 : action.strength,
+        duration: action.duration == null ? 1 : action.duration
+      });
+      ctx.log(unitIds.length + " unit(s) emit on " + action.channel, {
+        unitIds,
+        channel: action.channel,
+        changed
+      });
     }
   },
 

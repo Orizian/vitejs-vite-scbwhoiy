@@ -380,6 +380,14 @@ function buildContext(state, deps) {
           return state.unitOrder.filter((id) => state.units[id].alive && state.units[id].teamId === teamId)
             .length;
         },
+        /** What a faction believes about a unit. "unseen" when nothing is known. */
+        knowledgeState(factionId, ref) {
+          const unit = unitByRef(ref);
+          if (!unit || !state.perception || !state.perception.enabled) return "acquired";
+          const faction = state.perception.factions[factionId];
+          const record = faction && faction.units[unit.id];
+          return record ? record.state : "unseen";
+        },
         firedCount(id) {
           return runtime.firedCounts[id] || 0;
         }

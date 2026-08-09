@@ -279,7 +279,15 @@ export function ingestPerceptionEvent(state, deps, event) {
   }
 
   if (!loud && !TICK_EVENT_SET.has(event.type)) return null;
-  return refreshPerception(state, deps);
+  const changes = refreshPerception(state, deps);
+
+  // A unit that starts its turn standing on a lead has searched it. Doing this
+  // on activation rather than inside the AI keeps it true for player units
+  // too, and keeps the AI's decision function free of side effects.
+  if (event.type === "unitActivated" && event.unitId) {
+    searchTargetFor(state, deps, event.unitId);
+  }
+  return changes;
 }
 
 /* ---------------------------------------------------------------
@@ -309,6 +317,9 @@ export function searchTargetFor(state, deps, unitId) {
     const record = faction.units[subjectId];
     if (record.state !== "suspected") continue;
     if (record.x == null || record.y == null) continue;
+    const subject = engine.unit(state, subjectId);
+    // Nobody hunts a corpse. A record can outlive its unit by a sweep or two.
+    if (!subject || !subject.alive) continue;
     if (engine.teamRelationship(state, unit.teamId, subjectId) !== "hostile") continue;
     const distance = engine.distance(unit, { x: record.x, y: record.y });
     // Freshest lead first, nearest as the tie-break: a searcher chases the

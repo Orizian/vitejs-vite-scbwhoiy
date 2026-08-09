@@ -164,7 +164,9 @@ function buildView(state, deps) {
     teamController: (teamId) => {
       const team = state.teams.find((entry) => entry.id === teamId);
       return team ? team.controller || "ai" : "ai";
-    }
+    },
+    knowledgeState: (viewerId, subjectId) =>
+      engine.knowledgeState ? engine.knowledgeState(state, viewerId, subjectId) : "acquired"
   };
 }
 
@@ -232,7 +234,11 @@ function buildConditionContext(state, deps, view, reaction, reactorId, event) {
     reactorHasStatus: (statusId) => view.hasStatus(reactorId, statusId),
     unitIsAlive: (id) => view.unitIsAlive(id),
     distanceTo: (id) => (id ? view.distance(reactorId, id) : null),
-    missionFact: (fact) => (state.mission ? state.mission.facts[fact] : undefined)
+    missionFact: (fact) => (state.mission ? state.mission.facts[fact] : undefined),
+    // What the *reactor's faction* believes about a unit. A reaction gated on
+    // knowledge cannot fire on something its side has not noticed, which is
+    // what stops an out-of-turn response from becoming a detection oracle.
+    knowledgeState: (id) => view.knowledgeState(reactorId, id)
   };
 }
 
