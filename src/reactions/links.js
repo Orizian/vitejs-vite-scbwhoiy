@@ -2,7 +2,7 @@
  * COMBAT LINKS
  *
  * A Link is a named combat relationship between named units. It owns a set of
- * reactions and, optionally, a shared reaction pool.
+ * reactions, and any resource that names it is available only while it holds.
  *
  * This is not a social-link system. It has no affinity, no levels and no
  * out-of-combat progression. It answers one question each time the battle
@@ -17,8 +17,8 @@
  *   active     derived every re-evaluation: are all participants present,
  *              alive, actionable and mutually allied?
  *
- * A link is usable only when all three hold. Nothing about "sectionSeven" is
- * known to the engine — it is one entry in a content table.
+ * A link is usable only when all three hold. Nothing about any particular link
+ * is known to the engine — each is one entry in a content table.
  * =======================================================================*/
 
 export function createLinkState(linkDefinitions, options) {
@@ -92,7 +92,7 @@ function evaluateLink(link, entry, view) {
 
   // A destroyed or dormant participant breaks the link. This is the whole
   // answer to "what happens if one of them goes down": the link deactivates,
-  // its reactions stop being legal, and its shared pool goes unavailable.
+  // its reactions stop being legal, and any resource it gates goes unavailable.
   const actionable = participantUnitIds.filter((unitId) => view.unitIsActionable(unitId));
   if (needAll && actionable.length < required) {
     return { active: false, reason: "a participant is down or dormant", participantUnitIds };
@@ -136,35 +136,30 @@ export function setLinkUnlocked(linkState, linkId, unlocked) {
   return true;
 }
 
-/** Pool ids owned by links, with the unit ids currently able to draw on them.
- *  The economy uses this for refresh scoping; it never names a link. */
-export function poolOwnership(linkState, linkDefinitions) {
+/**
+ * Resource ids gated by a link, mapped to the units currently able to draw on
+ * them.
+ *
+ * A resource declares `linkId`; the link declares its participants. Neither
+ * knows the other's shape, and the resource layer uses this purely for refresh
+ * scoping — it never asks what a link is.
+ */
+export function resourceOwnership(linkState, linkDefinitions, resourceDefinitions) {
   const owners = {};
-  for (const link of linkDefinitions || []) {
-    if (!link.sharedPool) continue;
-    const entry = linkState[link.id];
-    owners[link.sharedPool.id] = entry ? entry.participantUnitIds.slice() : [];
+  for (const resource of resourceDefinitions || []) {
+    if (!resource.linkId) continue;
+    const entry = linkState[resource.linkId];
+    owners[resource.id] = entry ? entry.participantUnitIds.slice() : [];
   }
   return owners;
 }
 
-/** Shared-pool definitions contributed by links, in a shape the economy
- *  understands without knowing what a link is. */
-export function linkPoolDefinitions(linkDefinitions) {
-  return (linkDefinitions || [])
-    .filter((link) => link.sharedPool)
-    .map((link) => ({
-      ...link.sharedPool,
-      name: link.sharedPool.name || link.name || link.sharedPool.id,
-      linkId: link.id
-    }));
-}
-
-/** HUD model. Presentation reads this; it never computes activity itself. */
-export function describeLinks(linkState, linkDefinitions, economy) {
+/** HUD model. Presentation reads this; it never computes activity itself.
+ *  `resourceLookup(linkId)` supplies the gated resources, so this module still
+ *  needs to know nothing about how a balance is stored. */
+export function describeLinks(linkState, linkDefinitions, resourceLookup) {
   return (linkDefinitions || []).map((link) => {
     const entry = linkState[link.id] || {};
-    const pool = link.sharedPool && economy.pools[link.sharedPool.id];
     return {
       id: link.id,
       name: link.name || link.id,
@@ -176,9 +171,7 @@ export function describeLinks(linkState, linkDefinitions, economy) {
       reason: entry.reason || "",
       participants: link.participants || [],
       participantUnitIds: entry.participantUnitIds || [],
-      pool: pool
-        ? { id: link.sharedPool.id, current: pool.current, max: pool.max, available: pool.available }
-        : null
+      resources: resourceLookup ? resourceLookup(link.id) : []
     };
   });
 }

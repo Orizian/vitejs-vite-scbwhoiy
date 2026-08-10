@@ -156,6 +156,74 @@ export const REGISTRY_KINDS = {
     summary: "Per-operator progression choices, applied as stat modifiers.",
     fieldOrder: ["name", "description", "modifiers"]
   },
+  resources: {
+    id: "resources",
+    label: "Resources",
+    singular: "resource",
+    path: "src/content/gameplay/resources.json",
+    summary:
+      "Every pool of points a battle tracks. `unit` scope gives each frame its " +
+      "own balance; `faction` scope gives a whole side one shared balance, which " +
+      "is what Command Points are. Availability is separate from balance, so a " +
+      "link-gated pool keeps its points while the link is down.",
+    fieldOrder: [
+      "name",
+      "scope",
+      "description",
+      "tags",
+      "max",
+      "startsAt",
+      "everyUnit",
+      "persist",
+      "linkId",
+      "regen"
+    ]
+  },
+  reactions: {
+    id: "reactions",
+    label: "Reactions",
+    singular: "reaction",
+    path: "src/content/gameplay/reactions.json",
+    summary:
+      "Out-of-turn responses, as WHEN / IF / THEN. `trigger` is a generic event, " +
+      "`conditions` a declarative vocabulary, `effect` a registered primitive. " +
+      "No reaction names an engine behaviour that does not already exist.",
+    fieldOrder: [
+      "name",
+      "description",
+      "owner",
+      "trigger",
+      "priority",
+      "requires",
+      "conditions",
+      "cost",
+      "limits",
+      "mandatory",
+      "automatic",
+      "effect"
+    ]
+  },
+  combatLinks: {
+    id: "combatLinks",
+    label: "Combat links",
+    singular: "combat link",
+    path: "src/content/gameplay/combat-links.json",
+    summary:
+      "Relationships between operators that unlock shared reactions. A link is a " +
+      "narrative gate with mechanical teeth: while it is inactive its reactions do " +
+      "not merely cost more, they do not exist.",
+    fieldOrder: [
+      "name",
+      "icon",
+      "description",
+      "participants",
+      "requireAll",
+      "requireMutuallyAllied",
+      "unlockedByDefault",
+      "enabledByDefault",
+      "reactions"
+    ]
+  },
   terrain: {
     id: "terrain",
     label: "Terrain",

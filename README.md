@@ -10,6 +10,7 @@ npm test          # runs the full suite headlessly (needs a dev server on :5173)
 npm run check:menu        # browser acceptance: the front door, menu to base to editor
 npm run check:scene       # browser acceptance: authoring, previewing and exporting a scene
 npm run check:gameplay    # browser acceptance: edit a stat, test it, export it, import it back
+npm run check:orchestration  # browser acceptance: the reaction chain, Command Points, timeline
 npm run check:grayfield   # browser acceptance: mission scripting end to end
 npm run check:reactions   # browser acceptance: Section Seven + Grayfield link restore
 npm run check:knowledge   # browser acceptance: the contact lifecycle, unseen to cold
@@ -24,7 +25,7 @@ npm run lint
 
 | | |
 |---|---|
-| `src/App.jsx` | Content, engine, presentation adapter, UI and the 467-test suite. Everything below the `EDITABLE CONTENT ABOVE / ENGINE BELOW` divider is renderer-free and knows no concrete content id — `auditArchitecture()` enforces that on every run. |
+| `src/App.jsx` | Content, engine, presentation adapter, UI and the 489-test suite. Everything below the `EDITABLE CONTENT ABOVE / ENGINE BELOW` divider is renderer-free and knows no concrete content id — `auditArchitecture()` enforces that on every run. |
 | `src/content/missions/*.json` | Mission files. Drop one in and it is in the game. |
 | `src/content/mission-format.js` | Mission schema, validator and compiler. Shared by the game and the editor. |
 | `src/content/mission-registry.js` | Loads mission files and the editor's playtest slot into the content registry. |
@@ -32,7 +33,8 @@ npm run lint
 | `src/content/gameplay/` | The format, loader, editing schema, cross-registry validation, export/import and test-arena resolution for that data. |
 | `src/content/catalog.js` | The content vocabulary the editor may place. Derived from the gameplay files; a two-way drift test keeps the derivation complete. |
 | `src/mission/` | The mission scripting runtime: event stream, trigger/condition vocabulary, action registry, phase state machine and faction relationships. Engine-agnostic; App.jsx supplies an adapter. |
-| `src/reactions/` | The reaction and combat-link framework: event stages, trigger/condition/effect registries, reaction economy, shared pools and relationship links. Engine-agnostic; App.jsx supplies an adapter. |
+| `src/reactions/` | The reaction and combat-link framework: event stages, trigger/condition/effect registries, the reaction economy and relationship links. Engine-agnostic; App.jsx supplies an adapter. |
+| `src/combat/` | Combat orchestration primitives shared by everything above: one resource system (unit and faction scopes) and the causal-chain model that bounds reaction cascades and explains them. |
 | `src/perception/` | Faction-scoped battlefield knowledge: observation channels, the unseen/suspected/acquired model, the sensor sweep, decay and the believed world the AI reasons over. Engine-agnostic; App.jsx supplies an adapter. |
 | `src/scene/` | The authored-scene format: the step vocabulary, validation, serialization and the pure stage fold the player and the editor both run. |
 | `src/content/scenes/*.json` | Authored scenes. Drop one in and missions can reference it by id. |
@@ -48,6 +50,7 @@ npm run lint
 - **[`docs/SCENES.md`](docs/SCENES.md)** — the scene format, the timeline editor, and why previewing from step 37 lands in the same world as playing to it.
 - **[`docs/PERCEPTION.md`](docs/PERCEPTION.md)** — what each faction believes, why the AI cannot cheat, and the architecture Nyx's stealth kit will consume.
 - **[`docs/GAMEPLAY_DATA.md`](docs/GAMEPLAY_DATA.md)** — the authored gameplay registries, the Studio, and how a tuning change gets from a text box into the repository.
+- **[`docs/COMBAT_ORCHESTRATION.md`](docs/COMBAT_ORCHESTRATION.md)** — resources, Command Points, causal chains, the reaction lifecycle, and how one operator's kill becomes another's opening.
 
 ## Starting the game
 

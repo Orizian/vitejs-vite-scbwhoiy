@@ -9,7 +9,69 @@
  */
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+
+/* ---------------------------------------------------------------
+ * CHARACTER-NAME TRIPWIRE
+ *
+ * Generic combat machinery must not know who its first users are. Content is
+ * where "kell" belongs; an engine module that names him has grown a special
+ * case, and the next operator will need a second one.
+ *
+ * Scans the directories that are supposed to be generic. `src/content/` is
+ * deliberately not among them — that is where these names are meant to live —
+ * and neither is App.jsx, which still holds the campaign tables. Its engine
+ * half is covered by `auditArchitecture()` in the browser.
+ *
+ * Comments are stripped before scanning. The rule is about behaviour, and a
+ * comment cannot have any: "this is the shape Nyx's cloak will need" is design
+ * rationale worth keeping, while `if (id === "nyx")` is the thing to catch. A
+ * name inside a string literal still counts, because that is code.
+ * -------------------------------------------------------------*/
+const GENERIC_DIRS = ["src/combat", "src/reactions", "src/mission", "src/perception", "src/scene"];
+const FORBIDDEN_NAMES = ["vale", "kell", "nyx", "aegis"];
+
+function sourceFiles(dir) {
+  const out = [];
+  let entries;
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) out.push(...sourceFiles(path));
+    else if (/\.(js|jsx)$/.test(entry)) out.push(path);
+  }
+  return out;
+}
+
+/** Replaces comment bodies with blanks, keeping line numbers intact. */
+function stripComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "))
+    .replace(/\/\/[^\n]*/g, (line) => line.replace(/./g, " "));
+}
+
+function characterNameLeaks() {
+  const leaks = [];
+  for (const dir of GENERIC_DIRS) {
+    for (const path of sourceFiles(dir)) {
+      const lines = stripComments(readFileSync(path, "utf8")).split("\n");
+      lines.forEach((line, index) => {
+        for (const name of FORBIDDEN_NAMES) {
+          if (new RegExp("\\b" + name + "\\b", "i").test(line)) {
+            leaks.push(path + ":" + (index + 1) + ' names "' + name + '": ' + line.trim().slice(0, 90));
+          }
+        }
+      });
+    }
+  }
+  return leaks;
+}
 
 const shouldServe = process.argv.includes("--serve");
 const port = Number(process.env.PORT || 5173);
@@ -52,7 +114,10 @@ try {
     };
   });
 
+  const leaks = characterNameLeaks();
+
   console.log("tests      " + result.passed + "/" + result.total + " passed");
+  console.log("tripwire   " + (leaks.length ? leaks.length + " character names in generic code" : "clean"));
   console.log("audit      " + (result.auditPass ? "PASS" : "FAIL"));
   console.log("content    " + (result.contentErrors.length ? result.contentErrors.length + " errors" : "clean"));
   console.log("missions   " + (result.missionIds.join(", ") || "none"));
@@ -61,8 +126,17 @@ try {
   for (const failure of result.auditFailures) console.log("  AUDIT " + failure);
   for (const error of result.missionErrors) console.log("  MISSION " + error);
   for (const error of pageErrors) console.log("  PAGEERROR " + error);
+  for (const leak of leaks) console.log("  NAME  " + leak);
 
-  if (result.failed || !result.auditPass || result.contentErrors.length || result.missionErrors.length) exitCode = 1;
+  if (
+    result.failed ||
+    !result.auditPass ||
+    result.contentErrors.length ||
+    result.missionErrors.length ||
+    leaks.length
+  ) {
+    exitCode = 1;
+  }
 } catch (error) {
   console.error("runner failed:", error.message);
   exitCode = 1;

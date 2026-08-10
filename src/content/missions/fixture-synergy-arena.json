@@ -1,0 +1,139 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-synergy-arena",
+  "name": "Synergy Arena",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. A deterministic bench for combat orchestration: one wall that hides a target from one shooter, one fragile body in melee reach, and the three operators whose reactions are supposed to chain. Everything is placed so a single push changes who can see whom — that is the whole point of the layout.",
+  "map": {
+    "name": "Orchestration Bench",
+    "width": 18,
+    "height": 12,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "..................",
+      "..................",
+      "..................",
+      "..................",
+      "..................",
+      "..................",
+      "........#.........",
+      "..................",
+      "..................",
+      "..................",
+      "..................",
+      ".................."
+    ],
+    "elevationRows": [
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000",
+      "000000000000000000"
+    ]
+  },
+  "teams": [
+    { "id": "sectionSeven", "name": "Section Seven", "controller": "human", "marker": "▲", "accent": "emerald" },
+    { "id": "loyalist", "name": "Loyalists", "controller": "ai", "marker": "■", "accent": "rose" }
+  ],
+  "units": [
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 6,
+      "facing": "southeast",
+      "note": "Holds the lane along row 6. The wall at (8,6) is the only thing between him and the hidden target."
+    },
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 8,
+      "facing": "southeast",
+      "note": "Close enough to advance into whatever Kell opens up."
+    },
+    {
+      "ref": "nyx",
+      "definitionId": "stealthMech",
+      "teamId": "sectionSeven",
+      "x": 13,
+      "y": 2,
+      "facing": "southeast",
+      "note": "Starts adjacent to the fragile body, so a melee kill is one action away."
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 9,
+      "facing": "southeast",
+      "note": "Present so the Section Seven link is complete. Does nothing on its own."
+    },
+    {
+      "ref": "hidden",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 9,
+      "y": 6,
+      "facing": "northwest",
+      "note": "Directly behind the wall from Kell. Push it off row 6 and the lane opens."
+    },
+    {
+      "ref": "shover",
+      "definitionId": "testChanneler",
+      "teamId": "loyalist",
+      "x": 9,
+      "y": 8,
+      "facing": "northeast",
+      "note": "Carries Force Push, which is how the fixture displaces something without a bespoke test-only primitive."
+    },
+    {
+      "ref": "fragile",
+      "definitionId": "civilianTransport",
+      "teamId": "loyalist",
+      "x": 14,
+      "y": 2,
+      "facing": "northwest",
+      "note": "Adjacent to Nyx and soft enough to die in one hit, so the melee-kill timing passive has something to fire on."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 15,
+      "y": 10,
+      "facing": "northwest",
+      "note": "Keeps the battle from ending the moment the others go down."
+    }
+  ],
+  "regions": [],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Exercise the chain",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "factions": { "relationships": [] },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": { "briefing": [], "victory": [], "defeat": [] },
+  "midBattle": []
+}

@@ -231,6 +231,80 @@ export function resolveTestSubject(data, kindId, id) {
     };
   }
 
+  if (kindId === "reactions") {
+    const reaction = (registries.reactions || {})[id];
+    if (!reaction) return fail('There is no reaction "' + id + '".');
+    if (reaction.owner) {
+      const operatorId = sortedIds(registries.operators).find(
+        (key) => ((registries.operators[key] || {}).ref || key) === reaction.owner
+      );
+      if (!operatorId) {
+        return fail(
+          (reaction.name || id) + ' is owned by "' + reaction.owner + '", who is not an operator.'
+        );
+      }
+      const nested = resolveTestSubject(registries, "operators", operatorId);
+      if (nested.error) return nested;
+      return {
+        ...nested,
+        reason: nested.reason + " " + (reaction.name || id) + " is theirs to use.",
+        caveat:
+          "A reaction only fires when its trigger happens. The arena deploys the reactor; " +
+          "you still have to cause a " + reaction.trigger + "."
+      };
+    }
+    const required = reaction.requires && reaction.requires.status;
+    const carrier = required
+      ? sortedIds(registries.units).find((unitId) => mentions(registries.units[unitId], required))
+      : null;
+    if (carrier) {
+      const nested = resolveTestSubject(registries, "units", carrier);
+      if (!nested.error) {
+        return {
+          ...nested,
+          reason: nested.reason + " It can hold " + required + ", which " + (reaction.name || id) + " needs.",
+          caveat: "You still have to get the status on it and cause a " + reaction.trigger + "."
+        };
+      }
+    }
+    return fail(
+      (reaction.name || id) + " has no owner and no unit obviously qualifies for it, so the arena " +
+        "cannot guess who should be holding it."
+    );
+  }
+
+  if (kindId === "combatLinks") {
+    const link = (registries.combatLinks || {})[id];
+    if (!link) return fail('There is no combat link "' + id + '".');
+    const first = (link.participants || [])[0];
+    const operatorId = first
+      ? sortedIds(registries.operators).find(
+          (key) => ((registries.operators[key] || {}).ref || key) === first
+        )
+      : null;
+    if (!operatorId) {
+      return fail((link.name || id) + " has no participant that maps to an operator.");
+    }
+    const nested = resolveTestSubject(registries, "operators", operatorId);
+    if (nested.error) return nested;
+    return {
+      ...nested,
+      reason: nested.reason + " They are the first participant in " + (link.name || id) + ".",
+      caveat:
+        "A link needs every participant deployed and allied. The arena fields one of them, " +
+        "so the link itself will read as inactive."
+    };
+  }
+
+  if (kindId === "resources") {
+    const resource = (registries.resources || {})[id];
+    if (!resource) return fail('There is no resource "' + id + '".');
+    return fail(
+      (resource.name || id) + " is a balance, not something that can be deployed. Test it through " +
+        "a reaction or ability that spends it."
+    );
+  }
+
   if (kindId === "terrain") {
     return fail(
       "Terrain is measured by walking a map over it, not by deploying it. " +

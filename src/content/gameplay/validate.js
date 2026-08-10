@@ -11,6 +11,10 @@
  * =======================================================================*/
 
 import { REGISTRY_IDS, REGISTRY_KINDS } from "./format.js";
+import { validateResourceDefinition } from "../../combat/resources.js";
+import { REACTION_EVENT_TYPE_IDS } from "../../reactions/events.js";
+import { validateReactionEffect } from "../../reactions/effects.js";
+import { validateReactionCondition } from "../../reactions/conditions.js";
 
 const EQUIPMENT_SLOTS = ["primaryWeapon", "armor", "utilitySystem", "coreSystem"];
 const CHANNELS = ["optical", "thermal", "signal", "acoustic", "intel"];
@@ -34,7 +38,10 @@ export function validateGameplayData(data, context) {
   const registries = {};
   for (const kindId of REGISTRY_IDS) registries[kindId] = (data && data[kindId]) || {};
 
-  const { units, abilities, equipment, statuses, aiProfiles, operators, perks, terrain } = registries;
+  const {
+    units, abilities, equipment, statuses, aiProfiles, operators, perks, terrain,
+    resources, reactions, combatLinks
+  } = registries;
   const external = context || {};
 
   /* ---- ids ---- */
@@ -225,6 +232,141 @@ export function validateGameplayData(data, context) {
   for (const statusId of external.reactionStatusIds || []) {
     if (!has(statuses, statusId)) {
       errors.push('A reaction applies status "' + statusId + '", which no longer exists.');
+    }
+  }
+
+  /* ---- resources ---- */
+  for (const id of Object.keys(resources)) {
+    const definition = { id, ...resources[id] };
+    for (const message of validateResourceDefinition(definition, label("resources", id))) {
+      errors.push(message);
+    }
+    if (definition.linkId && !has(combatLinks, definition.linkId)) {
+      errors.push(
+        label("resources", id) + ' is gated by unknown combat link "' + definition.linkId + '".'
+      );
+    }
+    if (definition.scope === "faction" && definition.everyUnit) {
+      errors.push(
+        label("resources", id) + " is faction-scoped, so `everyUnit` means nothing — remove it."
+      );
+    }
+  }
+
+  /* ---- reactions ---- */
+  for (const id of Object.keys(reactions)) {
+    const reaction = reactions[id] || {};
+    if (!reaction.name) warnings.push(label("reactions", id) + " has no display name.");
+
+    if (!reaction.trigger) {
+      errors.push(label("reactions", id) + " has no trigger event.");
+    } else if (!REACTION_EVENT_TYPE_IDS.includes(reaction.trigger)) {
+      errors.push(
+        label("reactions", id) + ' triggers on unknown event "' + reaction.trigger +
+          '". Available: ' + REACTION_EVENT_TYPE_IDS.join(", ")
+      );
+    }
+
+    // An owned reaction names an operator by its stable ref, not by its key.
+    if (reaction.owner) {
+      const owned = Object.keys(operators).some(
+        (operatorId) => (operators[operatorId].ref || operatorId) === reaction.owner
+      );
+      if (!owned && !(external.unitRefs || []).includes(reaction.owner)) {
+        errors.push(label("reactions", id) + ' is owned by unknown operator ref "' + reaction.owner + '".');
+      }
+    } else if (!reaction.requires) {
+      errors.push(
+        label("reactions", id) +
+          " has no owner and no `requires`, so nothing would ever be offered it."
+      );
+    }
+
+    if (reaction.requires && reaction.requires.status && !has(statuses, reaction.requires.status)) {
+      errors.push(
+        label("reactions", id) + ' requires unknown status "' + reaction.requires.status + '".'
+      );
+    }
+
+    for (const message of validateReactionCondition(reaction.conditions, label("reactions", id) + " condition")) {
+      errors.push(message);
+    }
+
+    for (const entry of (reaction.cost && reaction.cost.resources) || []) {
+      if (!has(resources, entry.id)) {
+        errors.push(label("reactions", id) + ' costs unknown resource "' + entry.id + '".');
+        continue;
+      }
+      const amount = Number(entry.amount == null ? 1 : entry.amount);
+      const max = Number((resources[entry.id] || {}).max || 0);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        errors.push(label("reactions", id) + " costs a non-positive amount of " + entry.id + ".");
+      } else if (max && amount > max) {
+        errors.push(
+          label("reactions", id) + " costs " + amount + " " + entry.id +
+            ", more than the resource's maximum of " + max + " — it could never be paid."
+        );
+      }
+    }
+
+    if (!reaction.effect) {
+      errors.push(label("reactions", id) + " has no effect, so firing it would do nothing.");
+    } else {
+      for (const message of validateReactionEffect(reaction.effect, label("reactions", id) + " effect")) {
+        errors.push(message);
+      }
+      const effect = reaction.effect;
+      if (effect.statusId && !has(statuses, effect.statusId)) {
+        errors.push(label("reactions", id) + ' applies unknown status "' + effect.statusId + '".');
+      }
+      if (effect.abilityId && !has(abilities, effect.abilityId)) {
+        errors.push(label("reactions", id) + ' uses unknown ability "' + effect.abilityId + '".');
+      }
+      if (effect.resourceId && !has(resources, effect.resourceId)) {
+        errors.push(label("reactions", id) + ' restores unknown resource "' + effect.resourceId + '".');
+      }
+    }
+
+    for (const key of Object.keys(reaction.limits || {})) {
+      if (key === "perEvent") continue;
+      const value = reaction.limits[key];
+      if (value != null && (!Number.isFinite(Number(value)) || Number(value) < 1)) {
+        errors.push(label("reactions", id) + " has a " + key + " limit below 1, which disables it entirely.");
+      }
+    }
+  }
+
+  /* ---- combat links ---- */
+  for (const id of Object.keys(combatLinks)) {
+    const link = combatLinks[id] || {};
+    if (!link.name) warnings.push(label("combatLinks", id) + " has no display name.");
+    if (!(link.participants || []).length) {
+      errors.push(label("combatLinks", id) + " has no participants, so it can never be active.");
+    }
+    for (const ref of link.participants || []) {
+      const known = Object.keys(operators).some(
+        (operatorId) => (operators[operatorId].ref || operatorId) === ref
+      );
+      if (!known) {
+        errors.push(label("combatLinks", id) + ' names unknown operator ref "' + ref + '".');
+      }
+    }
+    for (const reactionId of link.reactions || []) {
+      if (!has(reactions, reactionId)) {
+        errors.push(label("combatLinks", id) + ' grants unknown reaction "' + reactionId + '".');
+      }
+    }
+    // A reaction may belong to at most one link: two owners would make
+    // "is this available?" ambiguous.
+    for (const reactionId of link.reactions || []) {
+      const owners = Object.keys(combatLinks).filter((otherId) =>
+        ((combatLinks[otherId] || {}).reactions || []).includes(reactionId)
+      );
+      if (owners.length > 1) {
+        errors.push(
+          'Reaction "' + reactionId + '" is granted by more than one link (' + owners.join(", ") + ")."
+        );
+      }
     }
   }
 

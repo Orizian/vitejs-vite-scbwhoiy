@@ -62,6 +62,9 @@ Three things make this hold rather than merely being true today:
 | Operators | `operators.json` | Playable pilots: identity, stable `ref`, chassis, perk choices |
 | Perks | `perks.json` | Progression choices, as stat modifiers |
 | Terrain | `terrain.json` | Tile rules **and** the map editor's swatch: cost, walkability, sight, modifiers, `char`, `paint` |
+| Resources | `resources.json` | Every pool of points a battle tracks: unit-scoped and faction-scoped, with regeneration and link gating |
+| Reactions | `reactions.json` | Out-of-turn responses as WHEN / IF / THEN |
+| Combat links | `combat-links.json` | Operator relationships that unlock shared reactions |
 
 An entity's key **is** its id. It is never repeated inside the entity, and it is
 what missions, combat links, reactions and saves address. A display name may
@@ -241,13 +244,17 @@ validation.
 
 | What | Where | Why not yet |
 |---|---|---|
-| Reactions and combat links | `src/content/reactions.js` | Already a single authored content file, editable without touching the engine. Wants a JSON migration and an inspector for its condition/effect sub-objects. |
 | Campaign structure: mission list, rewards ("loot"), chapters, base stages, facilities, contacts | `CAMPAIGN` in `App.jsx` | This is the campaign graph, explicitly out of scope for this phase. Mission rewards are the piece most worth pulling out next. |
 | Campaign dialogue and speakers | `CAMPAIGN.dialogue`, `SPEAKER_CATALOG` | Narrative, not gameplay data — it belongs to the Scene editor, and putting it here was explicitly ruled out. |
 | Equipment slot list | `GAME_CONFIG.equipment.slots` | Engine configuration. Adding a slot changes the composition pipeline, not just data. |
 | Unit classes | implicit in `classId` strings | There is no class registry; `classId` is a free string matched against `compatibleClasses`. A small `classes` registry would let the Studio offer a dropdown and catch typos. |
 | Balance formulas and engine tuning | `FORMULAS`, `GAME_CONFIG` | Out of scope: these are the algorithms, not their inputs. |
 | Scene backgrounds, expressions, music contexts | `catalog.js` | Presentation vocabulary for the Scene editor. |
+
+Reactions, combat links and resources joined this architecture in the combat
+orchestration phase — see [`docs/COMBAT_ORCHESTRATION.md`](COMBAT_ORCHESTRATION.md).
+`src/content/reactions.js` survives only as a thin adapter that turns the
+id-keyed registries into the ordered lists the reaction runtime indexes.
 
 One structural note: `catalog.js` is no longer a mirror for units, abilities,
 statuses, equipment, AI profiles or terrain, but it is still hand-written for

@@ -31,7 +31,8 @@ const snap = () => s7.evaluate(() => {
   const u = (r) => b.unitOrder.map(i => b.units[i]).find(x => x.ref === r);
   return {
     link: m.links[0] ? { active: m.links[0].active, reason: m.links[0].reason,
-      pool: m.links[0].pool ? m.links[0].pool.current + "/" + m.links[0].pool.max : null } : null,
+      pool: (m.links[0].resources || [])[0]
+        ? m.links[0].resources[0].current + "/" + m.links[0].resources[0].max : null } : null,
     window: m.window ? { trigger: m.window.triggerText, offers: m.window.offers.map(o => o.name + "|" + o.reactorRef + "|" + o.costText) } : null,
     reactions: b.battleLog.filter(l => l.type === "reaction").map(l => l.text),
     drillAHp: u("drillA") ? u("drillA").currentHp : null,
@@ -115,7 +116,7 @@ await s7.evaluate(() => {
   vale.currentHp = 40; c.x = vale.x; c.y = Math.max(0, vale.y - 2);
   reyes.x = vale.x; reyes.y = Math.min(17, vale.y + 1);
   window.__giveTurnTo(b, S, reyes.id);
-  b.reactions.economy.pools.sectionSevenLink.current = 2;
+  b.resources.faction.player.sectionSevenTempo.current = 2;
   S.executeCommand(b, { type: "useAbility", unitId: reyes.id, abilityId: "fieldRepair", target: { unitId: vale.id } });
   window.STATUS_ZERO.refreshUi();
 });
@@ -144,8 +145,11 @@ const gsnap = () => gf.evaluate(() => {
   const link = m.links.find(l => l.id === "sectionSeven");
   return {
     phase: b.mission.phaseId,
-    link: { active: link.active, enabled: link.enabled, reason: link.reason,
-      pool: link.pool ? link.pool.current + "/" + link.pool.max : null, available: link.pool ? link.pool.available : null },
+    link: (() => {
+      const res = (link.resources || [])[0];
+      return { active: link.active, enabled: link.enabled, reason: link.reason,
+        pool: res ? res.current + "/" + res.max : null, available: res ? res.available : null };
+    })(),
     kellHostile: u("vale") && u("kell") ? S.isHostile(b, u("vale").id, u("kell").id) : null,
     kellId: u("kell") ? u("kell").id : null,
     reactions: b.battleLog.filter(l => l.type === "reaction").map(l => l.text),
@@ -197,7 +201,7 @@ const saveCheck = await gf.evaluate(() => {
   return {
     identical: S.serializeBattle(restored) === saved,
     linkSurvived: link(restored).enabled === link(b).enabled && link(restored).active === link(b).active,
-    poolSurvived: JSON.stringify(restored.reactions.economy.pools) === JSON.stringify(b.reactions.economy.pools)
+    poolSurvived: JSON.stringify(restored.resources) === JSON.stringify(b.resources)
   };
 });
 check("    save/reload preserves link and pool state", saveCheck.identical && saveCheck.linkSurvived && saveCheck.poolSurvived, JSON.stringify(saveCheck));
@@ -219,7 +223,7 @@ const chain = await gf.evaluate(() => {
     b.units[id].nextActionTime = id === vale.id ? b.currentTime : b.currentTime + 10000;
   }
   S.executeCommand(b, { type: "activateUnit", unitId: vale.id });
-  b.reactions.economy.pools.sectionSevenLink.current = 2;
+  b.resources.faction.player.sectionSevenTempo.current = 2;
   S.executeCommand(b, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: enemy.id } });
   window.STATUS_ZERO.refreshUi();
   return { before, pendingWindow: !!b.reactions.window, active: S.reactionModel(b).links.find(l => l.id === "sectionSeven").active };

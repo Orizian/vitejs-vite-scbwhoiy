@@ -115,12 +115,14 @@ const exported = await page.evaluate(async () => {
   const exchange = await import("/src/content/gameplay/exchange.js");
   const registry = await import("/src/content/gameplay/registry.js");
   const draft = JSON.parse(localStorage.getItem("statuszero.gameplay.editorDraft"));
+  const format = await import("/src/content/gameplay/format.js");
   const changes = exchange.buildBundle(registry.CANONICAL_GAMEPLAY, draft, { mode: "changes" });
   const full = exchange.buildBundle(registry.CANONICAL_GAMEPLAY, draft, { mode: "full" });
   const again = exchange.buildBundle(registry.CANONICAL_GAMEPLAY, draft, { mode: "changes" });
   return {
     changePaths: Object.keys(changes.files).sort(),
     fullPaths: Object.keys(full.files).sort(),
+    registryCount: format.REGISTRY_IDS.length,
     manifest: changes.manifest,
     readme: changes.files["README.md"],
     deterministic: exchange.bundleToText(changes) === exchange.bundleToText(again),
@@ -138,7 +140,14 @@ check("   the manifest names the entity and its operation", exported.manifest.en
 check("   the manifest states the repository path", exported.manifest.entities[0].path === "src/content/gameplay/units.json");
 check("   the handoff explains what to do with it", /npm test/.test(exported.readme) && /manifest\.entities/.test(exported.readme));
 check("   exporting twice produces identical bytes", exported.deterministic);
-check("7. a full export covers every registry", exported.fullPaths.length === 10, exported.fullPaths.length);
+// Registry count plus the manifest and the README. Asserted against the
+// registry list rather than a literal, so adding a registry does not need a
+// test edit — only a real gap does.
+check(
+  "7. a full export covers every registry",
+  exported.fullPaths.length === exported.registryCount + 2,
+  exported.fullPaths.length + " files for " + exported.registryCount + " registries"
+);
 
 /* ---- import is a draft, not an install ---- */
 console.log("import");

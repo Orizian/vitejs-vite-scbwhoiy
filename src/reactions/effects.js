@@ -172,22 +172,75 @@ export const REACTION_EFFECT_REGISTRY = {
     }
   },
 
-  /** Restores reaction capacity or a shared pool. The counterpart to `cost`,
-   *  so a skill can eventually give tempo back rather than only spend it. */
+  /**
+   * Moves a unit's next activation earlier or later on the real timeline.
+   *
+   * The generic form of "a clean kill leaves you already moving" and "that
+   * shot took a long time to line up". It routes through the engine's own
+   * initiative arithmetic rather than writing `nextActionTime` directly, so a
+   * fast frame and a slow one feel the same adjustment differently — which is
+   * the whole reason the timeline is continuous.
+   *
+   * Clamped at both ends: an activation can never be pulled earlier than now,
+   * and a single adjustment cannot exceed a configured ceiling. Unbounded
+   * hastening is how you get a unit that acts forever.
+   */
+  modifyTurnDelay: {
+    name: "Modify turn delay",
+    fields: ["target", "hasten", "delay"],
+    summary: "Pulls a unit's next activation earlier, or pushes it later.",
+    validate(effect) {
+      const problems = [];
+      const hasten = Number(effect.hasten || 0);
+      const delay = Number(effect.delay || 0);
+      if (!hasten && !delay) problems.push("modifyTurnDelay needs a hasten or a delay.");
+      if (hasten < 0 || delay < 0) {
+        problems.push("modifyTurnDelay takes positive amounts; use the other field to reverse it.");
+      }
+      if (effect.target && !["self", "subject", "source"].includes(effect.target)) {
+        return problems.concat(['modifyTurnDelay target must be "self", "subject" or "source".']);
+      }
+      return problems;
+    },
+    run(effect, ctx) {
+      const which = effect.target || "self";
+      const targetId = which === "self" ? ctx.reactorId : ctx.eventUnitId(which);
+      if (!targetId || !ctx.unitIsAlive(targetId)) {
+        return { ok: false, reason: "no living unit to reschedule" };
+      }
+      const delta = Number(effect.delay || 0) - Number(effect.hasten || 0);
+      if (!delta) return { ok: false, reason: "no adjustment requested" };
+      const result = ctx.engine.modifyTurnDelay(ctx.state, targetId, delta, {
+        sourceUnitId: ctx.reactorId
+      });
+      if (!result || !result.applied) {
+        return { ok: false, reason: (result && result.reason) || "the timeline did not move" };
+      }
+      return {
+        ok: true,
+        detail:
+          ctx.unitRef(targetId) + (delta < 0 ? " acts sooner by " : " is delayed by ") +
+          Math.abs(Math.round(result.applied))
+      };
+    }
+  },
+
+  /** Restores a resource. The counterpart to `cost`, so a skill can give
+   *  tempo back rather than only spend it. */
   restoreReactionResource: {
-    name: "Restore reaction resource",
-    fields: ["poolId", "amount", "target"],
-    summary: "Refunds points into a shared pool or a unit's own capacity.",
+    name: "Restore resource",
+    fields: ["resourceId", "amount", "target"],
+    summary: "Refunds points into any resource the reactor or the event names.",
+    validate(effect) {
+      return effect.resourceId ? [] : ["restoreReactionResource needs a resourceId."];
+    },
     run(effect, ctx) {
       const amount = effect.amount == null ? 1 : effect.amount;
-      if (effect.poolId) {
-        const restored = ctx.restorePool(effect.poolId, amount);
-        return { ok: restored > 0, detail: "restored " + restored + " to " + effect.poolId };
-      }
-      const targetId = effect.target === "self" || !effect.target ? ctx.reactorId : ctx.eventUnitId(effect.target);
-      if (!targetId) return { ok: false, reason: "no target for the refund" };
-      ctx.restoreUnitCapacity(targetId, amount);
-      return { ok: true, detail: "restored capacity to " + ctx.unitRef(targetId) };
+      const which = effect.target || "self";
+      const targetId = which === "self" ? ctx.reactorId : ctx.eventUnitId(which);
+      const restored = ctx.gainResource(effect.resourceId, targetId, amount);
+      if (!restored) return { ok: false, reason: "nothing to restore" };
+      return { ok: true, detail: "restored " + restored + " " + effect.resourceId };
     }
   }
 };

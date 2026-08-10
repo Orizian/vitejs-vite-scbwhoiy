@@ -23,6 +23,17 @@ import {
   clearGameplayDraft
 } from "../content/gameplay/registry.js";
 import { resolveTestSubject } from "../content/gameplay/arena.js";
+import { REACTION_EVENT_TYPE_IDS } from "../reactions/events.js";
+import { REACTION_EFFECT_IDS } from "../reactions/effects.js";
+import { REACTION_CONDITION_IDS } from "../reactions/conditions.js";
+
+/** Option lists a schema field can name instead of restating. Keeps the
+ *  editor's vocabulary and the engine's registries the same list. */
+const DYNAMIC_OPTIONS = {
+  reactionEvents: REACTION_EVENT_TYPE_IDS,
+  reactionEffects: REACTION_EFFECT_IDS,
+  reactionConditions: REACTION_CONDITION_IDS
+};
 
 /* =========================================================================
  * STATUS ZERO — GAMEPLAY DATA STUDIO
@@ -948,12 +959,15 @@ function SchemaField({ field, value, data, onChange }) {
   }
 
   if (field.kind === "enum") {
+    const options = field.optionsFrom
+      ? DYNAMIC_OPTIONS[field.optionsFrom] || []
+      : field.options || [];
     return (
       <label className="block">
         {label}
         <select value={value == null ? "" : value} onChange={(event) => onChange(event.target.value)} className={box}>
           <option value="">—</option>
-          {(field.options || []).map((option) => (
+          {options.map((option) => (
             <option key={option} value={option}>{option}</option>
           ))}
         </select>
@@ -980,7 +994,13 @@ function SchemaField({ field, value, data, onChange }) {
   }
 
   if (field.kind === "ref" || field.kind === "refList") {
-    const options = Object.keys(data[field.registry] || {}).sort();
+    // Some registries are addressed by a stable field rather than by their
+    // key — an operator's `ref` is what reactions and links name, and it is
+    // deliberately allowed to differ from the key it is filed under.
+    const entries = data[field.registry] || {};
+    const options = Object.keys(entries)
+      .map((key) => (field.refField ? entries[key][field.refField] || key : key))
+      .sort();
     const isList = field.kind === "refList";
     const current = isList ? value || [] : value == null ? "" : value;
     return (
@@ -1307,22 +1327,44 @@ function SchemaField({ field, value, data, onChange }) {
   }
 
   if (field.kind === "objectList") {
-    const list = value || [];
+    // `single` fields hold one object rather than a list — a reaction has one
+    // effect, not a sequence of them.
+    const current = field.single ? value || {} : value || [];
+    const vocabulary =
+      field.typeKey === "type"
+        ? REACTION_EFFECT_IDS
+        : field.typeKey === "*"
+        ? REACTION_CONDITION_IDS
+        : null;
     return (
       <div>
         {label}
         <p className="mb-2 text-[10px] leading-relaxed text-slate-600">
-          Each entry's <code>{field.typeKey || "type"}</code> selects engine behaviour; the values
-          beside it are authored. Edit as canonical JSON to keep the engine and the editor honest
-          about what a handler actually accepts.
+          {field.typeKey === "*" ? (
+            <>Each entry names one condition kind. The values beside it are authored.</>
+          ) : (
+            <>
+              The <code>{field.typeKey || "type"}</code> selects engine behaviour; the values beside
+              it are authored.
+            </>
+          )}{" "}
+          Edited as canonical JSON, so the editor cannot claim a handler accepts something it does
+          not.
         </p>
+        {vocabulary ? (
+          <p className="mb-2 break-words text-[10px] leading-relaxed text-slate-700">
+            Available: {vocabulary.join(", ")}
+          </p>
+        ) : null}
         <textarea
-          rows={Math.min(18, Math.max(4, JSON.stringify(list, null, 2).split("\n").length))}
-          value={JSON.stringify(list, null, 2)}
+          rows={Math.min(20, Math.max(4, JSON.stringify(current, null, 2).split("\n").length))}
+          value={JSON.stringify(current, null, 2)}
           onChange={(event) => {
             try {
               const parsed = JSON.parse(event.target.value);
-              if (Array.isArray(parsed)) onChange(parsed);
+              if (field.single ? parsed && typeof parsed === "object" && !Array.isArray(parsed) : Array.isArray(parsed)) {
+                onChange(parsed);
+              }
             } catch {
               /* keep the last valid value while mid-edit */
             }

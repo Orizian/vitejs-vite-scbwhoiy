@@ -1,0 +1,227 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "reactions",
+  "description": "Out-of-turn responses, as WHEN / IF / THEN. `trigger` is a generic event, `conditions` a declarative vocabulary, `effect` a registered primitive. No reaction names an engine behaviour that does not already exist.",
+  "entries": {
+    "heldFiringLane": {
+      "name": "Held Firing Lane",
+      "description": "A frame holding overwatch fires the moment a hostile it can see steps into the lane — or is put there by someone else.",
+      "trigger": "unitMoved",
+      "priority": 80,
+      "requires": {
+        "status": "overwatching"
+      },
+      "conditions": [
+        {
+          "reactorHasStatus": "overwatching"
+        },
+        {
+          "subjectRelation": "hostile"
+        },
+        {
+          "subjectAlive": true
+        },
+        {
+          "knowsSubject": "acquired"
+        },
+        {
+          "subjectBecameExposed": true
+        },
+        {
+          "withinRange": 12
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "commandPoints"
+          },
+          {
+            "amount": 1,
+            "id": "reactionCapacity"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1,
+        "perChain": 1
+      },
+      "effect": {
+        "formula": "physical",
+        "power": 90,
+        "targetFrom": "subject",
+        "type": "reactionAttack"
+      }
+    },
+    "predatorTempoEvade": {
+      "name": "Slipstream",
+      "description": "Reading a shot early is the same as starting to move early. Evading a hostile attack pulls this frame's next activation forward.",
+      "trigger": "attackEvaded",
+      "priority": 40,
+      "requires": {
+        "status": "cloaked"
+      },
+      "conditions": [
+        {
+          "subjectIsReactor": true
+        },
+        {
+          "sourceRelation": "hostile"
+        }
+      ],
+      "cost": {},
+      "limits": {
+        "perActivation": 2,
+        "perChain": 1
+      },
+      "effect": {
+        "hasten": 120,
+        "target": "self",
+        "type": "modifyTurnDelay"
+      }
+    },
+    "predatorTempoKill": {
+      "name": "Predator's Tempo",
+      "description": "A frame that finishes something in close quarters is already moving before the wreck lands. Its next activation comes sooner.",
+      "trigger": "unitDestroyed",
+      "priority": 40,
+      "requires": {
+        "status": "cloaked"
+      },
+      "conditions": [
+        {
+          "sourceIsReactor": true
+        },
+        {
+          "subjectRelation": "hostile"
+        },
+        {
+          "withinRange": 1
+        }
+      ],
+      "cost": {},
+      "limits": {
+        "perActivation": 1,
+        "perChain": 1
+      },
+      "effect": {
+        "hasten": 220,
+        "target": "self",
+        "type": "modifyTurnDelay"
+      }
+    },
+    "sectionSevenAdvance": {
+      "name": "Into the Opening",
+      "description": "Kell removes something and Vale moves into the ground it was holding. A real move, never a teleport.",
+      "owner": "vale",
+      "trigger": "unitDestroyed",
+      "priority": 60,
+      "conditions": [
+        {
+          "sourceUnit": "kell"
+        },
+        {
+          "linkActive": "sectionSeven"
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "sectionSevenTempo"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1
+      },
+      "effect": {
+        "targetFrom": "subject",
+        "type": "advanceIntoOpening"
+      }
+    },
+    "sectionSevenFieldTempo": {
+      "name": "Back in the Fight",
+      "description": "Reyes finishes a repair and the repaired frame acts immediately — one basic action, out of turn.",
+      "owner": "reyes",
+      "trigger": "repairCompleted",
+      "priority": 65,
+      "conditions": [
+        {
+          "sourceUnit": "reyes"
+        },
+        {
+          "linkActive": "sectionSeven"
+        },
+        {
+          "subjectUnit": [
+            "vale",
+            "kell"
+          ]
+        },
+        {
+          "subjectAlive": true
+        },
+        {
+          "amountAtLeast": 10
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "sectionSevenTempo"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1
+      },
+      "effect": {
+        "grants": "basicAbility",
+        "recipientFrom": "subject",
+        "type": "partialAction"
+      }
+    },
+    "sectionSevenMarkShot": {
+      "name": "Fire on the Mark",
+      "description": "Vale paints a target and Kell fires on his data, out of turn. Kell does not spend his activation.",
+      "owner": "kell",
+      "trigger": "targetMarked",
+      "priority": 70,
+      "conditions": [
+        {
+          "sourceUnit": "vale"
+        },
+        {
+          "linkActive": "sectionSeven"
+        },
+        {
+          "subjectRelation": "hostile"
+        },
+        {
+          "subjectAlive": true
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "sectionSevenTempo"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1
+      },
+      "effect": {
+        "formula": "physical",
+        "power": 95,
+        "targetFrom": "subject",
+        "type": "reactionAttack"
+      }
+    }
+  }
+}

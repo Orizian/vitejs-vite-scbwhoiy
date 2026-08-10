@@ -85,8 +85,18 @@ export const REACTION_EVENT_TYPES = [
   {
     id: "unitMoved",
     name: "Unit moved",
-    from: ["unitMoved"],
-    fields: ["unitRef", "teamId"],
+    from: ["unitMoved", "unitForcedMove"],
+    fields: ["unitRef", "teamId", "sourceRef", "from", "to", "tiles", "forced"],
+    // Deliberately one event for both walking and being shoved. A prepared
+    // shooter does not care which; it cares that something crossed its lane.
+    // `forced` is in the payload for the reactions that genuinely differ.
+    stages: ["after"]
+  },
+  {
+    id: "attackEvaded",
+    name: "Attack evaded",
+    from: ["attackMissed"],
+    fields: ["unitRef", "teamId", "sourceRef", "abilityId"],
     stages: ["after"]
   },
   {
@@ -242,14 +252,39 @@ export function deriveReactionEvents(simEvent, stage, view) {
       break;
 
     case "unitMoved":
+    case "unitForcedMove":
       if (stage === "after") {
+        const forced = simEvent.type === "unitForcedMove";
         out.push({
           type: "unitMoved",
           unitRef: ref(simEvent.unitId),
           teamId: team(simEvent.unitId),
           unitId: simEvent.unitId,
+          // Who did the displacing. Self for a voluntary walk, which is what
+          // makes "reacted because someone else put it there" expressible.
+          sourceRef: forced ? ref(simEvent.sourceUnitId) : ref(simEvent.unitId),
+          sourceUnitId: forced ? simEvent.sourceUnitId || null : simEvent.unitId,
+          abilityId: simEvent.abilityId || null,
           from: simEvent.from,
-          to: simEvent.to
+          to: simEvent.to,
+          tiles: simEvent.tiles == null ? null : simEvent.tiles,
+          forced
+        });
+      }
+      break;
+
+    case "attackMissed":
+      if (stage === "after") {
+        out.push({
+          type: "attackEvaded",
+          // The subject is the unit that got out of the way; the source is
+          // whoever shot at it. An evasion passive belongs to the subject.
+          unitRef: ref(simEvent.targetUnitId),
+          teamId: team(simEvent.targetUnitId),
+          unitId: simEvent.targetUnitId,
+          sourceRef: ref(simEvent.sourceUnitId),
+          sourceUnitId: simEvent.sourceUnitId,
+          abilityId: simEvent.abilityId || null
         });
       }
       break;

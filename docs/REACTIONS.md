@@ -2,10 +2,15 @@
 
 Out-of-turn responses to authoritative simulation events, and the relationship framework built on them.
 
-Section Seven is the first Link. Nothing in the simulation or the renderer names it — a test greps both for its identifiers.
+Section Seven is the first Link. Nothing in the simulation or the renderer names it — a test greps both for its identifiers, and a filesystem tripwire keeps character names out of every generic module.
+
+Reaction costs are now ordinary resource spends rather than a pool system of their own; a reaction blocked only by cost is shown greyed out with the reason, while one blocked by a limit is not shown at all.
 
 - Runtime: `src/reactions/` — `events.js`, `conditions.js`, `effects.js`, `economy.js`, `links.js`, `runtime.js`
-- Content: `src/content/reactions.js`
+- Content: `src/content/gameplay/reactions.json`, `combat-links.json`, `resources.json` — canonical
+  gameplay data, edited in the Studio. `src/content/reactions.js` is now only the adapter that turns
+  those id-keyed registries into the ordered lists the runtime indexes.
+- Resources, causality and the lifecycle invariant: **[`COMBAT_ORCHESTRATION.md`](COMBAT_ORCHESTRATION.md)**
 - Bridge into the engine: the `REACTION_ENGINE` adapter in `src/App.jsx`
 - Fixtures: `fixture-section-seven.json` (Act-I style), `fixture-grayfield-slice.json` (restored mid-battle)
 

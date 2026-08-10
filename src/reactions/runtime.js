@@ -32,11 +32,7 @@ import {
   canAfford,
   payCost,
   refundCost,
-  onActivationStarted,
-  setPoolAvailable,
-  refreshPool,
-  unitCapacity,
-  describeEconomy
+  describeCost
 } from "./economy.js";
 import {
   createLinkState,
@@ -44,10 +40,16 @@ import {
   isLinkActive,
   setLinkEnabled,
   setLinkUnlocked,
-  poolOwnership,
-  linkPoolDefinitions,
+  resourceOwnership,
   describeLinks
 } from "./links.js";
+import {
+  normalizeResourceDefinition,
+  setResourceAvailable,
+  regenerateOnActivation,
+  gainResource,
+  describeResources
+} from "../combat/resources.js";
 
 export const REACTION_LIMITS = {
   /** How deep a cascade may go. A reaction that triggers a reaction that
@@ -71,10 +73,9 @@ export const AUTO_POLICIES = ["takeFirst", "decline"];
 
 export function createReactionState(content, options) {
   const links = createLinkState(content.links, options);
-  const pools = linkPoolDefinitions(content.links).concat(content.pools || []);
   return {
     enabled: true,
-    economy: createReactionEconomyState(pools),
+    economy: createReactionEconomyState(),
     links,
     /** Suspended optional-reaction choice, or null. */
     window: null,
@@ -112,6 +113,10 @@ export function buildReactionIndex(content) {
     list.sort((a, b) => String(a.id).localeCompare(String(b.id)));
   }
 
+  const resourceById = Object.fromEntries(
+    (content.resources || []).map((entry) => [entry.id, entry])
+  );
+
   const reactionsByLink = {};
   for (const link of content.links || []) {
     reactionsByLink[link.id] = link.reactions || [];
@@ -126,7 +131,10 @@ export function buildReactionIndex(content) {
     linkByReaction,
     triggers: new Set(Object.keys(byTrigger)),
     reactionById: Object.fromEntries((content.reactions || []).map((entry) => [entry.id, entry])),
-    poolDefinitions: linkPoolDefinitions(content.links).concat(content.pools || [])
+    resourceById,
+    resourceDefinitions: (content.resources || []).map((entry) =>
+      normalizeResourceDefinition(entry)
+    )
   };
 }
 
@@ -166,7 +174,9 @@ function buildView(state, deps) {
       return team ? team.controller || "ai" : "ai";
     },
     knowledgeState: (viewerId, subjectId) =>
-      engine.knowledgeState ? engine.knowledgeState(state, viewerId, subjectId) : "acquired"
+      engine.knowledgeState ? engine.knowledgeState(state, viewerId, subjectId) : "acquired",
+    canSeeTile: (viewerId, tile) =>
+      !!tile && (engine.canSeeTile ? engine.canSeeTile(state, viewerId, tile) : true)
   };
 }
 
@@ -182,17 +192,21 @@ export function refreshLinks(state, deps) {
   const view = buildView(state, deps);
   const changed = evaluateLinks(reactions.links, deps.content.links, view);
 
-  for (const link of deps.content.links || []) {
-    if (!link.sharedPool) continue;
-    const active = isLinkActive(reactions.links, link.id);
-    const flipped = setPoolAvailable(reactions.economy, link.sharedPool.id, active);
+  // A resource that names a link is usable exactly while that link holds. The
+  // resource layer knows nothing about links; the link layer knows nothing
+  // about balances. This loop is the only place the two meet.
+  for (const definition of deps.index.resourceDefinitions) {
+    if (!definition.linkId) continue;
+    const active = isLinkActive(reactions.links, definition.linkId);
+    const flipped = setResourceAvailable(state, definition, active);
     if (flipped) {
+      const link = (deps.content.links || []).find((entry) => entry.id === definition.linkId);
       deps.engine.logLine(
         state,
         "reactionLink",
-        (link.name || link.id) + (active ? " is available" : " is unavailable") +
-          (active ? "" : " — " + (reactions.links[link.id] || {}).reason),
-        { linkId: link.id, active }
+        ((link && link.name) || definition.linkId) + (active ? " is available" : " is unavailable") +
+          (active ? "" : " — " + (reactions.links[definition.linkId] || {}).reason),
+        { linkId: definition.linkId, active }
       );
     }
   }
@@ -213,14 +227,47 @@ export function setLinkStateById(state, deps, linkId, options) {
  * DISCOVERY AND FILTERING
  * -------------------------------------------------------------*/
 
-function reactorIdsFor(reaction, state, view) {
+/**
+ * Who this reaction is offered to.
+ *
+ * An owned reaction belongs to one authored unit. An unowned one is offered to
+ * every unit that satisfies `requires` — which is how a stance-based response
+ * works without the content restating it per operator.
+ */
+function candidateReactorIds(reaction, state, view) {
   if (reaction.owner) {
     const id = view.unitIdByRef(reaction.owner);
     return id ? [id] : [];
   }
-  // An unowned reaction belongs to whichever unit the event names, which is
-  // how "the damaged unit may counter" style reactions will work later.
-  return [];
+  if (!reaction.requires) return [];
+  return state.unitOrder.slice();
+}
+
+/** Cheap gate that decides whether a unit is a candidate at all. */
+function meetsRequirements(reaction, reactorId, view) {
+  const requires = reaction.requires;
+  if (!requires) return true;
+  if (requires.status && !view.hasStatus(reactorId, requires.status)) return false;
+  if (requires.team && view.unitTeam(reactorId) !== requires.team) return false;
+  return true;
+}
+
+/** A reaction blocked only by cost is still worth showing, so the player can
+ *  see what the shortage cost them. Anything else simply does not apply. */
+function offerableWhenUnaffordable(reaction) {
+  return !reaction.mandatory && !reaction.automatic;
+}
+
+function costContext(state, deps, reactorId, event) {
+  const unit = state.units[reactorId];
+  return {
+    unitId: reactorId,
+    teamId: unit ? unit.teamId : null,
+    eventSeq: event.__seq,
+    chainId: event.cause ? event.cause.chainId : null,
+    activationCount: state.activationCount,
+    resourceById: (id) => deps.index.resourceById[id] || null
+  };
 }
 
 function buildConditionContext(state, deps, view, reaction, reactorId, event) {
@@ -238,7 +285,16 @@ function buildConditionContext(state, deps, view, reaction, reactorId, event) {
     // What the *reactor's faction* believes about a unit. A reaction gated on
     // knowledge cannot fire on something its side has not noticed, which is
     // what stops an out-of-turn response from becoming a detection oracle.
-    knowledgeState: (id) => view.knowledgeState(reactorId, id)
+    knowledgeState: (id) => view.knowledgeState(reactorId, id),
+    // Exposure, asked from the reactor's own position. See the
+    // `subjectBecameExposed` condition for why this is a relation rather than
+    // a cached cover flag.
+    canSeeTile: (tile) => view.canSeeTile(reactorId, tile),
+    eventTile: (which) => {
+      if (which === "from") return event.from || null;
+      if (which === "to") return event.to || event.tile || null;
+      return event.tile || null;
+    }
   };
 }
 
@@ -261,8 +317,12 @@ export function discoverReactions(state, deps, event) {
     // not exist. This is the whole narrative gate.
     if (linkId && !isLinkActive(reactions.links, linkId)) continue;
 
-    for (const reactorId of reactorIdsFor(reaction, state, view)) {
+    for (const reactorId of candidateReactorIds(reaction, state, view)) {
       if (!view.unitIsActionable(reactorId)) continue;
+      // `requires` is the cheap pre-filter an unowned reaction needs: a
+      // prepared-stance reaction is offered to whoever holds the stance,
+      // rather than being written once per unit that might.
+      if (!meetsRequirements(reaction, reactorId, view)) continue;
       // Reacting to your own action is legitimate and common — Reyes finishes
       // a repair and hands the repaired frame a partial action. The loop risk
       // is handled where it belongs: one reaction per event instance, plus the
@@ -271,13 +331,13 @@ export function discoverReactions(state, deps, event) {
       const ctx = buildConditionContext(state, deps, view, reaction, reactorId, event);
       if (!evaluateReactionCondition(reaction.conditions, ctx)) continue;
 
-      const affordability = canAfford(reactions.economy, reaction, {
-        unitId: reactorId,
-        unitCapacity: reaction.capacity,
-        eventSeq: event.__seq,
-        activationCount: state.activationCount
-      });
-      if (!affordability.ok) continue;
+      const affordability = canAfford(state, reactions.economy, reaction, costContext(state, deps, reactorId, event));
+      // A reaction blocked only by its cost is still offered, greyed out, so
+      // the prompt can say "not enough Command Points" instead of quietly not
+      // existing. A reaction blocked by a limit does not apply at all.
+      if (!affordability.ok) {
+        if (affordability.kind !== "cost" || !offerableWhenUnaffordable(reaction)) continue;
+      }
 
       const controller = reaction.mandatory
         ? "automatic"
@@ -299,7 +359,9 @@ export function discoverReactions(state, deps, event) {
         optional: !reaction.mandatory && !reaction.automatic,
         controller,
         priority: reaction.priority == null ? 50 : reaction.priority,
-        speed: view.speed(reactorId)
+        speed: view.speed(reactorId),
+        affordable: affordability.ok,
+        blockedReason: affordability.ok ? null : affordability.reason
       });
     }
   }
@@ -347,10 +409,15 @@ function buildEffectContext(state, deps, view, reaction, reactorId, event) {
       if (!unit) return event.tile || null;
       return unit.alive ? { x: unit.x, y: unit.y } : event.tile || { x: unit.x, y: unit.y };
     },
-    restorePool: (poolId, amount) => refreshPool(state.reactions.economy, poolId, amount),
-    restoreUnitCapacity: (unitId, amount) => {
-      const entry = unitCapacity(state.reactions.economy, unitId);
-      entry.current = Math.min(entry.max, entry.current + amount);
+    gainResource: (resourceId, unitId, amount) => {
+      const raw = deps.index.resourceById[resourceId];
+      if (!raw) return 0;
+      const definition = normalizeResourceDefinition({ id: resourceId, ...raw });
+      const owner =
+        definition.scope === "faction"
+          ? { teamId: view.unitTeam(unitId || reactorId) }
+          : { unitId: unitId || reactorId };
+      return gainResource(state, definition, owner, amount);
     }
   };
 }
@@ -384,13 +451,8 @@ function executeOffer(state, deps, offer, event) {
     return { ok: false, reason: illegal };
   }
 
-  const costContext = {
-    unitId: offer.reactorId,
-    unitCapacity: reaction.capacity,
-    eventSeq: event.__seq,
-    activationCount: state.activationCount
-  };
-  const affordability = canAfford(reactions.economy, reaction, costContext);
+  const costs = costContext(state, deps, offer.reactorId, event);
+  const affordability = canAfford(state, reactions.economy, reaction, costs);
   if (!affordability.ok) {
     record(state, deps, {
       reactionId: offer.reactionId,
@@ -402,21 +464,24 @@ function executeOffer(state, deps, offer, event) {
     return { ok: false, reason: affordability.reason };
   }
 
-  const paid = payCost(reactions.economy, reaction, costContext);
+  const paid = payCost(state, reactions.economy, reaction, costs);
   if (!paid) return { ok: false, reason: "could not pay the cost" };
 
   const ctx = buildEffectContext(state, deps, view, reaction, offer.reactorId, event);
   const definition = reactionEffectById(reaction.effect.type);
   if (!definition) {
-    refundCost(reactions.economy, paid, costContext);
+    refundCost(state, paid);
     return { ok: false, reason: 'unknown reaction effect "' + reaction.effect.type + '"' };
   }
 
   let result;
   try {
-    result = definition.run(reaction.effect, ctx) || { ok: true };
+    const run = () => definition.run(reaction.effect, ctx) || { ok: true };
+    result = deps.engine.withReactionCause
+      ? deps.engine.withReactionCause(state, reaction.id, run)
+      : run();
   } catch (error) {
-    refundCost(reactions.economy, paid, costContext);
+    refundCost(state, paid);
     state.errors.push("Reaction " + reaction.id + " threw: " + error.message);
     return { ok: false, reason: "effect failed" };
   }
@@ -424,7 +489,7 @@ function executeOffer(state, deps, offer, event) {
   if (!result.ok) {
     // Nothing happened, so nothing is owed. This is the graceful path for
     // "the tile could not legally be entered" and its relatives.
-    refundCost(reactions.economy, paid, costContext);
+    refundCost(state, paid);
     record(state, deps, {
       reactionId: offer.reactionId,
       reactorRef: offer.reactorRef,
@@ -554,6 +619,10 @@ function resolveOffers(state, deps, offers, event) {
   for (let index = 0; index < offers.length; index += 1) {
     const offer = offers[index];
 
+    // An unaffordable offer exists only to be shown to a human. Nothing
+    // resolves it automatically, and accepting one is refused below.
+    if (offer.affordable === false && offer.controller !== "human") continue;
+
     if (offer.mandatory || offer.controller === "automatic") {
       executeOffer(state, deps, offer, event);
       continue;
@@ -574,6 +643,9 @@ function resolveOffers(state, deps, offers, event) {
     }
 
     const pending = offers.slice(index).filter((entry) => entry.controller === "human" && entry.optional);
+    // Nothing but affordable offers is worth suspending for: a window showing
+    // only greyed-out entries would stop the battle to say "no".
+    if (!pending.some((entry) => entry.affordable !== false)) continue;
     reactions.windowSeq += 1;
     return {
       suspended: true,
@@ -613,7 +685,15 @@ export function resolveReactionWindow(state, deps, offerId) {
 
   if (offerId) {
     const offer = window.offers.find((entry) => entry.id === offerId);
-    if (offer) executeOffer(state, deps, offer, event);
+    if (offer && offer.affordable === false) {
+      record(state, deps, {
+        reactionId: offer.reactionId,
+        reactorRef: offer.reactorRef,
+        trigger: event.type,
+        ok: false,
+        reason: offer.blockedReason || "cannot be paid for"
+      });
+    } else if (offer) executeOffer(state, deps, offer, event);
     else state.errors.push("Unknown reaction offer: " + offerId);
   } else {
     record(state, deps, {
@@ -655,8 +735,9 @@ export function autoResolveReactionWindows(state, deps, maxIterations) {
       break;
     }
     const window = state.reactions.window;
+    const takeable = window.offers.filter((offer) => offer.affordable !== false);
     const offerId =
-      state.reactions.autoPolicy === "decline" || !window.offers.length ? null : window.offers[0].id;
+      state.reactions.autoPolicy === "decline" || !takeable.length ? null : takeable[0].id;
     resolveReactionWindow(state, deps, offerId);
   }
 }
@@ -676,11 +757,11 @@ export function onUnitActivated(state, deps, unitId) {
   const reactions = state.reactions;
   if (!reactions) return;
   reactions.executedThisEvent = 0;
-  onActivationStarted(
-    reactions.economy,
+  regenerateOnActivation(
+    state,
+    deps.index.resourceDefinitions,
     unitId,
-    deps.index.poolDefinitions,
-    poolOwnership(reactions.links, deps.content.links)
+    resourceOwnership(reactions.links, deps.content.links, deps.index.resourceDefinitions)
   );
 }
 
@@ -697,24 +778,40 @@ export function beginSimulationEvent(state) {
 export function describeReactions(state, deps) {
   const reactions = state.reactions;
   if (!reactions) return null;
-  const links = describeLinks(reactions.links, deps.content.links, reactions.economy);
+  const resourceById = (id) => deps.index.resourceById[id] || null;
+  const definitions = deps.index.resourceDefinitions;
+
+  const links = describeLinks(reactions.links, deps.content.links, (linkId) =>
+    definitions
+      .filter((definition) => definition.linkId === linkId)
+      .flatMap((definition) =>
+        describeResources(state, [definition], { teamId: playerTeamId(state) }).faction
+      )
+  );
   const participantIds = [...new Set(links.flatMap((link) => link.participantUnitIds))];
+
   return {
     enabled: reactions.enabled,
     links,
-    economy: describeEconomy(reactions.economy, deps.index.poolDefinitions, participantIds),
+    resources: describeResources(state, definitions, {
+      teamId: playerTeamId(state),
+      unitIds: participantIds
+    }),
     window: reactions.window
       ? {
           id: reactions.window.id,
           trigger: reactions.window.event.type,
           triggerText: describeTrigger(state, reactions.window.event),
+          cause: reactions.window.event.cause || null,
           offers: reactions.window.offers.map((offer) => ({
             id: offer.id,
             name: offer.name,
             description: offer.description,
             reactorRef: offer.reactorRef,
             reactorUnitId: offer.reactorId,
-            costText: describeCost(offer.cost),
+            costText: describeCost(offer.cost, resourceById),
+            affordable: offer.affordable !== false,
+            blockedReason: offer.blockedReason || null,
             linkId: offer.linkId
           }))
         }
@@ -722,6 +819,13 @@ export function describeReactions(state, deps) {
     recent: reactions.log.slice(-6).reverse(),
     guards: reactions.guards || []
   };
+}
+
+/** Whose resource balances the HUD shows. The first human-controlled team,
+ *  falling back to the first team — presentation only. */
+function playerTeamId(state) {
+  const human = (state.teams || []).find((team) => team.controller === "human");
+  return human ? human.id : (state.teams && state.teams[0] ? state.teams[0].id : null);
 }
 
 function describeTrigger(state, event) {
@@ -740,18 +844,4 @@ function describeTrigger(state, event) {
   }
 }
 
-function describeCost(cost) {
-  const parts = [];
-  if (cost.reaction) parts.push(cost.reaction + " reaction");
-  if (cost.pool) parts.push(cost.pool.amount + " from " + cost.pool.id);
-  return parts.join(" + ") || "free";
-}
-
-export {
-  isLinkActive,
-  refreshPool,
-  describeLinks,
-  describeEconomy,
-  poolOwnership,
-  linkPoolDefinitions
-};
+export { isLinkActive, describeLinks };

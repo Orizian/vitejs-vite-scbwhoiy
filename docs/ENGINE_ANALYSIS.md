@@ -109,8 +109,8 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 |---|---|---|---|
 | SIM-01 | Deterministic authoritative simulation | **Met** | Enforced by the architecture audit. |
 | TIM-01 | Recovery timeline | **Met** | Constants need a large-map pass (§2.2). |
-| ACT-01 | Action + reaction framework | **Met** | **[CLOSED]** Move, primary action and out-of-turn reactions coexist. Reactions consume the authoritative event queue with before/after stages, a per-unit and shared-pool economy, deterministic ordering, and depth/per-event ceilings so cascades are bounded rather than suppressed. |
-| RES-01 | Generic resource framework | **Partial** | Per-unit resources exist with max/current and spend/restore effects. **No squad-wide resources** (Stock), no charge/solution states, no reaction pools. |
+| ACT-01 | Action + reaction framework | **Met** | **[CLOSED]** Move, primary action and out-of-turn reactions coexist. Reactions consume the authoritative event queue with before/after stages, resource costs, deterministic ordering, and depth/chain/per-event ceilings so cascades are bounded rather than suppressed. Every event carries a causal chain, and the lifecycle now guarantees a valid continuation — the reaction softlock is closed and regressed. |
+| RES-01 | Generic resource framework | **Met** | **[CLOSED]** One authored resource registry with `unit` and `faction` scope, regeneration triggers, availability gating and generic has/spend/gain/set. Command Points are the first squad-wide resource; reaction costs are ordinary spends rather than a second pool system. Charge and solution states are content on top of this, not new architecture. See `docs/COMBAT_ORCHESTRATION.md`. |
 | STA-01 | Status/component framework | **Partial** | Timed statuses work well. **No subsystem damage** — nothing models a damaged sensor, radiator, weapon or comms, which Kell's solution-breaking, Nyx's venting and Becker's whole character need. |
 | FAC-01 | Multi-faction hostility matrix | **Met** | **[CLOSED]** A per-battle relationship matrix (`src/mission/factions.js`) with allied / neutral / hostile, mutable mid-battle, serialized with the save. Elimination now resolves on hostility rather than team identity. Defaults reproduce the old rule exactly, so existing content is unaffected. |
 | MAP-01 | 2.5D tile battlefield | **Met** | Elevation, cover, facing, flanking, LOS, deterministic projection all present. |
@@ -146,7 +146,7 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 | AUD-01 | Contextual audio control | **Partial** | Per-screen and per-mission music with fallback chains. No per-phase changes or stingers. |
 | DBG-01 | Mission authoring/debug tools | **Partial** | Strong developer panel, validation panel, soak tests, replay check, a Knowledge tab showing every faction's contacts and clocks, and an Intel overlay marking last-known positions. Three authoring surfaces now share one shell: missions, scenes and the **Gameplay Data Studio** (`docs/GAMEPLAY_DATA.md`), which edits the authored registries the game actually loads and exports a bundle that can be applied to the repository mechanically. Still no phase jump, flag setting or group spawning. |
 
-**Tally: 19 met, 11 partial, 10 missing.** (Was 17 / 11 / 12 after reactions, 15 / 12 / 13 after mission scripting, and 7 / 13 / 20 at the original audit.) The main-menu, scene-editor and gameplay-data phases since then were tooling and integration rather than simulation requirements, so they moved DBG-01's substance without moving the count.
+**Tally: 20 met, 10 partial, 10 missing.** (Was 17 / 11 / 12 after reactions, 15 / 12 / 13 after mission scripting, and 7 / 13 / 20 at the original audit.) The main-menu, scene-editor and gameplay-data phases were tooling and integration rather than simulation requirements, so they moved DBG-01's substance without moving the count. The combat-orchestration phase closed RES-01.
 
 Of the ten still missing, most are downstream of the four character kits and the subsystem-damage model. The four foundational systems — mission scripting, the faction matrix, reactions and now perception — are all in place, and each of the remaining kits is content plus a resource economy on top of them rather than new architecture.
 
@@ -275,7 +275,7 @@ Interrupt queue with caps; squad-wide resources; charge/solution states. Then mi
 **Phase C — information model (R-04)**  **[DONE]**
 Per-faction knowledge, last-known positions, alert states, dormancy. Built — see `docs/PERCEPTION.md`. Nyx's heat and cloak economy sit on top of it and need no further architecture.
 
-**Phase D — the trio**  *(the Link is done; the three economies are next)*
+**Phase D — the trio**  *(the Link and the orchestration layer are done; the three economies are next)*
 Vale's Authority and datalink; Kell's firing solution and remote targeting; the Section Seven Link. The Link is built. Vale's datalink is now a small system rather than a large one — sharing a mark across the squad is `shareKnowledge` plus a resource, and Kell firing on another unit's sensors is an ability whose legality reads the faction's contacts instead of the shooter's own line.
 
 **Phase E onward** — as the GDD has it: Reyes's Stock and the Workshop, then large-map sectors and destructibles, then hub capabilities and skill trees.

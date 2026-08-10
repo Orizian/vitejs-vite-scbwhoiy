@@ -106,7 +106,10 @@ export const REACTION_CONDITION_REGISTRY = {
 
   withinRange: {
     fields: ["withinRange", "of"],
-    summary: "The reactor is within N tiles of the event's subject or source.",
+    summary:
+      "The reactor is within N tiles of the event's subject or source. Distance is " +
+      "the engine's grid distance, which counts a diagonal as two steps — the same " +
+      "measure ability ranges use.",
     evaluate: (condition, ctx) => {
       const targetId = condition.of === "source" ? ctx.event.sourceUnitId : ctx.event.unitId;
       const distance = ctx.distanceTo(targetId);
@@ -166,6 +169,71 @@ export const REACTION_CONDITION_REGISTRY = {
       const value = ctx.missionFact(condition.missionFact);
       if (condition.equals !== undefined) return value === condition.equals;
       return value !== undefined && value !== null && value !== false;
+    }
+  },
+
+  /** The reactor is itself the unit that caused the event. */
+  sourceIsReactor: {
+    fields: ["sourceIsReactor"],
+    summary: "The reactor caused the event (its own kill, its own attack).",
+    evaluate: (condition, ctx) => {
+      const matches = ctx.event.sourceUnitId === ctx.reactorId;
+      return condition.sourceIsReactor === false ? !matches : matches;
+    }
+  },
+
+  /** The reactor is the unit the event happened to. */
+  subjectIsReactor: {
+    fields: ["subjectIsReactor"],
+    summary: "The event happened to the reactor (it was hit, missed, moved).",
+    evaluate: (condition, ctx) => {
+      const matches = ctx.event.unitId === ctx.reactorId;
+      return condition.subjectIsReactor === false ? !matches : matches;
+    }
+  },
+
+  /** Was the movement voluntary, or did something put the unit there? */
+  eventForced: {
+    fields: ["eventForced"],
+    summary: "The event was a forced displacement rather than a voluntary act.",
+    evaluate: (condition, ctx) =>
+      condition.eventForced === false ? !ctx.event.forced : !!ctx.event.forced
+  },
+
+  /**
+   * The reactor can see the event's subject where it is now.
+   *
+   * Exposure is a relation, not a property: there is no global "in cover"
+   * flag, because a unit behind a wall from the north is standing in the open
+   * from the east. Asking the question from the reactor's own tile is both
+   * cheaper and more honest than inventing a cover state to cache.
+   */
+  subjectInLineOfSight: {
+    fields: ["subjectInLineOfSight"],
+    summary: "The reactor has line of sight to where the event's subject is now.",
+    evaluate: (condition, ctx) => {
+      const visible = ctx.canSeeTile(ctx.eventTile("to"));
+      return condition.subjectInLineOfSight === false ? !visible : visible;
+    }
+  },
+
+  /**
+   * The subject just moved from somewhere the reactor could not see into
+   * somewhere it can.
+   *
+   * This is the displacement synergy in one condition. It does not care
+   * whether the unit walked out of cover or was shoved out of it, which is
+   * exactly the point — a prepared shooter reacts to the lane being crossed.
+   */
+  subjectBecameExposed: {
+    fields: ["subjectBecameExposed"],
+    summary: "The event moved its subject out of the reactor's blind side into its sight.",
+    evaluate: (condition, ctx) => {
+      const from = ctx.eventTile("from");
+      const to = ctx.eventTile("to");
+      if (!from || !to) return false;
+      const became = !ctx.canSeeTile(from) && ctx.canSeeTile(to);
+      return condition.subjectBecameExposed === false ? !became : became;
     }
   },
 

@@ -1,0 +1,54 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "resources",
+  "description": "Every pool of points a battle tracks. `unit` scope gives each frame its own balance; `faction` scope gives a whole side one shared balance, which is what Command Points are. Availability is separate from balance, so a link-gated pool keeps its points while the link is down.",
+  "entries": {
+    "commandPoints": {
+      "name": "Command Points",
+      "scope": "faction",
+      "description": "The squad's coordination budget. Reactions and coordinated actions draw on it; an ordinary activation never does, so running dry costs you options, not turns.",
+      "tags": [
+        "squad",
+        "tempo"
+      ],
+      "max": 4,
+      "startsAt": 3,
+      "regen": {
+        "amount": 1,
+        "on": "ownerActivation"
+      }
+    },
+    "reactionCapacity": {
+      "name": "Reaction capacity",
+      "scope": "unit",
+      "description": "How many times one frame can respond out of turn before its own next activation. Universal: every unit has it whether or not anything it owns reacts.",
+      "tags": [
+        "universal"
+      ],
+      "max": 1,
+      "startsAt": 1,
+      "everyUnit": true,
+      "regen": {
+        "amount": 1,
+        "on": "selfActivation"
+      }
+    },
+    "sectionSevenTempo": {
+      "name": "Section Seven tempo",
+      "scope": "faction",
+      "description": "The trio's shared conversion budget, available only while their combat link holds. A continuous timeline has no rounds, so it refills a point whenever one of them acts.",
+      "tags": [
+        "link",
+        "tempo"
+      ],
+      "max": 2,
+      "startsAt": 2,
+      "linkId": "sectionSeven",
+      "regen": {
+        "amount": 1,
+        "on": "ownerActivation"
+      }
+    }
+  }
+}

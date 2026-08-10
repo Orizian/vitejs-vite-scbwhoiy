@@ -1,0 +1,27 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "combatLinks",
+  "description": "Relationships between operators that unlock shared reactions. A link is a narrative gate with mechanical teeth: while it is inactive its reactions do not merely cost more, they do not exist.",
+  "entries": {
+    "sectionSeven": {
+      "name": "Section Seven",
+      "icon": "◈",
+      "description": "Six years in the same evaluation section. They do not spend actions coordinating, because they do not need to.",
+      "participants": [
+        "vale",
+        "kell",
+        "reyes"
+      ],
+      "requireAll": true,
+      "requireMutuallyAllied": true,
+      "unlockedByDefault": true,
+      "enabledByDefault": true,
+      "reactions": [
+        "sectionSevenMarkShot",
+        "sectionSevenAdvance",
+        "sectionSevenFieldTempo"
+      ]
+    }
+  }
+}

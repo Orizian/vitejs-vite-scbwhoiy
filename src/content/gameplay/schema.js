@@ -446,6 +446,227 @@ export const REGISTRY_SCHEMAS = {
     ]
   },
 
+  resources: {
+    idLabel: "Resource ref",
+    nameKey: "name",
+    categorize: (entry) => (entry.scope === "faction" ? "Shared by a faction" : "Per unit"),
+    sections: [
+      {
+        id: "identity",
+        label: "Identity",
+        fields: [
+          { key: "name", label: "Display name", kind: "line", required: true },
+          {
+            key: "scope",
+            label: "Owned by",
+            kind: "enum",
+            options: ["unit", "faction"],
+            behaviour: true,
+            help:
+              "A unit resource gives every frame its own balance. A faction resource " +
+              "gives one whole side a single shared balance."
+          },
+          { key: "description", label: "Description", kind: "text", rows: 3 },
+          { key: "tags", label: "Tags", kind: "tags" }
+        ]
+      },
+      {
+        id: "balance",
+        label: "Balance",
+        note:
+          "Starting value defaults to the maximum. A resource that starts above its " +
+          "maximum is a data error, not a bonus.",
+        fields: [
+          { key: "max", label: "Maximum", kind: "number" },
+          { key: "startsAt", label: "Starts at", kind: "number" },
+          {
+            key: "everyUnit",
+            label: "Every unit has it",
+            kind: "boolean",
+            help: "Unit scope only. Off means only a chassis that declares it carries one."
+          },
+          {
+            key: "persist",
+            label: "Survives the battle",
+            kind: "boolean",
+            behaviour: true,
+            help: "Nothing carries a resource between missions yet."
+          }
+        ]
+      },
+      {
+        id: "regen",
+        label: "Regeneration",
+        note: "Left empty, a resource only comes back from an effect that restores it.",
+        fields: [
+          {
+            key: "regen.on",
+            label: "Regenerates on",
+            kind: "enum",
+            options: ["manual", "ownerActivation", "selfActivation"],
+            behaviour: true
+          },
+          { key: "regen.amount", label: "Amount", kind: "number" }
+        ]
+      },
+      {
+        id: "gate",
+        label: "Availability",
+        note:
+          "A gated resource keeps its points while the link is down; it simply cannot " +
+          "be spent from.",
+        fields: [{ key: "linkId", label: "Requires combat link", kind: "ref", registry: "combatLinks" }]
+      }
+    ]
+  },
+
+  reactions: {
+    idLabel: "Reaction ref",
+    nameKey: "name",
+    categorize: (entry) => (entry.owner ? "Owned by an operator" : "Any qualifying unit"),
+    sections: [
+      {
+        id: "identity",
+        label: "Identity",
+        fields: [
+          { key: "name", label: "Display name", kind: "line", required: true },
+          { key: "description", label: "Description", kind: "text", rows: 3 },
+          {
+            key: "owner",
+            label: "Owned by",
+            kind: "ref",
+            registry: "operators",
+            refField: "ref",
+            help:
+              "The operator this belongs to. Leave it empty and the reaction is offered " +
+              "to any unit meeting the requirements below."
+          },
+          {
+            key: "priority",
+            label: "Priority",
+            kind: "number",
+            help: "Higher resolves first when several compete for the same event."
+          }
+        ]
+      },
+      {
+        id: "when",
+        label: "WHEN",
+        note:
+          "The generic event that opens the window. Broad events carrying rich context, " +
+          "rather than one event per situation.",
+        fields: [
+          {
+            key: "trigger",
+            label: "Trigger event",
+            kind: "enum",
+            options: [],
+            optionsFrom: "reactionEvents",
+            behaviour: true
+          }
+        ]
+      },
+      {
+        id: "requires",
+        label: "Offered to",
+        note:
+          "A cheap pre-filter for unowned reactions, so a stance-based response does not " +
+          "have to be restated once per operator.",
+        fields: [
+          { key: "requires.status", label: "Reactor has status", kind: "ref", registry: "statuses" },
+          { key: "requires.team", label: "Reactor is on team", kind: "line" }
+        ]
+      },
+      {
+        id: "if",
+        label: "IF",
+        note:
+          "Every condition must hold when the window opens and again immediately before " +
+          "the effect runs — a chain can invalidate a reaction between the two.",
+        fields: [
+          { key: "conditions", label: "Conditions", kind: "objectList", typeKey: "*", behaviour: true }
+        ]
+      },
+      {
+        id: "cost",
+        label: "Cost",
+        note:
+          "Resource amounts. A reaction blocked only by cost is still shown, greyed out, " +
+          "so a shortage reads as a decision rather than a missing option.",
+        fields: [{ key: "cost.resources", label: "Resource cost", kind: "objectList", typeKey: "id" }]
+      },
+      {
+        id: "limits",
+        label: "Limits",
+        note:
+          "One event can never fire the same reaction twice; that one is always on. The " +
+          "rest bound cascades without banning them.",
+        fields: [
+          { key: "limits.perChain", label: "Per causal chain", kind: "number" },
+          { key: "limits.perActivation", label: "Per activation", kind: "number" },
+          { key: "limits.perBattle", label: "Per battle", kind: "number" },
+          { key: "mandatory", label: "Mandatory", kind: "boolean", behaviour: true },
+          { key: "automatic", label: "Resolves automatically", kind: "boolean", behaviour: true }
+        ]
+      },
+      {
+        id: "then",
+        label: "THEN",
+        note:
+          "One registered effect primitive. `type` selects engine behaviour; the values " +
+          "beside it are authored.",
+        fields: [
+          { key: "effect", label: "Effect", kind: "objectList", typeKey: "type", single: true, behaviour: true }
+        ]
+      }
+    ]
+  },
+
+  combatLinks: {
+    idLabel: "Link ref",
+    nameKey: "name",
+    categorize: () => "Links",
+    sections: [
+      {
+        id: "identity",
+        label: "Identity",
+        fields: [
+          { key: "name", label: "Display name", kind: "line", required: true },
+          { key: "icon", label: "Icon", kind: "line" },
+          { key: "description", label: "Description", kind: "text", rows: 3 }
+        ]
+      },
+      {
+        id: "participants",
+        label: "Participants",
+        note:
+          "Stable operator refs. A link is active only while every participant is " +
+          "deployed, able to act and allied.",
+        fields: [
+          { key: "participants", label: "Operators", kind: "refList", registry: "operators", refField: "ref" },
+          { key: "requireAll", label: "Requires all of them", kind: "boolean" },
+          { key: "requireMutuallyAllied", label: "Requires mutual alliance", kind: "boolean" }
+        ]
+      },
+      {
+        id: "gates",
+        label: "Gates",
+        note:
+          "Unlocking is campaign progression and persists; enabling is battle-local and " +
+          "is what mission scripting toggles.",
+        fields: [
+          { key: "unlockedByDefault", label: "Unlocked by default", kind: "boolean" },
+          { key: "enabledByDefault", label: "Enabled by default", kind: "boolean" }
+        ]
+      },
+      {
+        id: "reactions",
+        label: "Reactions",
+        fields: [{ key: "reactions", label: "Granted reactions", kind: "refList", registry: "reactions" }]
+      }
+    ]
+  },
+
   terrain: {
   idLabel: "Terrain ref",
   nameKey: "name",
@@ -548,6 +769,36 @@ export function blankEntity(kindId) {
     aiProfiles: { expectedDamage: 1, lethalBonus: 40, healing: 1, targetProximity: 2, selfDanger: -1, timelineDelay: 1 },
     operators: { name: "New Operator", glyph: "?", role: "", chassis: "assaultMech", perkChoices: [] },
     perks: { name: "New Perk", description: "", modifiers: {} },
+    resources: {
+      name: "New Resource",
+      scope: "unit",
+      description: "",
+      max: 3,
+      startsAt: 3,
+      tags: []
+    },
+    reactions: {
+      name: "New Reaction",
+      description: "",
+      requires: { team: "player" },
+      trigger: "unitDestroyed",
+      priority: 50,
+      conditions: [],
+      cost: {},
+      limits: { perChain: 1 },
+      effect: { type: "modifyTurnDelay", target: "self", hasten: 100 }
+    },
+    combatLinks: {
+      name: "New Link",
+      icon: "\u25c8",
+      description: "",
+      participants: [],
+      requireAll: true,
+      requireMutuallyAllied: true,
+      unlockedByDefault: false,
+      enabledByDefault: true,
+      reactions: []
+    },
     terrain: {
       name: "New Terrain",
       char: "?",

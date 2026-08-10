@@ -35,6 +35,37 @@ import {
   manifestFromFiles
 } from "./content/gameplay/exchange.js";
 import { resolveTestSubject, buildArenaMission, ARENA_SUBJECT_REF } from "./content/gameplay/arena.js";
+import {
+  RESOURCE_SCOPES,
+  normalizeResourceDefinition,
+  createResourceState,
+  resourceEntry,
+  resourceBalance,
+  resourceIsAvailable,
+  canSpendResource,
+  spendResource as spendCombatResource,
+  gainResource as gainCombatResource,
+  setResource as setCombatResource,
+  setResourceAvailable,
+  regenerateOnActivation,
+  describeResources,
+  validateResourceDefinition
+} from "./combat/resources.js";
+import {
+  createCausalityState,
+  beginChain,
+  childCause,
+  chainExhausted,
+  stampCause,
+  withCause,
+  describeCause,
+  traceChain,
+  MAX_CHAIN_DEPTH
+} from "./combat/causality.js";
+import {
+  canAfford as canAffordReaction,
+  payCost as payReactionCost
+} from "./reactions/economy.js";
 import ARENA_FIXTURE from "./content/missions/fixture-test-arena.json";
 import {
   SCENE_CONTENT,
@@ -80,7 +111,7 @@ import {
   evaluateCondition as evaluateMissionCondition,
   matchTrigger as matchMissionTrigger
 } from "./mission/conditions.js";
-import { REACTION_CONTENT, LINK_IDS } from "./content/reactions.js";
+import { REACTION_CONTENT, LINK_IDS, RESOURCE_DEFINITIONS } from "./content/reactions.js";
 import {
   createReactionState,
   buildReactionIndex,
@@ -99,7 +130,8 @@ import { REACTION_EFFECT_REGISTRY, validateReactionEffect } from "./reactions/ef
 import {
   REACTION_CONDITION_REGISTRY,
   validateReactionCondition,
-  evaluateReactionCondition
+  evaluateReactionCondition,
+  reactionConditionKind
 } from "./reactions/conditions.js";
 import {
   REACTION_EVENT_TYPES,
@@ -200,7 +232,13 @@ const GAME_CONFIG = {
     endTurnMovedOnlyRecovery: 500,
     endTurnActedOnlyRecovery: 0,
     skippedActivationRecovery: 500,
-    previewCount: 15
+    previewCount: 15,
+    // Bounds on `modifyTimeline` / `modifyTurnDelay`. A single adjustment
+    // cannot exceed this many recovery units, and no adjustment can pull an
+    // activation earlier than the present moment — an activation scheduled in
+    // the past is one that happens forever.
+    maxTurnDelayAdjustment: 800,
+    minTimeUntilNextAction: 1
   },
 
   ai: {
@@ -471,6 +509,13 @@ const STATUSES = GAMEPLAY_CONTENT.statuses;
  * own swatch for each tile — the palette and the rules are one entry now,
  * rather than two files that can disagree about what a wall is. */
 const TERRAINS = engineTerrain();
+
+/* ===============================================================
+ * COMBAT RESOURCES
+ * Authored in src/content/gameplay/resources.json. Faction balances live in
+ * battle state; unit balances live on the unit, where they already did.
+ * =============================================================*/
+const COMBAT_RESOURCE_DEFINITIONS = RESOURCE_DEFINITIONS;
 
 /* ===============================================================
  * EQUIPMENT
@@ -3256,6 +3301,14 @@ function createBattle(encounterId, seed, options) {
     }),
     autoResolveReactions: opts.autoResolveReactions !== false,
 
+    // Why each event happened. Ambient parentage plus a chain id, so a
+    // reaction cascade can be attributed, bounded and explained.
+    causality: createCausalityState(),
+
+    // Faction-scoped resource balances. Unit balances stay on the unit, where
+    // they already live; this is the shared half of one resource system.
+    resources: createResourceState(COMBAT_RESOURCE_DEFINITIONS, encounter.teams.map((team) => team.id)),
+
     // Faction-scoped battlefield knowledge. Always present so no code path has
     // to ask whether it exists; `enabled: false` restores full information and
     // is what the A/B benchmark toggles.
@@ -3946,7 +3999,9 @@ function resolveForcedMovement(state, context, direction, distance) {
     path.push({ x, y });
   }
   if (path.length > 1) {
-    queueEvent(state, {
+    // The whole subtree below a shove is "because it was forced", which is how
+    // a reaction can care that a target did not choose to be there.
+    const forcedEvent = queueEvent(state, {
       type: "unitForcedMove",
       sourceUnitId: context.sourceUnitId,
       unitId: unit.id,
@@ -3957,6 +4012,7 @@ function resolveForcedMovement(state, context, direction, distance) {
       tiles: path.length - 1,
       blocked
     });
+    if (forcedEvent.cause) forcedEvent.cause.forced = true;
   }
   if (blocked && effect.collision === "damage" && effect.collisionDamagePower) {
     resolveDamageEffect(state, {
@@ -4858,9 +4914,48 @@ function tickStatusDurations(state, unitId, durationType) {
  * EVENT QUEUE
  * -------------------------------------------------------------*/
 
+/**
+ * Queues an authoritative event, attributed to whatever is currently running.
+ *
+ * The attribution is ambient rather than passed explicitly: an effect deep in
+ * a handler should not have to thread a cause through six call frames to have
+ * its consequences recorded correctly, and one that forgot would silently
+ * detach a whole subtree of the chain.
+ */
 function queueEvent(state, event) {
+  if (state.causality) stampCause(state.causality, event);
   state.resolutionQueue.push(event);
   return event;
+}
+
+/** Opens a new causal chain. Called wherever something genuinely originates:
+ *  a player command, an AI activation, a mission action. */
+function openCausalChain(state, origin) {
+  if (!state.causality) return null;
+  state.causality.current = beginChain(state.causality, origin);
+  return state.causality.current;
+}
+
+/**
+ * Keeps a bounded record of what caused what.
+ *
+ * Only enough to answer "why did that fire?" in the debug view and in a test.
+ * Bounded on purpose: a full event log for a long battle is a memory leak
+ * wearing a diagnostics costume.
+ */
+const CAUSAL_TRACE_LIMIT = 120;
+
+function recordCausalEvent(state, event) {
+  if (!state.causality) return;
+  if (!state.causalTrace) state.causalTrace = [];
+  state.causalTrace.push({
+    seq: event.__seq || null,
+    type: event.type,
+    unitId: event.unitId || event.targetUnitId || null,
+    sourceUnitId: event.sourceUnitId || null,
+    cause: event.cause || null
+  });
+  if (state.causalTrace.length > CAUSAL_TRACE_LIMIT) state.causalTrace.shift();
 }
 
 /** Generic hook reserved for Phase 4 reactions. */
@@ -5486,23 +5581,39 @@ const EVENT_HANDLERS = {
     );
   },
 
+  /**
+   * Moves a unit's next activation along the timeline.
+   *
+   * Two clamps, both load-bearing. The requested delta is capped so no single
+   * effect can rewrite the whole order, and the resulting time is floored just
+   * after the present, because an activation scheduled at or before `now` is
+   * one that fires immediately and then again and again.
+   */
   timelineModified(state, event) {
     const target = state.units[event.targetUnitId];
     if (!target.alive) return;
+    const config = GAME_CONFIG.timeline;
+    const cap = config.maxTurnDelayAdjustment;
+    const requested = Math.max(-cap, Math.min(cap, event.delta));
     const rate = turnRateOf(state, target.id);
-    target.nextActionTime += event.delta / rate;
+    const floor = state.currentTime + config.minTimeUntilNextAction;
+    const before = target.nextActionTime;
+    target.nextActionTime = Math.max(floor, before + requested / rate);
+    const applied = target.nextActionTime - before;
     logLine(
       state,
       "timelineModified",
       unitLabel(state, target.id) +
-        (event.delta >= 0 ? " is delayed by " : " is hastened by ") +
-        Math.abs(Math.round(event.delta / rate)) +
+        (applied >= 0 ? " is delayed by " : " acts sooner by ") +
+        Math.abs(Math.round(applied)) +
         " time",
       {
         unitId: event.targetUnitId,
         sourceUnitId: event.sourceUnitId,
         delta: event.delta,
-        appliedDelta: event.delta / rate
+        requestedDelta: requested,
+        appliedDelta: applied,
+        clamped: requested !== event.delta || applied !== requested / rate
       }
     );
   },
@@ -5620,7 +5731,12 @@ function processNextEvent(state, onEvent) {
   }
 
   const before = onEvent ? snapshotForEvents(state) : null;
-  handler(state, event);
+  // Everything the handler queues inherits this event's cause. That is what
+  // makes a reaction three steps down the chain attributable to the shove
+  // that started it, without any handler having to know it is in a chain.
+  recordCausalEvent(state, event);
+  if (state.causality) withCause(state.causality, event, () => handler(state, event));
+  else handler(state, event);
 
   // Perception consumes the same authoritative event, immediately after it is
   // applied and before anything downstream can make a decision on stale
@@ -5713,12 +5829,16 @@ function endActivation(state, options) {
   if (!unitId) return;
   if (activation) activation.closed = true;
   const movementRecovery = activation ? activation.movementRecovery : 0;
+  const adjustment = activation ? activation.turnDelayAdjustment || 0 : 0;
   queueEvent(state, {
     type: "turnEnded",
     unitId,
     actionRecovery: options.recovery,
     movementRecovery,
-    totalRecovery: options.recovery + movementRecovery
+    // Never below zero: a hasten shortens the wait, it does not schedule the
+    // unit before the thing it just did.
+    totalRecovery: Math.max(0, options.recovery + movementRecovery + adjustment),
+    timelineAdjustment: adjustment
   });
 }
 
@@ -6496,6 +6616,9 @@ const COMMAND_HANDLERS = {
       ended: false,
       movementRecovery: 0,
       actionRecovery: 0,
+      // Banked by `modifyTurnDelay` while this unit is the one acting. Applied
+      // to the recovery `turnEnded` charges, never to the clock directly.
+      turnDelayAdjustment: 0,
       pendingEnd: null
     };
     queueEvent(state, { type: "unitActivated", unitId: unit.id });
@@ -6614,11 +6737,47 @@ const COMMAND_HANDLERS = {
  * window is pending and replayed by `settleAfterReactions` once the player
  * answers.
  */
+/**
+ * The activation invariant.
+ *
+ * After anything that could have changed the world out of turn — a reaction
+ * chain, a mission action, a scripted kill — the battle must be in exactly one
+ * of three states: an active unit that can still do something, no active unit
+ * with someone next on the timeline, or finished. Anything else is a battle
+ * waiting for input that will never come.
+ *
+ * The case this exists for is an active unit that stops being able to act
+ * *while it is active*: destroyed by a reaction it triggered, dormant, or
+ * removed. `shouldAutomaticallyEndActivation` cannot see that, because from
+ * its point of view the unit simply has not spent its resources yet.
+ *
+ * @returns true when it had to intervene
+ */
+function ensureActivationIsValid(state) {
+  const activation = state.activation;
+  const unitId = state.activeUnitId;
+  if (!unitId) return false;
+  const unit = state.units[unitId];
+  const stillPlayable = !!unit && unit.alive && !unit.dormant;
+  if (stillPlayable) return false;
+  if (activation) activation.closed = true;
+  // No recovery is charged: a destroyed frame is not "recovering", and a
+  // dormant one never spent anything.
+  state.activeUnitId = null;
+  state.activation = null;
+  logLine(state, "turnEnded", unitLabel(state, unitId) + " can no longer act; the activation ends", {
+    unitId,
+    reason: unit && !unit.alive ? "destroyed" : "unavailable"
+  });
+  return true;
+}
+
 function settleCommand(state, options) {
   const onEvent = options && options.onEvent ? options.onEvent : null;
   let events = [];
   if (reactionWindowPending(state)) return events;
 
+  ensureActivationIsValid(state);
   finishActivationIfComplete(state);
   if (state.activation && state.activation.pendingEnd) {
     const pending = state.activation.pendingEnd;
@@ -6644,6 +6803,36 @@ function settleCommand(state, options) {
 function settleAfterReactions(state, options) {
   if (reactionWindowPending(state)) return [];
   return settleCommand(state, options);
+}
+
+/**
+ * What the battle should do next, as a single answer.
+ *
+ * The reaction lifecycle used to have no such answer, and that is precisely
+ * how it deadlocked: the authoritative layer ended an activation, the
+ * presentation layer never heard about it, and both sides waited. Rather than
+ * teach the UI about reactions, the engine now states the continuation and the
+ * UI obeys it.
+ *
+ *   "finished"    the battle is over
+ *   "reaction"    a choice is pending; nothing else may proceed
+ *   "active"      a unit is activated and can still act
+ *   "advance"     no active unit; `unitId` is next on the timeline
+ *   "stalled"     nothing can act at all — a bug, reported rather than hidden
+ */
+function battleContinuation(state) {
+  if (state.finished) return { kind: "finished", unitId: null };
+  if (reactionWindowPending(state)) return { kind: "reaction", unitId: null };
+  if (state.activeUnitId) {
+    const unit = state.units[state.activeUnitId];
+    if (unit && unit.alive && !unit.dormant) return { kind: "active", unitId: state.activeUnitId };
+    // Should be unreachable after `ensureActivationIsValid`; reported rather
+    // than papered over, because a silent recovery here would hide the bug.
+    return { kind: "stalled", unitId: state.activeUnitId, reason: "the active unit cannot act" };
+  }
+  const nextId = getNextActionableUnitId(state);
+  if (nextId) return { kind: "advance", unitId: nextId };
+  return { kind: "stalled", unitId: null, reason: "no unit can act" };
 }
 
 /**
@@ -7753,6 +7942,92 @@ const REACTION_ENGINE = {
     return gridDistance(a, b);
   },
 
+  /**
+   * Can this unit see that tile?
+   *
+   * The basis of every exposure condition. It answers the question from the
+   * viewer's own position rather than consulting a cached cover state,
+   * because there is no such thing as being in cover in general — only in
+   * cover from somewhere.
+   */
+  canSeeTile(state, viewerUnitId, tile) {
+    const viewer = state.units[viewerUnitId];
+    if (!viewer || !tile) return false;
+    return hasLineOfSight(getMap(state), { x: viewer.x, y: viewer.y }, tile, state);
+  },
+
+  /**
+   * Moves a unit's next activation along the real timeline.
+   *
+   * Routes through the same `timelineModified` event ordinary abilities use,
+   * so there is one initiative calculator and a reaction's adjustment shows up
+   * in a save, a replay and the log exactly like anything else. `delta` is in
+   * recovery units and is scaled by the unit's own turn rate inside the
+   * handler; the clamps live there too.
+   */
+  modifyTurnDelay(state, unitId, delta, options) {
+    const unit = state.units[unitId];
+    if (!unit || !unit.alive) return { applied: 0, reason: "no living unit" };
+
+    // A unit that is mid-activation has no meaningful `nextActionTime` yet —
+    // it is standing at the present moment, and its real next slot is decided
+    // by the recovery `turnEnded` is about to charge. Adjusting the field now
+    // would be overwritten a moment later. So the adjustment is banked against
+    // the recovery instead, which is the same thing the author asked for:
+    // "finish that and you are already moving".
+    if (state.activation && state.activation.unitId === unitId && !state.activation.closed) {
+      const cap = GAME_CONFIG.timeline.maxTurnDelayAdjustment;
+      const banked = state.activation.turnDelayAdjustment || 0;
+      const next = Math.max(-cap, Math.min(cap, banked + delta));
+      const applied = next - banked;
+      state.activation.turnDelayAdjustment = next;
+      if (applied) {
+        logLine(
+          state,
+          "timelineModified",
+          unitLabel(state, unitId) +
+            (applied < 0 ? " will recover faster by " : " will recover slower by ") +
+            Math.abs(Math.round(applied)),
+          { unitId, sourceUnitId: (options && options.sourceUnitId) || unitId, delta: applied, banked: true }
+        );
+      }
+      return { applied, banked: true };
+    }
+
+    const before = unit.nextActionTime;
+    queueEvent(state, {
+      type: "timelineModified",
+      sourceUnitId: (options && options.sourceUnitId) || unitId,
+      targetUnitId: unitId,
+      abilityId: null,
+      delta
+    });
+    processAllEvents(state);
+    return { applied: unit.nextActionTime - before };
+  },
+
+  /**
+   * Runs a reaction's effects with the chain marked as passing through it.
+   *
+   * Everything the effect queues is then attributable to the reaction, which
+   * is what lets a once-per-chain limit and the debug view both work without
+   * the effect implementations knowing anything about causality.
+   */
+  withReactionCause(state, reactionId, fn) {
+    if (!state.causality) return fn();
+    const previous = state.causality.current;
+    state.causality.current = {
+      ...(previous || beginChain(state.causality, "reaction")),
+      viaReaction: true,
+      viaReactionId: reactionId
+    };
+    try {
+      return fn();
+    } finally {
+      state.causality.current = previous;
+    }
+  },
+
   scriptedAttack(state, options) {
     MISSION_ENGINE.scriptedAttack(state, options);
   },
@@ -7895,10 +8170,18 @@ function chooseAiReaction(state, offer, event) {
   }
   // Never burn the last point of a shared pool on a low-priority reaction:
   // enough policy to be testable, not enough to be a design statement.
-  const cost = offer.cost || {};
-  if (cost.pool) {
-    const pool = state.reactions.economy.pools[cost.pool.id];
-    if (pool && pool.current <= cost.pool.amount && offer.priority < 50) return false;
+  // Never burn the last point of a shared resource on a low-priority
+  // reaction: enough policy to be testable, not enough to be a design
+  // statement.
+  for (const entry of (offer.cost && offer.cost.resources) || []) {
+    const raw = REACTION_INDEX.resourceById[entry.id];
+    if (!raw || raw.scope !== "faction") continue;
+    const unit = state.units[offer.reactorId];
+    const balance = unit && state.resources.faction[unit.teamId]
+      ? state.resources.faction[unit.teamId][entry.id]
+      : null;
+    const amount = entry.amount == null ? 1 : entry.amount;
+    if (balance && balance.current <= amount && offer.priority < 50) return false;
   }
   return true;
 }
@@ -11899,6 +12182,41 @@ function clearPlan(input, overrides) {
     errorMessage: "",
     ...(overrides || {})
   };
+}
+
+/**
+ * Brings the input state back in line with the battle.
+ *
+ * The input machine tracks a selected unit and a mode; the simulation can end
+ * an activation without either of them being told, and after a reaction chain
+ * it routinely does. Rather than have every authoritative path remember to
+ * notify the UI — which is the bug this fixes, one caller at a time — the UI
+ * reconciles against the truth whenever it might have drifted.
+ *
+ * Pure: takes input and state, returns input.
+ */
+function reconcileInputWithBattle(input, state) {
+  if (input.mode === "presentingEvents" || input.mode === "battleFinished") return input;
+  if (state.finished) return { ...createInputState(), mode: "battleFinished" };
+
+  const activeId = state.activeUnitId;
+  const activeUnit = activeId ? state.units[activeId] : null;
+  const hasActive = !!(activeUnit && activeUnit.alive && !activeUnit.dormant);
+
+  if (hasActive) {
+    if (input.selectedUnitId === activeId && input.mode !== "idle") return input;
+    return clearPlan(input, {
+      selectedUnitId: activeId,
+      inspectedUnitId: activeId,
+      commandMenuOpen: false,
+      resumeMode: null
+    });
+  }
+
+  if (input.mode === "idle" && !input.selectedUnitId) return input;
+  // Nothing is activated: whatever the player was aiming at belongs to a turn
+  // that is over. Inspection survives, because looking at a unit is not a plan.
+  return createInputState({ mode: "idle", inspectedUnitId: input.inspectedUnitId });
 }
 
 /** Turns a contextual option into a confirmable plan. */
@@ -20700,7 +21018,15 @@ test("Gameplay data", "The schema describes every authored field", () => {
 
     // And a blank entity must be something the Studio can then save.
     const probe = gameplayDraftFixture();
-    probe[kindId]["studioProbeEntity"] = blankEntity(kindId);
+    const blank = blankEntity(kindId);
+    // A blank entity is valid once the author supplies the references only
+    // they can choose. Filling those here is the same allowance the scene
+    // suite makes for required free text.
+    if (kindId === "combatLinks") {
+      const anyOperator = Object.keys(probe.operators).sort()[0];
+      blank.participants = [probe.operators[anyOperator].ref || anyOperator];
+    }
+    probe[kindId]["studioProbeEntity"] = blank;
     const report = validateGameplayData(probe);
     assert(
       !report.errors.some((message) => /studioProbeEntity/.test(message)),
@@ -20829,6 +21155,688 @@ test("Gameplay data", "A draft changes the game only through the load-time overl
   assertEqual(GAMEPLAY_DRAFT_ACTIVE, false, "a gameplay draft is active during the test run");
   assertEqual(CONTENT.units.assaultMech.baseStats.maxHp, CANONICAL_GAMEPLAY.units.assaultMech.baseStats.maxHp);
   assert(GAMEPLAY_DRAFT_STORAGE_KEY.startsWith("statuszero."), "the draft slot must be namespaced");
+});
+
+
+/* ---------------------------------------------------------------
+ * ORCHESTRATION HELPERS
+ * -------------------------------------------------------------*/
+
+const SYNERGY_ENCOUNTER = "file:fixture-synergy-arena";
+
+function synergyBattle(seed, options) {
+  return createBattle(SYNERGY_ENCOUNTER, seed == null ? 11 : seed, {
+    autoResolveScenes: true,
+    autoResolveReactions: false,
+    ...options
+  });
+}
+
+/** Faction balance for a shared resource, or null. */
+function factionResource(state, resourceId, teamId) {
+  const team = teamId || "sectionSeven";
+  return (state.resources.faction[team] || {})[resourceId] || null;
+}
+
+function setFactionResource(state, resourceId, value, teamId) {
+  const entry = factionResource(state, resourceId, teamId);
+  if (entry) entry.current = value;
+}
+
+function resourceDefinitionFor(resourceId) {
+  return normalizeResourceDefinition({
+    id: resourceId,
+    ...REACTION_INDEX.resourceById[resourceId]
+  });
+}
+
+function applyStatusForTest(state, unitId, statusId) {
+  REACTION_ENGINE.applyStatus(state, unitId, [unitId], statusId);
+  processAllEvents(state);
+}
+
+/** A real push through the engine's own forced-movement path. */
+function pushUnit(state, sourceUnitId, targetUnitId, distance) {
+  const source = state.units[sourceUnitId];
+  EFFECT_HANDLERS.push(state, {
+    sourceUnitId,
+    targetUnitId,
+    abilityId: null,
+    sourceTile: { x: source.x, y: source.y },
+    effect: { type: "push", distance: distance == null ? 1 : distance }
+  });
+}
+
+/**
+ * Activates a unit for a test, regardless of whose turn the timeline thinks it
+ * is. The tests here are about orchestration, not initiative, and making each
+ * one wind the clock forward to reach its subject would test the wrong thing.
+ */
+function activateForTest(state, unitId) {
+  state.units[unitId].nextActionTime = state.currentTime;
+  for (const otherId of state.unitOrder) {
+    if (otherId !== unitId) state.units[otherId].nextActionTime = state.currentTime + 1000;
+  }
+  return executeCommand(state, { type: "activateUnit", unitId });
+}
+
+/* ---------------------------------------------------------------
+ * RESOURCES
+ * -------------------------------------------------------------*/
+
+test("Orchestration", "Command Points are a faction resource, not a unit's secret", () => {
+  const state = synergyBattle(11);
+  const cp = factionResource(state, "commandPoints");
+  assert(cp, "the squad has a Command Point balance");
+  assertEqual(cp.current, 3, "the starting value comes from the authored data");
+  assertEqual(cp.max, 4);
+
+  // Every faction gets its own balance. Command Points are the squad's, not
+  // the world's, and the other side spending theirs must not touch yours.
+  const enemy = factionResource(state, "commandPoints", "loyalist");
+  assert(enemy, "the other side has its own balance");
+  assertEqual(enemy.current, 3);
+
+  const definition = resourceDefinitionFor("commandPoints");
+  assert(spendCombatResource(state, definition, { teamId: "sectionSeven" }, 2));
+  assertEqual(factionResource(state, "commandPoints").current, 1);
+  assertEqual(factionResource(state, "commandPoints", "loyalist").current, 3, "the other side is untouched");
+
+  for (const unitId of state.unitOrder) {
+    assert(
+      !(state.units[unitId].resources || {}).commandPoints,
+      "no unit may privately hold a faction resource"
+    );
+  }
+});
+
+test("Orchestration", "Resource gain, spend and maxima are deterministic and clamped", () => {
+  const state = synergyBattle(12);
+  const cp = resourceDefinitionFor("commandPoints");
+  const owner = { teamId: "sectionSeven" };
+
+  assertEqual(gainCombatResource(state, cp, owner, 10), 1, "gain stops at the maximum");
+  assertEqual(factionResource(state, "commandPoints").current, 4);
+
+  assertEqual(canSpendResource(state, cp, owner, 5).ok, false, "cannot overspend");
+  assert(canSpendResource(state, cp, owner, 4).ok);
+  spendCombatResource(state, cp, owner, 4);
+  assertEqual(factionResource(state, "commandPoints").current, 0);
+  assertEqual(spendCombatResource(state, cp, owner, 1), false, "an empty pool stays empty");
+  assertEqual(factionResource(state, "commandPoints").current, 0, "and is never negative");
+
+  setCombatResource(state, cp, owner, 99);
+  assertEqual(factionResource(state, "commandPoints").current, 4, "set clamps too");
+});
+
+test("Orchestration", "A unit resource is not handed to units that never declared it", () => {
+  const state = synergyBattle(13);
+  const capacity = resourceDefinitionFor("reactionCapacity");
+  const kell = unitByRef(state, "kell");
+  assertEqual(resourceBalance(state, capacity, { unitId: kell.id }), 1, "capacity is universal");
+
+  const invented = normalizeResourceDefinition({ id: "inventedPool", scope: "unit", max: 5 });
+  assertEqual(resourceBalance(state, invented, { unitId: kell.id }), 0);
+  assertEqual(canSpendResource(state, invented, { unitId: kell.id }, 1).ok, false);
+  assert(!(kell.resources || {}).inventedPool, "checking a cost must not grant the means to pay it");
+});
+
+test("Orchestration", "A link-gated resource keeps its points while the link is down", () => {
+  const state = linkBattle(14);
+  refreshReactionLinks(state);
+  const tempo = factionResource(state, "sectionSevenTempo", "player");
+  assert(tempo.available, "the link starts active");
+  tempo.current = 1;
+
+  const reyes = unitByRef(state, "reyes");
+  reyes.alive = false;
+  refreshReactionLinks(state);
+  assertEqual(factionResource(state, "sectionSevenTempo", "player").available, false, "the gate closed");
+  assertEqual(factionResource(state, "sectionSevenTempo", "player").current, 1, "but the points remain");
+
+  reyes.alive = true;
+  refreshReactionLinks(state);
+  const back = factionResource(state, "sectionSevenTempo", "player");
+  assert(back.available, "and the gate reopens");
+  assertEqual(back.current, back.max, "refilled, so a flickering link is not a tempo tax");
+});
+
+/* ---------------------------------------------------------------
+ * REACTION LIFECYCLE
+ * -------------------------------------------------------------*/
+
+/**
+ * The regression this phase was called for.
+ *
+ * One unit kills something, an ally's reaction becomes available, the player
+ * accepts it, and the battle has to carry on. It used to stop: the reaction
+ * ended the activation authoritatively while the presentation layer still
+ * believed a unit was selected, and the turn driver refused to advance.
+ */
+test("Orchestration", "A kill-triggered ally reaction always leaves a valid continuation", () => {
+  const state = linkBattle(101, { autoResolveReactions: false });
+  const { kell, target } = stageLinkChain(state);
+
+  activateForTest(state, kell.id);
+  assertEqual(state.activeUnitId, kell.id);
+
+  // Spend the activation completely, so ending it is the only continuation.
+  state.activation.moved = true;
+  state.activation.acted = true;
+  target.currentHp = 1;
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [target.id],
+    power: 400,
+    formula: "physical"
+  });
+  processAllEvents(state);
+
+  const model = reactionModel(state);
+  assert(model.window, "the ally is offered a reaction");
+  assertEqual(model.window.offers[0].reactorRef, "vale");
+
+  resolveReactionChoice(state, model.window.offers[0].id);
+
+  assert(!reactionWindowPending(state), "the queue emptied");
+  const next = battleContinuation(state);
+  assert(
+    ["advance", "active", "finished"].includes(next.kind),
+    "the battle must have somewhere to go, got: " + next.kind + " " + (next.reason || "")
+  );
+  assertEqual(next.kind, "advance", "the activation was spent, so the timeline moves on");
+  assert(next.unitId, "and it names who acts next");
+});
+
+test("Orchestration", "The continuation is valid whether or not the actor has actions left", () => {
+  const withActions = linkBattle(102, { autoResolveReactions: false });
+  const staged = stageLinkChain(withActions);
+  activateForTest(withActions, staged.kell.id);
+  staged.target.currentHp = 1;
+  MISSION_ENGINE.scriptedAttack(withActions, {
+    sourceUnitId: staged.kell.id,
+    targetUnitIds: [staged.target.id],
+    power: 400,
+    formula: "physical"
+  });
+  processAllEvents(withActions);
+  const window = reactionModel(withActions).window;
+  assert(window, "the advance is offered");
+  resolveReactionChoice(withActions, window.offers[0].id);
+  const stillActive = battleContinuation(withActions);
+  assertEqual(stillActive.kind, "active", "the actor has not moved, so it keeps the floor");
+  assertEqual(stillActive.unitId, staged.kell.id);
+
+  // Declining is also a valid resolution and must settle the same way.
+  const declined = linkBattle(103, { autoResolveReactions: false });
+  const other = stageLinkChain(declined);
+  activateForTest(declined, other.kell.id);
+  declined.activation.moved = true;
+  declined.activation.acted = true;
+  other.target.currentHp = 1;
+  MISSION_ENGINE.scriptedAttack(declined, {
+    sourceUnitId: other.kell.id,
+    targetUnitIds: [other.target.id],
+    power: 400,
+    formula: "physical"
+  });
+  processAllEvents(declined);
+  assert(reactionModel(declined).window, "a window opened");
+  const before = factionResource(declined, "sectionSevenTempo", "player").current;
+  resolveReactionChoice(declined, null);
+  assert(!reactionWindowPending(declined));
+  assertEqual(battleContinuation(declined).kind, "advance", "declining still advances");
+  assertEqual(factionResource(declined, "sectionSevenTempo", "player").current, before, "and costs nothing");
+});
+
+test("Orchestration", "An active unit destroyed mid-chain does not strand the battle", () => {
+  const state = linkBattle(104, { autoResolveReactions: true });
+  const { kell } = stageLinkChain(state);
+  activateForTest(state, kell.id);
+  assertEqual(state.activeUnitId, kell.id);
+
+  // Nothing in the ordinary activation rules covers this: the unit has not
+  // moved, has not acted, and is not going to.
+  kell.currentHp = 0;
+  queueEvent(state, { type: "unitDefeated", unitId: kell.id, sourceUnitId: null });
+  processAllEvents(state);
+  settleCommand(state);
+
+  assertEqual(state.activeUnitId, null, "the activation ended with the unit");
+  const next = battleContinuation(state);
+  assert(next.kind !== "stalled", next.reason || "");
+  assert(
+    state.battleLog.some(
+      (entry) => entry.type === "turnEnded" && entry.data && entry.data.reason === "destroyed"
+    ),
+    "and said so in the log"
+  );
+});
+
+test("Orchestration", "The input state machine can never sit on a unit that is not active", () => {
+  const state = linkBattle(106, { autoResolveReactions: false });
+  const { kell } = stageLinkChain(state);
+  activateForTest(state, kell.id);
+
+  // Exactly the shape the softlock had: the UI is showing an activation the
+  // simulation has already ended.
+  let input = inputReducer(createInputState(), { type: "activationStarted", unitId: kell.id }, state).input;
+  assertEqual(input.mode, "unitReady");
+  state.activeUnitId = null;
+  state.activation = null;
+
+  input = reconcileInputWithBattle(input, state);
+  assertEqual(input.mode, "idle", "the UI lets go once nothing is activated");
+  assertEqual(input.selectedUnitId, null);
+
+  // And the reverse: an activation the UI has not caught up with.
+  const resumed = linkBattle(107, { autoResolveReactions: false });
+  const other = stageLinkChain(resumed);
+  activateForTest(resumed, other.kell.id);
+  const stale = reconcileInputWithBattle(createInputState(), resumed);
+  assertEqual(stale.selectedUnitId, other.kell.id, "and picks the active unit back up");
+});
+
+/* ---------------------------------------------------------------
+ * CAUSALITY
+ * -------------------------------------------------------------*/
+
+test("Orchestration", "Events carry a chain, a parent and a depth", () => {
+  const state = synergyBattle(20);
+  const shover = unitByRef(state, "shover");
+  const hidden = unitByRef(state, "hidden");
+
+  openCausalChain(state, "test");
+  pushUnit(state, shover.id, hidden.id, 1);
+  const forced = state.resolutionQueue.find((event) => event.type === "unitForcedMove");
+  assert(forced, "the push queued a forced move");
+  assert(forced.cause, "with a cause");
+  assert(forced.cause.chainId, "belonging to a chain");
+  assertEqual(forced.cause.forced, true, "flagged as forced");
+  processAllEvents(state);
+
+  const trace = state.causalTrace;
+  assert(trace.length > 0, "and the trace recorded it");
+  const record = trace.find((entry) => entry.type === "unitForcedMove");
+  assert(record, "including the displacement");
+  assertEqual(record.cause.chainId, forced.cause.chainId);
+});
+
+test("Orchestration", "A reaction's consequences are attributed to the reaction", () => {
+  const state = linkBattle(21, { autoResolveReactions: true });
+  const { kell, target } = stageLinkChain(state);
+  openCausalChain(state, "test");
+  target.currentHp = 1;
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [target.id],
+    power: 400,
+    formula: "physical"
+  });
+  processAllEvents(state);
+  autoResolveReactionWindows(state, reactionDeps());
+
+  const viaReaction = state.causalTrace.filter((entry) => entry.cause && entry.cause.viaReaction);
+  assert(viaReaction.length > 0, "something happened because a reaction ran");
+  assert(
+    viaReaction.every((entry) => entry.cause.viaReactionId),
+    "and every one of them names which"
+  );
+
+  // Everything in one chain shares a root.
+  const chains = new Set(state.causalTrace.map((entry) => entry.cause && entry.cause.chainId));
+  assert(chains.size <= 3, "a single command does not scatter across many chains: " + chains.size);
+});
+
+test("Orchestration", "A once-per-chain reaction cannot recurse, but may fire again later", () => {
+  const state = synergyBattle(22, { autoResolveReactions: true });
+  const economy = state.reactions.economy;
+  const reaction = { id: "probeLoop", limits: { perChain: 1 } };
+  const context = {
+    unitId: unitByRef(state, "kell").id,
+    teamId: "sectionSeven",
+    eventSeq: "e1",
+    chainId: "cA",
+    activationCount: 0,
+    resourceById: () => null
+  };
+
+  assert(canAffordReaction(state, economy, reaction, context).ok, "the first is allowed");
+  payReactionCost(state, economy, reaction, context);
+  assertEqual(
+    canAffordReaction(state, economy, reaction, { ...context, eventSeq: "e2" }).ok,
+    false,
+    "a second attempt in the same chain is refused"
+  );
+  assert(
+    canAffordReaction(state, economy, reaction, { ...context, eventSeq: "e3", chainId: "cB" }).ok,
+    "but a new chain is a new opportunity — this bounds cascades without banning them"
+  );
+});
+
+test("Orchestration", "Causal depth is bounded", () => {
+  assert(MAX_CHAIN_DEPTH >= 4 && MAX_CHAIN_DEPTH <= 64, "the ceiling is a real number");
+  let cause = beginChain(createCausalityState(), "test");
+  for (let i = 0; i < MAX_CHAIN_DEPTH; i += 1) cause = childCause(cause, "s" + i);
+  assert(chainExhausted(cause), "and a chain that deep is refused");
+});
+
+/* ---------------------------------------------------------------
+ * DISPLACEMENT AND EXPOSURE
+ * -------------------------------------------------------------*/
+
+test("Orchestration", "Forced movement produces a movement event that says it was forced", () => {
+  const state = synergyBattle(30);
+  const shover = unitByRef(state, "shover");
+  const hidden = unitByRef(state, "hidden");
+  const before = { x: hidden.x, y: hidden.y };
+
+  pushUnit(state, shover.id, hidden.id, 1);
+  const forced = state.resolutionQueue.find((event) => event.type === "unitForcedMove");
+  assert(forced, "the engine queued a forced move");
+  processAllEvents(state);
+  assert(hidden.x !== before.x || hidden.y !== before.y, "and the unit actually moved");
+
+  const derived = deriveReactionEvents(forced, "after", {
+    unitRefById: (id) => (state.units[id] ? state.units[id].ref : null),
+    unitTeam: (id) => (state.units[id] ? state.units[id].teamId : null),
+    hpPercent: () => 100,
+    statusTags: () => []
+  });
+  const moved = derived.find((event) => event.type === "unitMoved");
+  assert(moved, "a reaction sees it as an ordinary movement");
+  assertEqual(moved.forced, true, "flagged forced");
+  assertEqual(moved.sourceRef, "shover", "and attributed to whoever did it");
+  assert(moved.from && moved.to, "carrying both tiles, which is what exposure needs");
+});
+
+test("Orchestration", "Being displaced out of cover satisfies a generic exposure condition", () => {
+  const state = synergyBattle(31);
+  const kell = unitByRef(state, "kell");
+  const hidden = unitByRef(state, "hidden");
+
+  // The fixture is laid out so exactly one wall separates them.
+  assertEqual(
+    REACTION_ENGINE.canSeeTile(state, kell.id, { x: hidden.x, y: hidden.y }),
+    false,
+    "the target starts hidden from the shooter"
+  );
+
+  const from = { x: hidden.x, y: hidden.y };
+  const shover = unitByRef(state, "shover");
+  // Two tiles: the sight line runs along the shooter's own row until the last
+  // step, so nudging the target one square still leaves the wall in the way.
+  pushUnit(state, shover.id, hidden.id, 2);
+  processAllEvents(state);
+  const to = { x: hidden.x, y: hidden.y };
+  assert(
+    REACTION_ENGINE.canSeeTile(state, kell.id, to),
+    "and is exposed once it has been shoved off the wall"
+  );
+
+  const ctx = {
+    reactorId: kell.id,
+    event: { from, to },
+    canSeeTile: (tile) => REACTION_ENGINE.canSeeTile(state, kell.id, tile),
+    eventTile: (which) => (which === "from" ? from : to)
+  };
+  assertEqual(evaluateReactionCondition([{ subjectBecameExposed: true }], ctx), true);
+  assertEqual(evaluateReactionCondition([{ subjectBecameExposed: false }], ctx), false);
+  // Nothing about this condition is specific to being shoved: walking out
+  // would satisfy it identically, which is the point.
+  assertEqual(evaluateReactionCondition([{ subjectInLineOfSight: true }], ctx), true);
+});
+
+test("Orchestration", "Exposure drives a real reaction, and the cost lands on the squad", () => {
+  const state = synergyBattle(32, { autoResolveReactions: true });
+  const kell = unitByRef(state, "kell");
+  const hidden = unitByRef(state, "hidden");
+  const shover = unitByRef(state, "shover");
+  applyStatusForTest(state, kell.id, "overwatching");
+  assert(unitHasStatus(state, kell.id, "overwatching"), "the shooter is prepared");
+
+  const cpBefore = factionResource(state, "commandPoints").current;
+  const hpBefore = hidden.currentHp;
+
+  activateForTest(state, shover.id);
+  pushUnit(state, shover.id, hidden.id, 2);
+  processAllEvents(state);
+  autoResolveReactionWindows(state, reactionDeps());
+  processAllEvents(state);
+
+  assert(
+    hidden.currentHp < hpBefore || !hidden.alive,
+    "the prepared shooter fired on the exposed target"
+  );
+  assertEqual(
+    factionResource(state, "commandPoints").current,
+    cpBefore - 1,
+    "and the squad paid for it"
+  );
+  assert(battleContinuation(state).kind !== "stalled");
+});
+
+/* ---------------------------------------------------------------
+ * TIMELINE
+ * -------------------------------------------------------------*/
+
+test("Orchestration", "modifyTurnDelay moves a unit on the real timeline, and is clamped", () => {
+  const state = synergyBattle(40);
+  const nyx = unitByRef(state, "nyx");
+  const before = nyx.nextActionTime;
+
+  const result = REACTION_ENGINE.modifyTurnDelay(state, nyx.id, -200);
+  assert(result.applied < 0, "hastening pulls the activation earlier");
+  assert(nyx.nextActionTime < before);
+
+  // Scaled by the unit's own turn rate, not applied raw: that is what makes a
+  // fast frame and a slow one feel the same adjustment differently.
+  const rate = turnRateOf(state, nyx.id);
+  assert(Math.abs(result.applied + 200 / rate) < 0.001, "through the engine's own arithmetic");
+
+  // Nothing may be scheduled at or before now, however large the request.
+  REACTION_ENGINE.modifyTurnDelay(state, nyx.id, -100000);
+  assert(nyx.nextActionTime > state.currentTime, "an activation is never scheduled in the past");
+
+  // And a single adjustment cannot rewrite the whole order.
+  const delayed = unitByRef(state, "reyes");
+  const delayedBefore = delayed.nextActionTime;
+  REACTION_ENGINE.modifyTurnDelay(state, delayed.id, 100000);
+  const applied = delayed.nextActionTime - delayedBefore;
+  assert(
+    applied <= GAME_CONFIG.timeline.maxTurnDelayAdjustment / turnRateOf(state, delayed.id) + 0.001,
+    "a single adjustment is capped: " + applied
+  );
+});
+
+/**
+ * Runs the fixture's melee kill and reports where the killer lands on the
+ * timeline afterwards. `passive` off strips the authored reaction, so the two
+ * runs differ in nothing but the content.
+ */
+function meleeKillTiming(seed, options) {
+  const state = synergyBattle(seed, { autoResolveReactions: true });
+  const nyx = unitByRef(state, "nyx");
+  const fragile = unitByRef(state, "fragile");
+  applyStatusForTest(state, nyx.id, "cloaked");
+  if (options && options.withoutPassive) state.reactions.enabled = false;
+
+  activateForTest(state, nyx.id);
+  fragile.currentHp = 1;
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: nyx.id,
+    targetUnitIds: [fragile.id],
+    power: 400,
+    formula: "physical"
+  });
+  processAllEvents(state);
+  autoResolveReactionWindows(state, reactionDeps());
+  processAllEvents(state);
+
+  // A scripted attack charges no recovery of its own, so the activation is
+  // given an ordinary action's worth. Without a baseline there is nothing for
+  // a hasten to shorten, and both runs would land on zero.
+  state.activation.actionRecovery = 600;
+  // Ending the activation is when a banked adjustment is actually charged.
+  state.activation.ended = true;
+  settleCommand(state);
+  processAllEvents(state);
+  return { state, nyx, fragile, nextActionTime: nyx.nextActionTime };
+}
+
+test("Orchestration", "An authored kill-timing passive needs no engine knowledge of its owner", () => {
+  const withPassive = meleeKillTiming(41);
+  const without = meleeKillTiming(41, { withoutPassive: true });
+  const state = withPassive.state;
+
+  assert(!withPassive.fragile.alive, "the melee kill landed");
+  assert(
+    state.battleLog.some((entry) => entry.type === "timelineModified"),
+    "and the authored passive moved the timeline"
+  );
+  assert(
+    withPassive.nextActionTime < without.nextActionTime,
+    "pulling the next activation earlier than the same kill without it: " +
+      Math.round(withPassive.nextActionTime) + " vs " + Math.round(without.nextActionTime)
+  );
+
+  // The engine reached this through generic vocabulary only.
+  const source = [
+    REACTION_EFFECT_REGISTRY.modifyTurnDelay.run,
+    REACTION_ENGINE.modifyTurnDelay,
+    EVENT_HANDLERS.timelineModified
+  ]
+    .map((fn) => fn.toString())
+    .join("\n");
+  assert(!/\bnyx\b/i.test(source), "the timeline primitive does not name its first user");
+});
+
+test("Orchestration", "The same passive is authored data, not a runtime function", () => {
+  const reaction = REACTION_INDEX.reactionById.predatorTempoKill;
+  assert(reaction, "it exists as content");
+  assertEqual(reaction.effect.type, "modifyTurnDelay", "built from a registered primitive");
+  assert(REACTION_EFFECT_REGISTRY[reaction.effect.type], "which the registry knows");
+  for (const condition of reaction.conditions || []) {
+    assert(
+      reactionConditionKind(condition),
+      "every condition is a registered kind: " + JSON.stringify(condition)
+    );
+  }
+});
+
+
+test("Orchestration", "A reaction's kill creates the next reaction opportunity", () => {
+  const state = synergyBattle(50, { autoResolveReactions: true });
+  const kell = unitByRef(state, "kell");
+  const vale = unitByRef(state, "vale");
+  const hidden = unitByRef(state, "hidden");
+  const shover = unitByRef(state, "shover");
+  applyStatusForTest(state, kell.id, "overwatching");
+  refreshReactionLinks(state);
+
+  // One tap from death, so the prepared shot finishes it and the kill is
+  // produced *by a reaction* rather than by an ordinary attack.
+  hidden.currentHp = 1;
+  const valeBefore = { x: vale.x, y: vale.y };
+
+  activateForTest(state, shover.id);
+  pushUnit(state, shover.id, hidden.id, 2);
+  processAllEvents(state);
+  autoResolveReactionWindows(state, reactionDeps());
+  processAllEvents(state);
+
+  assert(!hidden.alive, "the prepared shot killed it");
+  const fired = state.reactions.log.filter((entry) => entry.ok).map((entry) => entry.reactionId);
+  assert(fired.includes("heldFiringLane"), "the displacement reaction fired: " + fired.join(","));
+  assert(
+    fired.includes("sectionSevenAdvance"),
+    "and its kill opened the ally's reaction — a chain, not a coincidence: " + fired.join(",")
+  );
+  assert(
+    vale.x !== valeBefore.x || vale.y !== valeBefore.y,
+    "which actually moved the ally"
+  );
+  assert(battleContinuation(state).kind !== "stalled");
+});
+
+test("Orchestration", "The new registries round-trip through export and import", () => {
+  const edited = gameplayDraftFixture();
+  edited.resources.commandPoints.max = 6;
+  edited.reactions.heldFiringLane.priority = 81;
+  edited.combatLinks.sectionSeven.icon = "◆";
+
+  const bundle = buildBundle(CANONICAL_GAMEPLAY, edited, { mode: "changes" });
+  assertEqual(bundle.changes.length, 3);
+  const paths = bundle.manifest.registries.map((entry) => entry.registry).sort();
+  assertEqual(paths.join(","), "combatLinks,reactions,resources");
+
+  const files = bundleFromText(bundleToText(bundle));
+  const imported = draftFromBundle(CANONICAL_GAMEPLAY, files);
+  assertEqual(imported.problems.length, 0, imported.problems.join(" | "));
+  assertEqual(imported.draft.resources.commandPoints.max, 6);
+  assertEqual(imported.draft.reactions.heldFiringLane.priority, 81);
+  assertEqual(
+    diffAgainstCanonical(CANONICAL_GAMEPLAY, imported.draft).length,
+    3,
+    "the same three changes, and no more"
+  );
+
+  // Byte-stable, and canonical data is untouched by any of it.
+  assertEqual(bundleToText(bundle), bundleToText(buildBundle(CANONICAL_GAMEPLAY, edited, { mode: "changes" })));
+  assertEqual(CANONICAL_GAMEPLAY.resources.commandPoints.max, 4);
+  assertEqual(REACTION_INDEX.reactionById.heldFiringLane.priority, 80, "and so is the running content");
+});
+
+test("Orchestration", "Authored orchestration data validates, and broken references do not", () => {
+  const clean = validateGameplayData(CANONICAL_GAMEPLAY);
+  assertEqual(clean.errors.length, 0, clean.errors.join(" | "));
+
+  const cases = [
+    ["an unknown trigger", (draft) => { draft.reactions.heldFiringLane.trigger = "noSuchEvent"; }],
+    ["an unknown resource", (draft) => {
+      draft.reactions.heldFiringLane.cost.resources = [{ id: "noSuchResource", amount: 1 }];
+    }],
+    ["a cost larger than the resource", (draft) => {
+      draft.reactions.heldFiringLane.cost.resources = [{ id: "commandPoints", amount: 99 }];
+    }],
+    ["an unknown effect", (draft) => { draft.reactions.heldFiringLane.effect = { type: "noSuchEffect" }; }],
+    ["an unknown condition", (draft) => { draft.reactions.heldFiringLane.conditions = [{ noSuchThing: 1 }]; }],
+    ["a link naming an unknown operator", (draft) => { draft.combatLinks.sectionSeven.participants = ["ghost"]; }],
+    ["a link granting an unknown reaction", (draft) => { draft.combatLinks.sectionSeven.reactions = ["ghost"]; }],
+    ["a resource gated by an unknown link", (draft) => { draft.resources.commandPoints.linkId = "ghost"; }],
+    ["a resource starting above its maximum", (draft) => { draft.resources.commandPoints.startsAt = 99; }],
+    ["a reaction nobody could ever be offered", (draft) => {
+      delete draft.reactions.heldFiringLane.requires;
+    }]
+  ];
+
+  for (const [what, mutate] of cases) {
+    const draft = gameplayDraftFixture();
+    mutate(draft);
+    const report = validateGameplayData(draft);
+    assertEqual(report.ok, false, "validation should reject " + what);
+  }
+});
+
+test("Orchestration", "Reaction and resource state survive a save mid-chain", () => {
+  const state = synergyBattle(51, { autoResolveReactions: true });
+  const kell = unitByRef(state, "kell");
+  applyStatusForTest(state, kell.id, "overwatching");
+  setFactionResource(state, "commandPoints", 2);
+  gainCombatResource(state, resourceDefinitionFor("reactionCapacity"), { unitId: kell.id }, 0);
+
+  const restored = deserializeBattle(serializeBattle(state));
+  assertEqual(
+    factionResource(restored, "commandPoints").current,
+    2,
+    "a faction balance is battle state and serializes"
+  );
+  assertEqual(
+    (restored.units[kell.id].resources || {}).reactionCapacity.current,
+    1,
+    "and so does a unit balance"
+  );
+  assert(restored.causality, "the causal clock survives too");
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
@@ -25978,8 +26986,17 @@ function reactionLogOf(state) {
   return state.battleLog.filter((entry) => entry.type === "reaction").map((entry) => entry.text);
 }
 
-function poolOf(state, poolId) {
-  return state.reactions.economy.pools[poolId || "sectionSevenLink"];
+/**
+ * A shared resource balance, by id.
+ *
+ * The Section Seven pool used to be a bespoke record inside the reaction
+ * economy. It is now an ordinary faction-scoped resource, so these tests read
+ * it the same way anything else would.
+ */
+function poolOf(state, resourceId, teamId) {
+  const id = resourceId || "sectionSevenTempo";
+  const team = teamId || "player";
+  return (state.resources.faction[team] || {})[id] || { current: 0, max: 0, available: false };
 }
 
 /* ---- discovery and legality ---- */
@@ -26160,7 +27177,7 @@ test("Reactions", "A reaction costs from the shared pool and the pool is authori
 
   assert(poolOf(state).current < 2, "the chain spent from the pool");
   assertEqual(
-    serializeBattle(state).includes('"sectionSevenLink"'),
+    serializeBattle(state).includes('"sectionSevenTempo"'),
     true,
     "and the pool is in the save"
   );
@@ -26285,7 +27302,7 @@ test("Reactions", "An optional player reaction suspends into a window instead of
   const model = reactionModel(state);
   assertEqual(model.window.offers.length, 1);
   assertEqual(model.window.offers[0].reactorRef, "kell");
-  assertEqual(model.window.offers[0].costText, "1 from sectionSevenLink");
+  assertEqual(model.window.offers[0].costText, "1 Section Seven tempo");
 
   resolveReactionChoice(state, model.window.offers[0].id);
   assert(target.currentHp < hpBefore, "accepting resolved the reaction authoritatively");
@@ -26569,12 +27586,12 @@ test("Section Seven", "The link needs all three, allied and able to act", () => 
   refreshReactionLinks(state);
   assertEqual(links().active, false);
   assertEqual(links().reason, "a participant is down or dormant");
-  assertEqual(links().pool.available, false, "and the shared pool goes with it");
+  assertEqual(links().resources[0].available, false, "and the resource it gates goes with it");
 
   reyes.alive = true;
   refreshReactionLinks(state);
   assertEqual(links().active, true, "and comes back when she does");
-  assertEqual(links().pool.current, links().pool.max, "with the pool refreshed");
+  assertEqual(links().resources[0].current, links().resources[0].max, "with the resource refreshed");
 });
 
 test("Section Seven", "Breaking the alliance breaks the link", () => {
@@ -26612,7 +27629,7 @@ test("Reactions", "Reaction state round-trips through a save", () => {
   const restored = deserializeBattle(saved);
   assert(restored, "the save loaded");
   assertEqual(serializeBattle(restored), saved, "byte-identical");
-  assertEqual(restored.reactions.economy.pools.sectionSevenLink.current, poolOf(state).current);
+  assertEqual(poolOf(restored).current, poolOf(state).current);
   assertEqual(restored.reactions.links.sectionSeven.active, state.reactions.links.sectionSeven.active);
 });
 
@@ -26651,13 +27668,13 @@ test("Reactions", "Reloading after a chain never replays it", () => {
   executeCommand(state, { type: "useAbility", unitId: vale.id, abilityId: "targetMark", target: { unitId: target.id } });
 
   const restored = deserializeBattle(serializeBattle(state));
-  const poolAfterLoad = restored.reactions.economy.pools.sectionSevenLink.current;
+  const poolAfterLoad = poolOf(restored).current;
   const valePosition = { x: unitByRef(restored, "vale").x, y: unitByRef(restored, "vale").y };
 
   processAllEvents(restored);
   runMissionScript(restored);
 
-  assertEqual(restored.reactions.economy.pools.sectionSevenLink.current, poolAfterLoad, "no extra cost");
+  assertEqual(poolOf(restored).current, poolAfterLoad, "no extra cost");
   assertEqual(unitByRef(restored, "vale").x, valePosition.x, "no extra movement");
   assertEqual(unitByRef(restored, "vale").y, valePosition.y);
 });
@@ -26691,7 +27708,7 @@ test("Section Seven", "Grayfield starts with the link unavailable and restores i
   const link = () => reactionModel(state).links.find((entry) => entry.id === "sectionSeven");
 
   assertEqual(link().active, false, "no link while Kell and Reyes are hostile");
-  assertEqual(link().pool.available, false, "and no shared pool");
+  assertEqual(link().resources[0].available, false, "and its shared resource is unavailable");
 
   runBattle(state, 400);
 
@@ -26718,8 +27735,8 @@ test("Section Seven", "The faction change alone does not restore the link — th
 
   setLinkStateById(state, deps, "sectionSeven", { enabled: true, unlocked: true });
   assertEqual(link().active, true, "the script is what brings it back");
-  assertEqual(link().pool.available, true, "and the pool is immediately usable");
-  assertEqual(link().pool.current, link().pool.max);
+  assertEqual(link().resources[0].available, true, "and its shared resource is immediately usable");
+  assertEqual(link().resources[0].current, link().resources[0].max);
 });
 
 test("Section Seven", "A Link reaction executes after Grayfield restores it", () => {
@@ -26763,7 +27780,7 @@ test("Section Seven", "A Link reaction executes after Grayfield restores it", ()
     "the link is active with the trio together and allied"
   );
 
-  state.reactions.economy.pools.sectionSevenLink.current = 2;
+  poolOf(state).current = 2;
   const hpBefore = enemy.currentHp;
   vale.nextActionTime = state.currentTime;
   state.activeUnitId = null;
@@ -26847,10 +27864,10 @@ test("Reactions", "Every reaction definition validates against the registries", 
     if (reaction.owner) {
       assert(typeof reaction.owner === "string", reaction.id + " owner must be a unit ref");
     }
-    if (reaction.cost && reaction.cost.pool) {
+    for (const entry of (reaction.cost && reaction.cost.resources) || []) {
       assert(
-        REACTION_INDEX.poolDefinitions.some((pool) => pool.id === reaction.cost.pool.id),
-        reaction.id + ' draws on undeclared pool "' + reaction.cost.pool.id + '"'
+        REACTION_INDEX.resourceById[entry.id],
+        reaction.id + ' draws on undeclared resource "' + entry.id + '"'
       );
     }
   }
@@ -31302,7 +32319,7 @@ function ReactionPrompt({ model, onChoose, onDecline }) {
       if (appSettings && appSettings.settingsOpen) return;
       if (event.repeat) return;
       const index = Number(event.key) - 1;
-      if (index >= 0 && index < model.offers.length) {
+      if (index >= 0 && index < model.offers.length && model.offers[index].affordable) {
         event.preventDefault();
         onChoose(model.offers[index].id);
       } else if (event.key === "Escape") {
@@ -31322,22 +32339,40 @@ function ReactionPrompt({ model, onChoose, onDecline }) {
         <div className="mb-2 flex items-baseline gap-2">
           <span className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-300">Reaction</span>
           <span className="text-[12px] text-slate-300">{model.triggerText}</span>
+          {/* Why this window is open, in chain terms. A cascade three steps
+           *  deep is otherwise indistinguishable from a coincidence. */}
+          {model.cause && model.cause.depth > 0 ? (
+            <span className="text-[10px] text-slate-600">{describeCause(model.cause)}</span>
+          ) : null}
         </div>
         <div className="space-y-1">
           {model.offers.map((offer, index) => (
             <button
               key={offer.id}
-              onClick={() => onChoose(offer.id)}
-              className="flex w-full items-center gap-3 border border-amber-300/40 bg-slate-900/80 px-3 py-2 text-left transition hover:border-amber-200 hover:bg-amber-950/40"
+              onClick={() => (offer.affordable ? onChoose(offer.id) : null)}
+              disabled={!offer.affordable}
+              title={offer.affordable ? "" : offer.blockedReason || ""}
+              className={
+                "flex w-full items-center gap-3 border px-3 py-2 text-left transition " +
+                (offer.affordable
+                  ? "border-amber-300/40 bg-slate-900/80 hover:border-amber-200 hover:bg-amber-950/40"
+                  : "cursor-not-allowed border-slate-800 bg-slate-950/60 opacity-60")
+              }
             >
-              <span className="text-[10px] text-slate-500">{index + 1}</span>
+              <span className="text-[10px] text-slate-500">{offer.affordable ? index + 1 : "—"}</span>
               <span className="flex-1">
-                <span className="block text-[13px] text-amber-100">{offer.name}</span>
-                <span className="block text-[11px] text-slate-400">{offer.description}</span>
+                <span className={"block text-[13px] " + (offer.affordable ? "text-amber-100" : "text-slate-500")}>
+                  {offer.name}
+                </span>
+                <span className="block text-[11px] text-slate-400">
+                  {offer.affordable ? offer.description : offer.blockedReason}
+                </span>
               </span>
               <span className="text-right">
                 <span className="block text-[11px] uppercase tracking-wider text-sky-300">{offer.reactorRef}</span>
-                <span className="block text-[10px] text-slate-500">{offer.costText}</span>
+                <span className={"block text-[10px] " + (offer.affordable ? "text-slate-500" : "text-rose-300/80")}>
+                  {offer.costText}
+                </span>
               </span>
             </button>
           ))}
@@ -31353,18 +32388,51 @@ function ReactionPrompt({ model, onChoose, onDecline }) {
   );
 }
 
+/** A row of pips for a resource balance. Reads at a glance, which a number
+ *  in a corner does not. */
+function ResourcePips({ resource, lit }) {
+  return (
+    <span className="flex items-center gap-0.5" title={resource.name + " " + resource.current + "/" + resource.max}>
+      {Array.from({ length: Math.min(12, resource.max) }, (unused, index) => (
+        <span
+          key={index}
+          className={
+            "inline-block h-2 w-2 rounded-full " +
+            (lit && index < resource.current ? "bg-amber-300" : "bg-slate-700")
+          }
+        />
+      ))}
+    </span>
+  );
+}
+
 /**
- * Persistent readout for combat relationships: whether each link is live, why
- * not when it is not, and how much shared tempo is left.
+ * Persistent readout for the squad's shared resources and combat links:
+ * whether each link is live, why not when it is not, and how much of each
+ * shared pool is left.
  */
 function LinkStrip({ model, top }) {
-  if (!model || !model.links.length) return null;
-  const pools = Object.fromEntries(model.economy.pools.map((pool) => [pool.id, pool]));
+  if (!model) return null;
+  const squad = (model.resources && model.resources.faction) || [];
+  // A link-gated resource is already drawn beside its link; showing it twice
+  // would suggest there are two of them.
+  const ungated = squad.filter((resource) => !resource.linkId);
+  if (!model.links.length && !ungated.length) return null;
   return (
     <div className="pointer-events-none absolute left-1/2 z-[45] -translate-x-1/2" style={{ top }}>
       <div className="flex gap-2">
+        {ungated.map((resource) => (
+          <div
+            key={resource.id}
+            title={resource.name + " — " + resource.current + " of " + resource.max}
+            className="flex items-center gap-2 border border-sky-400/50 bg-slate-950/80 px-2 py-1 text-[11px] text-sky-100"
+          >
+            <span className="uppercase tracking-wider">{resource.name}</span>
+            <ResourcePips resource={resource} lit={resource.available} />
+          </div>
+        ))}
         {model.links.map((link) => {
-          const pool = link.pool ? pools[link.pool.id] : null;
+          const pool = (link.resources || [])[0] || null;
           return (
             <div
               key={link.id}
@@ -31378,19 +32446,7 @@ function LinkStrip({ model, top }) {
             >
               <span>{link.icon}</span>
               <span className="uppercase tracking-wider">{link.name}</span>
-              {pool ? (
-                <span className="flex items-center gap-0.5">
-                  {Array.from({ length: pool.max }, (unused, index) => (
-                    <span
-                      key={index}
-                      className={
-                        "inline-block h-2 w-2 rounded-full " +
-                        (link.active && index < pool.current ? "bg-amber-300" : "bg-slate-700")
-                      }
-                    />
-                  ))}
-                </span>
-              ) : null}
+              {pool ? <ResourcePips resource={pool} lit={link.active} /> : null}
               {!link.active ? <span className="text-[10px] italic">{link.reason}</span> : null}
             </div>
           );
@@ -32332,6 +33388,11 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
   const answerReaction = React.useCallback(
     (offerId) => {
       resolveReactionChoice(state, offerId || null);
+      // Resolving a reaction can end the activation that was on screen. The
+      // input machine has no way to notice that on its own, and the version
+      // bump alone is not enough — the turn driver refuses to advance while
+      // the UI still believes a unit is selected. Reconcile explicitly.
+      setInput((current) => reconcileInputWithBattle(current, state));
       touch();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -32445,18 +33506,40 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
   }, [state.finished, version, presentation]);
 
   // Turn driver: activates the next unit on the timeline, one at a time.
+  //
+  // The engine states the continuation; this obeys it. The driver used to
+  // decide for itself by reading `input.mode`, which meant any authoritative
+  // path that ended an activation without going through the input machine —
+  // a resolved reaction, most of all — left the battle waiting for input that
+  // could never arrive.
   React.useEffect(() => {
     if (busy) return;
-    if (state.finished) {
+    const next = battleContinuation(state);
+
+    if (next.kind === "finished") {
       mark("finishBattle");
       if (input.mode !== "battleFinished") {
         setInput((current) => inputReducer(current, { type: "battleFinished" }, state).input);
       }
       return;
     }
-    if (state.activeUnitId) return;
-    if (input.mode !== "idle") return;
-    const nextId = view.nextUnitId;
+    if (next.kind === "reaction" || next.kind === "active") return;
+    if (next.kind === "stalled") {
+      // Never silent. A stall is a bug, and the log is where a bug goes.
+      if (!state.__stallReported) {
+        state.__stallReported = true;
+        state.errors.push("Battle stalled: " + next.reason);
+      }
+      return;
+    }
+
+    // `advance`: the UI may still be showing the unit whose activation just
+    // ended. Reconcile before activating anyone, or the reducer will refuse.
+    if (input.mode !== "idle") {
+      setInput((current) => reconcileInputWithBattle(current, state));
+      return;
+    }
+    const nextId = view.nextUnitId || next.unitId;
     if (!nextId) return;
     const team = view.teams.find((entry) => entry.id === state.units[nextId].teamId);
     const nextName = view.units.find((unit) => unit.id === nextId).name;
@@ -34272,6 +35355,48 @@ if (typeof window !== "undefined") {
     // The Studio's derived-values panel. Deliberately the engine's own stat
     // pipeline rather than an editor copy of it.
     composeUnitPreview,
+    // The combat-orchestration surface: enough to drive a synergy chain from
+    // outside React and to inspect why each step fired.
+    battleContinuation,
+    causalTrace: (state) => state.causalTrace || [],
+    traceChain: (state, seq) => traceChain(state.causalTrace || [], seq),
+    describeCause,
+    combatResources: {
+      definitions: COMBAT_RESOURCE_DEFINITIONS,
+      faction: (state, teamId) => (state.resources.faction[teamId] || {}),
+      unit: (state, unitId) => (state.units[unitId] || {}).resources || {},
+      spend: (state, resourceId, owner, amount) =>
+        spendCombatResource(state, normalizeResourceDefinition({
+          id: resourceId,
+          ...REACTION_INDEX.resourceById[resourceId]
+        }), owner, amount)
+    },
+    modifyTurnDelay: (state, unitId, delta) => REACTION_ENGINE.modifyTurnDelay(state, unitId, delta),
+    canSeeTile: (state, unitId, tile) => REACTION_ENGINE.canSeeTile(state, unitId, tile),
+    forcePush: (state, sourceUnitId, targetUnitId, distance) => {
+      const source = state.units[sourceUnitId];
+      EFFECT_HANDLERS.push(state, {
+        sourceUnitId,
+        targetUnitId,
+        abilityId: null,
+        sourceTile: { x: source.x, y: source.y },
+        effect: { type: "push", distance: distance == null ? 1 : distance }
+      });
+      processAllEvents(state);
+    },
+    applyStatusTo: (state, unitId, statusId) => {
+      REACTION_ENGINE.applyStatus(state, unitId, [unitId], statusId);
+      processAllEvents(state);
+    },
+    activateUnitForTest: (state, unitId) => {
+      state.units[unitId].nextActionTime = state.currentTime;
+      for (const otherId of state.unitOrder) {
+        if (otherId !== unitId) state.units[otherId].nextActionTime = state.currentTime + 1000;
+      }
+      return executeCommand(state, { type: "activateUnit", unitId });
+    },
+    autoResolveReactionWindows: (state) => autoResolveReactionWindows(state, reactionDeps()),
+    settleBattle: (state) => settleCommand(state),
     gameplayDraft: {
       active: GAMEPLAY_DRAFT_ACTIVE,
       counts: GAMEPLAY_DRAFT_COUNTS,
