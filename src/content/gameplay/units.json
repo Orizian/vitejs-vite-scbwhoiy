@@ -1,0 +1,692 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "units",
+  "description": "Combat unit definitions — the frame. Durability, mobility, sensors, emissions, native abilities and art. Both a player chassis and an enemy archetype are entries here; nothing distinguishes them but usage.",
+  "entries": {
+    "assaultMech": {
+      "name": "Assault Mech",
+      "classId": "assault",
+      "role": "Balanced bruiser: durable, reliable close-range damage, protects allies.",
+      "glyph": "A",
+      "description": "General-purpose frame with heavy plating and a close-range shotgun.",
+      "tags": [
+        "mech",
+        "deployable"
+      ],
+      "baseStats": {
+        "maxHp": 130,
+        "attack": 95,
+        "magic": 30,
+        "defense": 70,
+        "resistance": 45,
+        "accuracy": 88,
+        "evasion": 8,
+        "speed": 100,
+        "movement": 4,
+        "maxClimb": 1,
+        "maxDrop": 1
+      },
+      "abilities": [
+        "scatterShot",
+        "coverAlly",
+        "stabilize",
+        "targetMark"
+      ],
+      "defaultAbilityId": "scatterShot",
+      "aiProfile": "aggressive",
+      "defaultEquipment": {
+        "primaryWeapon": "closeShotgun",
+        "armor": "plateArmor",
+        "utilitySystem": "targetingSuite",
+        "coreSystem": "standardCore"
+      },
+      "assets": {
+        "portrait": "ironboundPortrait",
+        "battlefield": "ironboundBattle"
+      }
+    },
+    "civilianTransport": {
+      "name": "Civilian Transport",
+      "classId": "civilian",
+      "role": "Unarmed evacuation vehicle. Keep it alive.",
+      "glyph": "c",
+      "description": "Battered civilian hauler carrying settlement survivors.",
+      "tags": [
+        "civilian"
+      ],
+      "baseStats": {
+        "maxHp": 150,
+        "attack": 10,
+        "magic": 10,
+        "defense": 55,
+        "resistance": 45,
+        "accuracy": 60,
+        "evasion": 5,
+        "speed": 70,
+        "movement": 3,
+        "maxClimb": 1,
+        "maxDrop": 1
+      },
+      "abilities": [],
+      "defaultAbilityId": null,
+      "aiProfile": "cautious",
+      "assets": {
+        "portrait": "fieldMedicPortrait",
+        "battlefield": "fieldMedicBattle"
+      }
+    },
+    "fieldMedic": {
+      "name": "Field Medic",
+      "classId": "support",
+      "glyph": "M",
+      "description": "Keeps the line alive; the heal needs a full activation to recharge.",
+      "baseStats": {
+        "maxHp": 95,
+        "attack": 35,
+        "magic": 60,
+        "defense": 35,
+        "resistance": 45,
+        "speed": 110,
+        "accuracy": 100,
+        "evasion": 100,
+        "movement": 4
+      },
+      "abilities": [
+        "basicHeal",
+        "quickStrike"
+      ],
+      "defaultAbilityId": "quickStrike",
+      "aiProfile": "support",
+      "assets": {
+        "portrait": "fieldMedicPortrait",
+        "battlefield": "fieldMedicBattle"
+      }
+    },
+    "governmentCommander": {
+      "name": "Government Commander",
+      "classId": "commander",
+      "role": "Elite officer frame directing government forces.",
+      "glyph": "C",
+      "description": "Hand-built command mech, a genuine match for a resistance machine.",
+      "tags": [
+        "mech",
+        "government",
+        "elite"
+      ],
+      "baseStats": {
+        "maxHp": 160,
+        "attack": 105,
+        "magic": 45,
+        "defense": 70,
+        "resistance": 60,
+        "accuracy": 94,
+        "evasion": 15,
+        "speed": 125,
+        "movement": 4,
+        "maxClimb": 1,
+        "maxDrop": 2
+      },
+      "abilities": [
+        "scatterShot",
+        "coverAlly",
+        "targetMark",
+        "stabilize"
+      ],
+      "defaultAbilityId": "scatterShot",
+      "aiProfile": "aggressive",
+      "assets": {
+        "portrait": "ironboundPortrait",
+        "battlefield": "ironboundBattle"
+      }
+    },
+    "governmentDrone": {
+      "name": "Repair Drone",
+      "classId": "drone",
+      "role": "Automated field repair unit.",
+      "glyph": "d",
+      "description": "Government maintenance drone that patches damaged frames.",
+      "tags": [
+        "mech",
+        "government"
+      ],
+      "baseStats": {
+        "maxHp": 45,
+        "attack": 20,
+        "magic": 55,
+        "defense": 30,
+        "resistance": 30,
+        "accuracy": 86,
+        "evasion": 18,
+        "speed": 115,
+        "movement": 4,
+        "maxClimb": 1,
+        "maxDrop": 2
+      },
+      "abilities": [
+        "droneWeld",
+        "fieldRepair"
+      ],
+      "defaultAbilityId": "droneWeld",
+      "aiProfile": "support",
+      "assets": {
+        "portrait": "fieldMedicPortrait",
+        "battlefield": "fieldMedicBattle"
+      }
+    },
+    "heavyEnforcer": {
+      "name": "Heavy Enforcer",
+      "classId": "enforcer",
+      "role": "Armoured riot frame that anchors a government line.",
+      "glyph": "E",
+      "description": "Slow, heavily plated enforcement walker.",
+      "tags": [
+        "mech",
+        "government"
+      ],
+      "baseStats": {
+        "maxHp": 145,
+        "attack": 90,
+        "magic": 20,
+        "defense": 75,
+        "resistance": 45,
+        "accuracy": 84,
+        "evasion": 5,
+        "speed": 85,
+        "movement": 3,
+        "maxClimb": 1,
+        "maxDrop": 1
+      },
+      "abilities": [
+        "scatterShot",
+        "stabilize"
+      ],
+      "defaultAbilityId": "scatterShot",
+      "aiProfile": "aggressive",
+      "assets": {
+        "portrait": "ironboundPortrait",
+        "battlefield": "ironboundBattle"
+      }
+    },
+    "ironbound": {
+      "name": "Ironbound",
+      "classId": "vanguard",
+      "glyph": "I",
+      "description": "Slow armoured vanguard that hits hard when it finally acts.",
+      "baseStats": {
+        "maxHp": 120,
+        "attack": 70,
+        "magic": 10,
+        "defense": 40,
+        "resistance": 35,
+        "speed": 85,
+        "accuracy": 100,
+        "evasion": 85,
+        "movement": 3
+      },
+      "abilities": [
+        "heavyBlow"
+      ],
+      "defaultAbilityId": "heavyBlow",
+      "aiProfile": "aggressive",
+      "assets": {
+        "portrait": "ironboundPortrait",
+        "battlefield": "ironboundBattle"
+      }
+    },
+    "lightPursuit": {
+      "name": "Light Pursuit Mech",
+      "classId": "pursuit",
+      "role": "Fast interceptor built to chase and harass.",
+      "glyph": "p",
+      "description": "Lightweight patrol frame used to run down fleeing targets.",
+      "tags": [
+        "mech",
+        "government"
+      ],
+      "baseStats": {
+        "maxHp": 55,
+        "attack": 70,
+        "magic": 15,
+        "defense": 25,
+        "resistance": 20,
+        "accuracy": 88,
+        "evasion": 25,
+        "speed": 145,
+        "movement": 6,
+        "maxClimb": 2,
+        "maxDrop": 2
+      },
+      "abilities": [
+        "burstFire"
+      ],
+      "defaultAbilityId": "burstFire",
+      "aiProfile": "aggressive",
+      "assets": {
+        "portrait": "swiftbladePortrait",
+        "battlefield": "swiftbladeBattle"
+      }
+    },
+    "missileCarrier": {
+      "name": "Missile Carrier",
+      "classId": "carrier",
+      "role": "Standoff launcher that shells targets from the rear.",
+      "glyph": "M",
+      "description": "Fragile launch platform carrying long-range ordnance.",
+      "tags": [
+        "mech",
+        "government"
+      ],
+      "baseStats": {
+        "maxHp": 70,
+        "attack": 95,
+        "magic": 40,
+        "defense": 35,
+        "resistance": 30,
+        "accuracy": 90,
+        "evasion": 8,
+        "speed": 95,
+        "movement": 3,
+        "maxClimb": 1,
+        "maxDrop": 1
+      },
+      "abilities": [
+        "handCannon",
+        "brace",
+        "precisionShot",
+        "targetMark"
+      ],
+      "defaultAbilityId": "precisionShot",
+      "aiProfile": "cautious",
+      "assets": {
+        "portrait": "venomAdeptPortrait",
+        "battlefield": "venomAdeptBattle"
+      }
+    },
+    "repairDroneMech": {
+      "name": "Repair Drone",
+      "classId": "drone",
+      "role": "Expendable repair platform.",
+      "glyph": "d",
+      "description": "Small autonomous drone that patches damaged frames.",
+      "tags": [
+        "mech",
+        "drone",
+        "summoned"
+      ],
+      "baseStats": {
+        "maxHp": 35,
+        "attack": 20,
+        "magic": 45,
+        "defense": 25,
+        "resistance": 25,
+        "accuracy": 85,
+        "evasion": 20,
+        "speed": 110,
+        "movement": 4,
+        "maxClimb": 1,
+        "maxDrop": 2
+      },
+      "abilities": [
+        "droneWeld"
+      ],
+      "defaultAbilityId": "droneWeld",
+      "aiProfile": "support",
+      "assets": {
+        "portrait": "fieldMedicPortrait",
+        "battlefield": "fieldMedicBattle"
+      }
+    },
+    "rifleGrunt": {
+      "name": "Rifle Grunt",
+      "classId": "grunt",
+      "role": "Mass-produced infantry frame with a service rifle.",
+      "glyph": "g",
+      "description": "Conscript walker. Numerous, cheap and individually unimpressive.",
+      "tags": [
+        "mech",
+        "government"
+      ],
+      "baseStats": {
+        "maxHp": 60,
+        "attack": 65,
+        "magic": 15,
+        "defense": 30,
+        "resistance": 20,
+        "accuracy": 84,
+        "evasion": 10,
+        "speed": 100,
+        "movement": 3,
+        "maxClimb": 1,
+        "maxDrop": 1
+      },
+      "abilities": [
+        "handCannon"
+      ],
+      "defaultAbilityId": "handCannon",
+      "aiProfile": "aggressive",
+      "assets": {
+        "portrait": "swiftbladePortrait",
+        "battlefield": "swiftbladeBattle"
+      }
+    },
+    "securityTurret": {
+      "name": "Security Turret",
+      "classId": "turret",
+      "role": "Emplaced gun. Cannot move, hits anything that comes close.",
+      "glyph": "T",
+      "description": "Bolted-down defensive emplacement covering an approach.",
+      "tags": [
+        "mech",
+        "government",
+        "emplacement"
+      ],
+      "baseStats": {
+        "maxHp": 80,
+        "attack": 85,
+        "magic": 15,
+        "defense": 60,
+        "resistance": 40,
+        "accuracy": 92,
+        "evasion": 0,
+        "speed": 90,
+        "movement": 0,
+        "maxClimb": 0,
+        "maxDrop": 0
+      },
+      "abilities": [
+        "handCannon"
+      ],
+      "defaultAbilityId": "handCannon",
+      "aiProfile": "cautious",
+      "assets": {
+        "portrait": "ironboundPortrait",
+        "battlefield": "ironboundBattle"
+      }
+    },
+    "sniperMech": {
+      "name": "Sniper Mech",
+      "classId": "sniper",
+      "role": "Long-range specialist: devastating with setup, helpless up close.",
+      "glyph": "P",
+      "description": "Stabilised weapons platform built around a long-barrelled rifle.",
+      "tags": [
+        "mech",
+        "deployable"
+      ],
+      "baseStats": {
+        "maxHp": 90,
+        "attack": 105,
+        "magic": 30,
+        "defense": 40,
+        "resistance": 35,
+        "accuracy": 96,
+        "evasion": 12,
+        "speed": 105,
+        "movement": 3,
+        "maxClimb": 1,
+        "maxDrop": 2
+      },
+      "abilities": [
+        "handCannon",
+        "precisionShot",
+        "brace",
+        "targetMark",
+        "overwatch"
+      ],
+      "defaultAbilityId": "handCannon",
+      "aiProfile": "cautious",
+      "defaultEquipment": {
+        "primaryWeapon": "longRifle",
+        "armor": "lightPlating",
+        "utilitySystem": "targetingSuite",
+        "coreSystem": "standardCore"
+      },
+      "assets": {
+        "portrait": "venomAdeptPortrait",
+        "battlefield": "venomAdeptBattle"
+      }
+    },
+    "stealthMech": {
+      "name": "Stealth Mech",
+      "classId": "stealth",
+      "role": "Fast striker: moves in, hits hard, disengages.",
+      "glyph": "S",
+      "description": "Light frame with a dazzle field, an autogun and a blade attachment.",
+      "tags": [
+        "mech",
+        "deployable"
+      ],
+      "baseStats": {
+        "maxHp": 85,
+        "attack": 90,
+        "magic": 25,
+        "defense": 35,
+        "resistance": 30,
+        "accuracy": 92,
+        "evasion": 35,
+        "speed": 150,
+        "movement": 6,
+        "maxClimb": 2,
+        "maxDrop": 2
+      },
+      "abilities": [
+        "burstFire",
+        "bladeStrike",
+        "cloak",
+        "tacticalWithdrawal"
+      ],
+      "defaultAbilityId": "burstFire",
+      "aiProfile": "aggressive",
+      "defaultEquipment": {
+        "primaryWeapon": "autogun",
+        "armor": "lightPlating",
+        "utilitySystem": "jumpJets",
+        "coreSystem": "standardCore"
+      },
+      "assets": {
+        "portrait": "swiftbladePortrait",
+        "battlefield": "swiftbladeBattle"
+      }
+    },
+    "supplyDepot": {
+      "name": "Supply Container",
+      "classId": "structure",
+      "role": "Sealed government supply container.",
+      "glyph": "▪",
+      "description": "Armoured crate holding the supplies the resistance needs.",
+      "tags": [
+        "structure"
+      ],
+      "baseStats": {
+        "maxHp": 55,
+        "attack": 1,
+        "magic": 1,
+        "defense": 20,
+        "resistance": 20,
+        "accuracy": 1,
+        "evasion": 0,
+        "speed": 60,
+        "movement": 0,
+        "maxClimb": 0,
+        "maxDrop": 0
+      },
+      "abilities": [],
+      "defaultAbilityId": null,
+      "aiProfile": "cautious",
+      "assets": {
+        "portrait": "ironboundPortrait",
+        "battlefield": "ironboundBattle"
+      }
+    },
+    "supportMech": {
+      "name": "Support Mech",
+      "classId": "support",
+      "role": "Repair and utility: keeps the lance running.",
+      "glyph": "R",
+      "description": "Field engineering frame carrying an arc welder and drone bay.",
+      "tags": [
+        "mech",
+        "deployable"
+      ],
+      "baseStats": {
+        "maxHp": 105,
+        "attack": 55,
+        "magic": 85,
+        "defense": 50,
+        "resistance": 55,
+        "accuracy": 90,
+        "evasion": 15,
+        "speed": 115,
+        "movement": 4,
+        "maxClimb": 1,
+        "maxDrop": 1
+      },
+      "abilities": [
+        "arcWelder",
+        "fieldRepair",
+        "reinforce",
+        "repairDrone"
+      ],
+      "defaultAbilityId": "arcWelder",
+      "aiProfile": "support",
+      "defaultEquipment": {
+        "primaryWeapon": "arcWelderRig",
+        "armor": "plateArmor",
+        "utilitySystem": "repairKit",
+        "coreSystem": "standardCore"
+      },
+      "assets": {
+        "portrait": "fieldMedicPortrait",
+        "battlefield": "fieldMedicBattle"
+      }
+    },
+    "swiftblade": {
+      "name": "Swiftblade",
+      "classId": "skirmisher",
+      "glyph": "S",
+      "description": "Fragile skirmisher who acts roughly twice as often as anyone else.",
+      "baseStats": {
+        "maxHp": 70,
+        "attack": 55,
+        "magic": 25,
+        "defense": 30,
+        "resistance": 25,
+        "speed": 200,
+        "accuracy": 105,
+        "evasion": 115,
+        "movement": 5
+      },
+      "abilities": [
+        "quickStrike"
+      ],
+      "defaultAbilityId": "quickStrike",
+      "aiProfile": "aggressive",
+      "assets": {
+        "portrait": "swiftbladePortrait",
+        "battlefield": "swiftbladeBattle"
+      }
+    },
+    "testChanneler": {
+      "name": "Test Channeler",
+      "classId": "channeler",
+      "glyph": "C",
+      "description": "Fixture unit that exercises every Phase 3 effect type.",
+      "tags": [
+        "caster"
+      ],
+      "baseStats": {
+        "maxHp": 70,
+        "attack": 40,
+        "magic": 90,
+        "defense": 30,
+        "resistance": 40,
+        "accuracy": 95,
+        "evasion": 10,
+        "speed": 120,
+        "movement": 4
+      },
+      "resources": {
+        "mana": {
+          "max": 100,
+          "startsAt": 100
+        }
+      },
+      "abilities": [
+        "forcePush",
+        "shieldAlly",
+        "blink",
+        "hasteAlly",
+        "cleanseAlly",
+        "raiseTestSkeleton",
+        "execution",
+        "tripleShot",
+        "emberField",
+        "guardAura"
+      ],
+      "defaultAbilityId": "forcePush",
+      "aiProfile": "cautious",
+      "assets": {
+        "portrait": "venomAdeptPortrait",
+        "battlefield": "venomAdeptBattle"
+      }
+    },
+    "testSkeleton": {
+      "name": "Test Skeleton",
+      "classId": "construct",
+      "glyph": "k",
+      "description": "Fragile summoned construct used to prove the summon framework.",
+      "tags": [
+        "construct",
+        "summoned"
+      ],
+      "baseStats": {
+        "maxHp": 30,
+        "attack": 40,
+        "magic": 10,
+        "defense": 20,
+        "resistance": 10,
+        "accuracy": 85,
+        "evasion": 5,
+        "speed": 90,
+        "movement": 3
+      },
+      "abilities": [
+        "quickStrike"
+      ],
+      "defaultAbilityId": "quickStrike",
+      "aiProfile": "aggressive",
+      "assets": {
+        "portrait": "swiftbladePortrait",
+        "battlefield": "swiftbladeBattle"
+      }
+    },
+    "venomAdept": {
+      "name": "Venom Adept",
+      "classId": "adept",
+      "glyph": "V",
+      "description": "Ranged attrition: poison over time and timeline manipulation.",
+      "baseStats": {
+        "maxHp": 90,
+        "attack": 40,
+        "magic": 55,
+        "defense": 30,
+        "resistance": 40,
+        "speed": 105,
+        "accuracy": 105,
+        "evasion": 100,
+        "movement": 4
+      },
+      "abilities": [
+        "poisonDart",
+        "delayStrike"
+      ],
+      "defaultAbilityId": "poisonDart",
+      "aiProfile": "cautious",
+      "assets": {
+        "portrait": "venomAdeptPortrait",
+        "battlefield": "venomAdeptBattle"
+      }
+    }
+  }
+}

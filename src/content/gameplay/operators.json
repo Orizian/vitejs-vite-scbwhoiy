@@ -1,0 +1,50 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "operators",
+  "description": "Playable pilots. An operator owns identity and progression and points at a chassis; it does not own the chassis's stats.",
+  "entries": {
+    "commander": {
+      "name": "Commander Vale",
+      "ref": "vale",
+      "glyph": "🧑‍🚀",
+      "role": "Decorated lance commander learning to lead without the state.",
+      "chassis": "assaultMech",
+      "perkChoices": [
+        "valeBulwark",
+        "valeVanguard"
+      ]
+    },
+    "kell": {
+      "name": "Kell",
+      "glyph": "🧔‍♂️",
+      "role": "Reserved marksman who notices what official reports omit.",
+      "chassis": "sniperMech",
+      "perkChoices": [
+        "kellDeadeye",
+        "kellPrepared"
+      ]
+    },
+    "nyx": {
+      "name": "Nyx",
+      "glyph": "🥷",
+      "role": "Government scout imprisoned for refusing the Hollowmere cleanup order.",
+      "chassis": "stealthMech",
+      "recruit": true,
+      "perkChoices": [
+        "nyxGhost",
+        "nyxFinisher"
+      ]
+    },
+    "reyes": {
+      "name": "Reyes",
+      "glyph": "👩‍🚀",
+      "role": "Field engineer who measures every order against the people it hurts.",
+      "chassis": "supportMech",
+      "perkChoices": [
+        "reyesFieldPatch",
+        "reyesReinforcement"
+      ]
+    }
+  }
+}

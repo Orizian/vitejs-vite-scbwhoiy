@@ -1,0 +1,413 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "equipment",
+  "description": "Installed technology: weapons, armour, utility and core systems. Weapons are equipment with a weapon slot rather than a separate registry.",
+  "entries": {
+    "arcWelderRig": {
+      "name": "Arc Welder Rig",
+      "slot": "primaryWeapon",
+      "description": "Dual-purpose welding arc.",
+      "compatibleClasses": [
+        "support"
+      ],
+      "tags": [
+        "energy",
+        "utility"
+      ],
+      "modifiers": [
+        {
+          "stat": "magic",
+          "mode": "flat",
+          "value": 10
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "autogun": {
+      "name": "Autogun",
+      "slot": "primaryWeapon",
+      "description": "Rapid-fire sidearm tuned for hit-and-run work.",
+      "compatibleClasses": [
+        "stealth"
+      ],
+      "tags": [
+        "ballistic",
+        "rapid"
+      ],
+      "modifiers": [
+        {
+          "stat": "accuracy",
+          "mode": "flat",
+          "value": 4
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "breacherShotgun": {
+      "name": "Breacher Shotgun",
+      "slot": "primaryWeapon",
+      "description": "Heavier barrel: more punch, slower frame.",
+      "compatibleClasses": [
+        "assault"
+      ],
+      "tags": [
+        "ballistic",
+        "heavy"
+      ],
+      "modifiers": [
+        {
+          "stat": "attack",
+          "mode": "flat",
+          "value": 30
+        },
+        {
+          "stat": "speed",
+          "mode": "flat",
+          "value": -10
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "bulwarkCore": {
+      "name": "Bulwark Core",
+      "slot": "coreSystem",
+      "description": "Structural reactor that thickens the frame.",
+      "compatibleClasses": [
+        "assault",
+        "support"
+      ],
+      "tags": [
+        "core",
+        "armor"
+      ],
+      "modifiers": [
+        {
+          "stat": "maxHp",
+          "mode": "flat",
+          "value": 30
+        },
+        {
+          "stat": "speed",
+          "mode": "flat",
+          "value": -10
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "closeShotgun": {
+      "name": "CQ-9 Shotgun",
+      "slot": "primaryWeapon",
+      "description": "Standard close-quarters shotgun.",
+      "compatibleClasses": [
+        "assault"
+      ],
+      "tags": [
+        "ballistic",
+        "shortRange"
+      ],
+      "modifiers": [
+        {
+          "stat": "attack",
+          "mode": "flat",
+          "value": 10
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "jumpJets": {
+      "name": "Jump Jets",
+      "slot": "utilitySystem",
+      "description": "Short-burn thrusters for crossing broken ground.",
+      "compatibleClasses": [],
+      "tags": [
+        "mobility"
+      ],
+      "modifiers": [
+        {
+          "stat": "movement",
+          "mode": "flat",
+          "value": 1
+        },
+        {
+          "stat": "maxClimb",
+          "mode": "flat",
+          "value": 1
+        },
+        {
+          "stat": "maxDrop",
+          "mode": "flat",
+          "value": 2
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "lightPlating": {
+      "name": "Light Plating",
+      "slot": "armor",
+      "description": "Minimal plating that keeps the frame nimble.",
+      "compatibleClasses": [
+        "stealth",
+        "sniper"
+      ],
+      "tags": [
+        "armor",
+        "light"
+      ],
+      "modifiers": [
+        {
+          "stat": "evasion",
+          "mode": "flat",
+          "value": 10
+        },
+        {
+          "stat": "defense",
+          "mode": "flat",
+          "value": 4
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "longRifle": {
+      "name": "Long Rifle",
+      "slot": "primaryWeapon",
+      "description": "Standard long-barrelled rifle.",
+      "compatibleClasses": [
+        "sniper"
+      ],
+      "tags": [
+        "ballistic",
+        "longRange"
+      ],
+      "modifiers": [
+        {
+          "stat": "accuracy",
+          "mode": "flat",
+          "value": 4
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "overclockCore": {
+      "name": "Overclock Core",
+      "slot": "coreSystem",
+      "description": "Runs hot: faster cycling, thinner structure.",
+      "compatibleClasses": [],
+      "tags": [
+        "core",
+        "risky"
+      ],
+      "modifiers": [
+        {
+          "stat": "speed",
+          "mode": "flat",
+          "value": 25
+        },
+        {
+          "stat": "maxHp",
+          "mode": "flat",
+          "value": -15
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "plateArmor": {
+      "name": "Plate Armor",
+      "slot": "armor",
+      "description": "Standard composite plating.",
+      "compatibleClasses": [],
+      "tags": [
+        "armor"
+      ],
+      "modifiers": [
+        {
+          "stat": "defense",
+          "mode": "flat",
+          "value": 12
+        },
+        {
+          "stat": "maxHp",
+          "mode": "flat",
+          "value": 15
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "pulseWelder": {
+      "name": "Pulse Welder",
+      "slot": "primaryWeapon",
+      "description": "Higher output arc with an integrated plating routine.",
+      "compatibleClasses": [
+        "support"
+      ],
+      "tags": [
+        "energy",
+        "utility"
+      ],
+      "modifiers": [
+        {
+          "stat": "magic",
+          "mode": "flat",
+          "value": 25
+        }
+      ],
+      "grantsAbilities": [
+        "reinforce"
+      ]
+    },
+    "railBarrel": {
+      "name": "Rail Barrel",
+      "slot": "primaryWeapon",
+      "description": "Experimental barrel: heavier hits, slower cycling.",
+      "compatibleClasses": [
+        "sniper"
+      ],
+      "tags": [
+        "energy",
+        "longRange"
+      ],
+      "modifiers": [
+        {
+          "stat": "attack",
+          "mode": "flat",
+          "value": 25
+        },
+        {
+          "stat": "speed",
+          "mode": "flat",
+          "value": -15
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "reactiveArmor": {
+      "name": "Reactive Armor",
+      "slot": "armor",
+      "description": "Explosive-reactive plating for heavier frames.",
+      "compatibleClasses": [
+        "assault",
+        "support"
+      ],
+      "tags": [
+        "armor",
+        "heavy"
+      ],
+      "modifiers": [
+        {
+          "stat": "defense",
+          "mode": "flat",
+          "value": 25
+        },
+        {
+          "stat": "movement",
+          "mode": "flat",
+          "value": -1
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "repairKit": {
+      "name": "Field Repair Kit",
+      "slot": "utilitySystem",
+      "description": "Grants any chassis a basic field repair routine.",
+      "compatibleClasses": [],
+      "tags": [
+        "repair"
+      ],
+      "modifiers": [],
+      "grantsAbilities": [
+        "fieldRepair"
+      ]
+    },
+    "signalScanner": {
+      "name": "Signal Scanner",
+      "slot": "utilitySystem",
+      "description": "Passive EM listener. Terrain does not stop it, but a bearing is not a firing solution — it produces a contact to investigate, never a target.",
+      "compatibleClasses": [],
+      "tags": [
+        "sensor"
+      ],
+      "modifiers": [],
+      "perception": {
+        "sensors": {
+          "signal": {
+            "range": 14
+          }
+        }
+      },
+      "grantsAbilities": []
+    },
+    "silencedSmg": {
+      "name": "Silenced SMG",
+      "slot": "primaryWeapon",
+      "description": "Quieter and more evasive, at the cost of raw damage.",
+      "compatibleClasses": [
+        "stealth"
+      ],
+      "tags": [
+        "ballistic",
+        "stealth"
+      ],
+      "modifiers": [
+        {
+          "stat": "attack",
+          "mode": "flat",
+          "value": -8
+        },
+        {
+          "stat": "evasion",
+          "mode": "flat",
+          "value": 12
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "standardCore": {
+      "name": "Standard Core",
+      "slot": "coreSystem",
+      "description": "Reliable reactor with no quirks.",
+      "compatibleClasses": [],
+      "tags": [
+        "core"
+      ],
+      "modifiers": [],
+      "grantsAbilities": []
+    },
+    "targetingSuite": {
+      "name": "Targeting Suite",
+      "slot": "utilitySystem",
+      "description": "Sensor package that sharpens every shot.",
+      "compatibleClasses": [],
+      "tags": [
+        "sensor"
+      ],
+      "modifiers": [
+        {
+          "stat": "accuracy",
+          "mode": "flat",
+          "value": 6
+        }
+      ],
+      "grantsAbilities": []
+    },
+    "thermalOptics": {
+      "name": "Thermal Optics",
+      "slot": "utilitySystem",
+      "description": "Reads heat instead of light. Sees a body through smoke and through a cloak field, but no better through a wall than anyone else.",
+      "compatibleClasses": [],
+      "tags": [
+        "sensor",
+        "counterStealth"
+      ],
+      "modifiers": [],
+      "perception": {
+        "sensors": {
+          "thermal": {
+            "range": 8
+          }
+        }
+      },
+      "grantsAbilities": []
+    }
+  }
+}

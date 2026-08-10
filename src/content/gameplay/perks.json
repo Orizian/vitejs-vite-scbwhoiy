@@ -1,0 +1,131 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "perks",
+  "description": "Per-operator progression choices, applied as stat modifiers.",
+  "entries": {
+    "kellDeadeye": {
+      "name": "Deadeye",
+      "description": "+10 accuracy and +8 attack.",
+      "modifiers": [
+        {
+          "stat": "accuracy",
+          "mode": "flat",
+          "value": 10
+        },
+        {
+          "stat": "attack",
+          "mode": "flat",
+          "value": 8
+        }
+      ]
+    },
+    "kellPrepared": {
+      "name": "Prepared Position",
+      "description": "+10 defense and +10 evasion.",
+      "modifiers": [
+        {
+          "stat": "defense",
+          "mode": "flat",
+          "value": 10
+        },
+        {
+          "stat": "evasion",
+          "mode": "flat",
+          "value": 10
+        }
+      ]
+    },
+    "nyxFinisher": {
+      "name": "Close the Distance",
+      "description": "+12 attack and +5 speed.",
+      "modifiers": [
+        {
+          "stat": "attack",
+          "mode": "flat",
+          "value": 12
+        },
+        {
+          "stat": "speed",
+          "mode": "flat",
+          "value": 5
+        }
+      ]
+    },
+    "nyxGhost": {
+      "name": "Ghost Route",
+      "description": "+1 movement and +8 evasion.",
+      "modifiers": [
+        {
+          "stat": "movement",
+          "mode": "flat",
+          "value": 1
+        },
+        {
+          "stat": "evasion",
+          "mode": "flat",
+          "value": 8
+        }
+      ]
+    },
+    "reyesFieldPatch": {
+      "name": "Field Patch Doctrine",
+      "description": "+12 magic for stronger repairs.",
+      "modifiers": [
+        {
+          "stat": "magic",
+          "mode": "flat",
+          "value": 12
+        }
+      ]
+    },
+    "reyesReinforcement": {
+      "name": "Reinforced Frame",
+      "description": "+12 defense and +10 max HP.",
+      "modifiers": [
+        {
+          "stat": "defense",
+          "mode": "flat",
+          "value": 12
+        },
+        {
+          "stat": "maxHp",
+          "mode": "flat",
+          "value": 10
+        }
+      ]
+    },
+    "valeBulwark": {
+      "name": "Hold the Line",
+      "description": "+15 max HP and +5 defense.",
+      "modifiers": [
+        {
+          "stat": "maxHp",
+          "mode": "flat",
+          "value": 15
+        },
+        {
+          "stat": "defense",
+          "mode": "flat",
+          "value": 5
+        }
+      ]
+    },
+    "valeVanguard": {
+      "name": "Lead From the Front",
+      "description": "+10 attack and +5 accuracy.",
+      "modifiers": [
+        {
+          "stat": "attack",
+          "mode": "flat",
+          "value": 10
+        },
+        {
+          "stat": "accuracy",
+          "mode": "flat",
+          "value": 5
+        }
+      ]
+    }
+  }
+}

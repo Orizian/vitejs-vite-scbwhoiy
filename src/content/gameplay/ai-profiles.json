@@ -1,0 +1,32 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "aiProfiles",
+  "description": "Weight vectors the scoring AI uses. Not behaviour trees — the behaviour is engine code; these are its priorities.",
+  "entries": {
+    "aggressive": {
+      "expectedDamage": 1,
+      "lethalBonus": 50,
+      "healing": 0.3,
+      "selfDanger": -0.5,
+      "targetProximity": 2,
+      "timelineDelay": 0.1
+    },
+    "cautious": {
+      "expectedDamage": 0.7,
+      "lethalBonus": 30,
+      "healing": 1,
+      "selfDanger": -2,
+      "targetProximity": 0.5,
+      "timelineDelay": 0.1
+    },
+    "support": {
+      "expectedDamage": 0.4,
+      "lethalBonus": 20,
+      "healing": 1.5,
+      "selfDanger": -1.2,
+      "targetProximity": 0.5,
+      "timelineDelay": 0.2
+    }
+  }
+}

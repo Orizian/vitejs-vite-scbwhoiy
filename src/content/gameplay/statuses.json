@@ -1,0 +1,240 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "statuses",
+  "description": "Timed conditions. The parameters are authored; several flags select engine behaviour rather than defining it.",
+  "entries": {
+    "braced": {
+      "name": "Braced",
+      "category": "positive",
+      "glyph": "|",
+      "tags": [
+        "stance",
+        "mechanical"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 2
+      },
+      "modifiers": {
+        "accuracyFlat": 25,
+        "attackFlat": 25
+      },
+      "triggers": [],
+      "assets": {
+        "icon": "iconHoldPosition"
+      },
+      "removedOnMovement": true
+    },
+    "cloaked": {
+      "name": "Cloaked",
+      "category": "positive",
+      "glyph": "~",
+      "tags": [
+        "stealth",
+        "mechanical"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 2
+      },
+      "modifiers": {},
+      "triggers": [],
+      "untargetable": true,
+      "hidden": true,
+      "removedOnHostileAction": true,
+      "perception": {
+        "emissions": {
+          "optical": 0
+        }
+      },
+      "assets": {
+        "icon": "iconHaste"
+      }
+    },
+    "haste": {
+      "name": "Haste",
+      "category": "positive",
+      "glyph": "»",
+      "tags": [
+        "speed"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 3
+      },
+      "modifiers": {
+        "speedMultiplier": 1.3
+      },
+      "assets": {
+        "icon": "iconHaste"
+      }
+    },
+    "marked": {
+      "name": "Marked",
+      "category": "negative",
+      "glyph": "+",
+      "tags": [
+        "targeting",
+        "mechanical"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 3
+      },
+      "modifiers": {
+        "evasionFlat": -25,
+        "defenseFlat": -15
+      },
+      "triggers": [],
+      "assets": {
+        "icon": "iconDelayStrike"
+      }
+    },
+    "overwatching": {
+      "name": "Overwatch Stance",
+      "category": "positive",
+      "glyph": "o",
+      "tags": [
+        "stance",
+        "mechanical"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 2
+      },
+      "modifiers": {
+        "accuracyFlat": 15,
+        "evasionFlat": 10
+      },
+      "triggers": [],
+      "assets": {
+        "icon": "iconQuickStrike"
+      },
+      "removedOnMovement": true
+    },
+    "poison": {
+      "name": "Poison",
+      "category": "negative",
+      "glyph": "☠",
+      "tags": [
+        "damageOverTime"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 3
+      },
+      "triggers": [
+        {
+          "event": "activationStart",
+          "effects": [
+            {
+              "type": "damage",
+              "formula": "percentMaxHp",
+              "power": 6
+            }
+          ]
+        }
+      ],
+      "assets": {
+        "icon": "iconPoison"
+      }
+    },
+    "reinforced": {
+      "name": "Reinforced",
+      "category": "positive",
+      "glyph": "#",
+      "tags": [
+        "armor",
+        "mechanical"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 3
+      },
+      "modifiers": {
+        "defenseFlat": 25,
+        "resistanceFlat": 15
+      },
+      "triggers": [],
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "slow": {
+      "name": "Slow",
+      "category": "negative",
+      "glyph": "«",
+      "tags": [
+        "speed"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 3
+      },
+      "modifiers": {
+        "speedMultiplier": 0.7
+      },
+      "assets": {
+        "icon": "iconSlow"
+      }
+    },
+    "stun": {
+      "name": "Stun",
+      "category": "negative",
+      "glyph": "✱",
+      "tags": [
+        "control"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 1
+      },
+      "preventsAction": true,
+      "assets": {
+        "icon": "iconStun"
+      }
+    },
+    "surefooted": {
+      "name": "Surefooted",
+      "category": "positive",
+      "glyph": "^",
+      "tags": [
+        "traversal"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 2
+      },
+      "modifiers": {
+        "maxClimbFlat": 2,
+        "maxDropFlat": 2
+      },
+      "triggers": [],
+      "assets": {
+        "icon": "iconHaste"
+      }
+    },
+    "systemsFault": {
+      "name": "Systems Fault",
+      "category": "negative",
+      "glyph": "!",
+      "tags": [
+        "mechanical",
+        "debuff"
+      ],
+      "duration": {
+        "type": "targetActivations",
+        "amount": 3
+      },
+      "modifiers": {
+        "accuracyFlat": -20,
+        "speedMultiplier": 0.85
+      },
+      "triggers": [],
+      "assets": {
+        "icon": "iconSlow"
+      }
+    }
+  }
+}

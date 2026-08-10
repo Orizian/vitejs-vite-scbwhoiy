@@ -1,0 +1,1471 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "abilities",
+  "description": "What a unit can do. Targeting, timing, costs, conditions and the ordered effect list the engine resolves.",
+  "entries": {
+    "arcWelder": {
+      "name": "Arc Welder",
+      "description": "Burns an enemy for 95 (and may cause a systems fault) or repairs an ally for 70.",
+      "activation": "manual",
+      "targeting": {
+        "type": "any",
+        "rangeMin": 1,
+        "rangeMax": 2,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        },
+        "filters": [
+          {
+            "type": "excludeSource"
+          }
+        ]
+      },
+      "timing": {
+        "recovery": 650,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "conditionalEffect",
+          "conditions": {
+            "mode": "all",
+            "entries": [
+              {
+                "type": "targetIsEnemy"
+              }
+            ]
+          },
+          "ifTrue": [
+            {
+              "type": "damage",
+              "formula": "magical",
+              "power": 95,
+              "canMiss": false
+            },
+            {
+              "type": "applyStatus",
+              "statusId": "systemsFault",
+              "chance": 0.5
+            }
+          ],
+          "ifFalse": [
+            {
+              "type": "heal",
+              "formula": "magical",
+              "power": 70
+            }
+          ]
+        }
+      ],
+      "ui": {
+        "glyph": "⚡",
+        "category": "attack",
+        "basic": true,
+        "order": 1,
+        "tags": [
+          "dualPurpose"
+        ]
+      },
+      "assets": {
+        "icon": "iconPoisonDart"
+      }
+    },
+    "basicHeal": {
+      "name": "Basic Heal",
+      "description": "Restores HP to one ally; recharges after one activation.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 900,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "heal",
+          "formula": "magical",
+          "power": 90
+        }
+      ],
+      "ui": {
+        "category": "heal",
+        "basic": false,
+        "order": 1
+      },
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "bladeStrike": {
+      "name": "Blade Strike",
+      "description": "Melee strike. Destroying the target refunds this activation's movement once.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 1,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 600,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "physical",
+          "power": 130,
+          "canMiss": true
+        },
+        {
+          "type": "refreshActivationResource",
+          "resource": "move",
+          "maxPerActivation": 1,
+          "resolveAfterEffects": true,
+          "conditions": {
+            "mode": "all",
+            "entries": [
+              {
+                "type": "targetIsDefeated"
+              }
+            ]
+          }
+        }
+      ],
+      "ui": {
+        "glyph": "🗡",
+        "category": "attack",
+        "basic": false,
+        "order": 2,
+        "tags": [
+          "melee"
+        ]
+      },
+      "assets": {
+        "icon": "iconHeavyBlow"
+      }
+    },
+    "blink": {
+      "name": "Blink",
+      "description": "Teleports the caster to an empty tile.",
+      "activation": "manual",
+      "targeting": {
+        "type": "emptyTile",
+        "rangeMin": 1,
+        "rangeMax": 4,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 400,
+        "cooldown": 1
+      },
+      "costs": {
+        "mana": 10
+      },
+      "effects": [
+        {
+          "type": "teleport",
+          "applyTo": "source"
+        }
+      ],
+      "ui": {
+        "category": "movement",
+        "basic": false,
+        "order": 5,
+        "tags": [
+          "teleport"
+        ]
+      },
+      "assets": {
+        "icon": "iconHoldPosition"
+      }
+    },
+    "brace": {
+      "name": "Brace",
+      "description": "Deploys the bipod: +25 accuracy and attack. Lost the moment this mech moves.",
+      "activation": "manual",
+      "targeting": {
+        "type": "self",
+        "rangeMin": 0,
+        "rangeMax": 0,
+        "requiresLineOfSight": false,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 350,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "applyStatus",
+          "statusId": "braced",
+          "chance": 1,
+          "applyTo": "source"
+        }
+      ],
+      "ui": {
+        "glyph": "🦿",
+        "category": "support",
+        "basic": false,
+        "order": 2,
+        "tags": [
+          "stance"
+        ]
+      },
+      "assets": {
+        "icon": "iconHoldPosition"
+      }
+    },
+    "burstFire": {
+      "name": "Burst Fire",
+      "description": "Three separate rounds at up to four tiles. Each round rolls to hit.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 4,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 650,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "repeatEffect",
+          "count": 3,
+          "effects": [
+            {
+              "type": "damage",
+              "formula": "physical",
+              "power": 42,
+              "canMiss": true
+            }
+          ]
+        }
+      ],
+      "ui": {
+        "glyph": "🔥",
+        "category": "attack",
+        "basic": true,
+        "order": 1,
+        "tags": [
+          "multiHit"
+        ]
+      },
+      "assets": {
+        "icon": "iconQuickStrike"
+      }
+    },
+    "cleanseAlly": {
+      "name": "Cleanse",
+      "description": "Removes negative statuses from an ally.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 500,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "cleanse",
+          "category": "negative"
+        }
+      ],
+      "ui": {
+        "category": "support",
+        "basic": false,
+        "order": 7,
+        "tags": [
+          "cleanse"
+        ]
+      },
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "cloak": {
+      "name": "Cloak",
+      "description": "Conceals this mech: enemies cannot target or see it until it attacks or the field expires.",
+      "activation": "manual",
+      "targeting": {
+        "type": "self",
+        "rangeMin": 0,
+        "rangeMax": 0,
+        "requiresLineOfSight": false,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 450,
+        "cooldown": 2
+      },
+      "effects": [
+        {
+          "type": "applyStatus",
+          "statusId": "cloaked",
+          "chance": 1,
+          "applyTo": "source"
+        }
+      ],
+      "ui": {
+        "glyph": "👻",
+        "category": "support",
+        "basic": false,
+        "order": 3,
+        "tags": [
+          "stealth"
+        ]
+      },
+      "assets": {
+        "icon": "iconHaste"
+      }
+    },
+    "coverAlly": {
+      "name": "Cover Ally",
+      "description": "Shields a nearby ally for 35 and reinforces its plating for three activations.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 1,
+        "rangeMax": 2,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        },
+        "filters": [
+          {
+            "type": "excludeSource"
+          }
+        ]
+      },
+      "timing": {
+        "recovery": 600,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "shield",
+          "amount": 35,
+          "duration": {
+            "type": "targetActivations",
+            "amount": 3
+          }
+        },
+        {
+          "type": "applyStatus",
+          "statusId": "reinforced",
+          "chance": 1
+        }
+      ],
+      "ui": {
+        "glyph": "🛡",
+        "category": "support",
+        "basic": false,
+        "order": 2,
+        "tags": [
+          "protect"
+        ]
+      },
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "delayStrike": {
+      "name": "Delay Strike",
+      "description": "Weak hit that pushes the target back on the timeline.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 2,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 800
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "physical",
+          "power": 40,
+          "canMiss": true
+        },
+        {
+          "type": "modifyTimeline",
+          "delay": 450
+        }
+      ],
+      "ui": {
+        "category": "control",
+        "basic": false,
+        "order": 2
+      },
+      "assets": {
+        "icon": "iconDelayStrike"
+      }
+    },
+    "droneWeld": {
+      "name": "Drone Weld",
+      "description": "Small repair pulse for 55 to a nearby ally.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 2,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 600,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "heal",
+          "formula": "magical",
+          "power": 55
+        }
+      ],
+      "ui": {
+        "glyph": "🔧",
+        "category": "heal",
+        "basic": true,
+        "order": 1,
+        "tags": [
+          "repair"
+        ]
+      },
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "emberField": {
+      "name": "Ember Field",
+      "description": "Sets a tile alight for a few activations.",
+      "activation": "manual",
+      "targeting": {
+        "type": "emptyTile",
+        "rangeMin": 1,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 600,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "createTerrain",
+          "terrainId": "burningGround",
+          "duration": {
+            "type": "activations",
+            "amount": 4
+          }
+        }
+      ],
+      "ui": {
+        "category": "control",
+        "basic": false,
+        "order": 11,
+        "tags": [
+          "terrain"
+        ]
+      },
+      "assets": {
+        "icon": "iconPoisonDart"
+      }
+    },
+    "execution": {
+      "name": "Execution",
+      "description": "Hits harder against wounded targets.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 1,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 750,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "conditionalEffect",
+          "conditions": {
+            "mode": "all",
+            "entries": [
+              {
+                "type": "targetHpBelowPercent",
+                "value": 50
+              }
+            ]
+          },
+          "ifTrue": [
+            {
+              "type": "damage",
+              "formula": "physical",
+              "power": 150,
+              "canMiss": true
+            }
+          ],
+          "ifFalse": [
+            {
+              "type": "damage",
+              "formula": "physical",
+              "power": 90,
+              "canMiss": true
+            }
+          ]
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": false,
+        "order": 9,
+        "tags": [
+          "finisher"
+        ]
+      },
+      "assets": {
+        "icon": "iconHeavyBlow"
+      }
+    },
+    "fieldRepair": {
+      "name": "Field Repair",
+      "description": "Repairs an ally for 110 and clears mechanical faults.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 700,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "heal",
+          "formula": "magical",
+          "power": 110
+        },
+        {
+          "type": "cleanse",
+          "tag": "mechanical",
+          "category": "negative"
+        }
+      ],
+      "ui": {
+        "glyph": "🔩",
+        "category": "heal",
+        "basic": false,
+        "order": 2,
+        "tags": [
+          "repair"
+        ]
+      },
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "forcePush": {
+      "name": "Force Push",
+      "description": "Damages a target and shoves it away.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 2,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 650,
+        "cooldown": 0
+      },
+      "costs": {
+        "mana": 15
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "magical",
+          "power": 60,
+          "canMiss": false
+        },
+        {
+          "type": "push",
+          "distance": 2,
+          "collision": "stop"
+        }
+      ],
+      "ui": {
+        "category": "control",
+        "basic": false,
+        "order": 4,
+        "tags": [
+          "forcedMovement"
+        ]
+      },
+      "assets": {
+        "icon": "iconDelayStrike"
+      }
+    },
+    "guardAura": {
+      "name": "Guard Aura",
+      "description": "Test ability: shields every ally around the caster.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 0,
+        "requiresLineOfSight": false,
+        "area": {
+          "shape": "selfAura",
+          "radius": 1
+        },
+        "filters": [
+          {
+            "type": "hpBelowPercent",
+            "value": 100
+          }
+        ]
+      },
+      "timing": {
+        "recovery": 700,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "shield",
+          "amount": 15,
+          "duration": {
+            "type": "targetActivations",
+            "amount": 2
+          }
+        }
+      ],
+      "ui": {
+        "category": "support",
+        "basic": false,
+        "order": 14,
+        "tags": [
+          "shape"
+        ]
+      },
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "handCannon": {
+      "name": "Hand Cannon",
+      "description": "Sidearm. Moderate damage at short to medium range with no setup required.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 650,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "physical",
+          "power": 85,
+          "canMiss": true
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": true,
+        "order": 1,
+        "tags": [
+          "sidearm"
+        ],
+        "glyph": "🔫"
+      },
+      "assets": {
+        "icon": "iconQuickStrike"
+      }
+    },
+    "hasteAlly": {
+      "name": "Haste",
+      "description": "Raises an ally's Speed for a few activations.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 550,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "modifyStat",
+          "stat": "speed",
+          "mode": "multiplier",
+          "value": 1.3,
+          "duration": {
+            "type": "targetActivations",
+            "amount": 3
+          }
+        }
+      ],
+      "ui": {
+        "category": "support",
+        "basic": false,
+        "order": 6,
+        "tags": [
+          "buff"
+        ]
+      },
+      "assets": {
+        "icon": "iconHaste"
+      }
+    },
+    "heavyBlow": {
+      "name": "Heavy Blow",
+      "description": "Slow melee swing that can end a fragile unit outright.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 1,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 1100
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "physical",
+          "power": 130,
+          "canMiss": true
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": false,
+        "order": 2
+      },
+      "assets": {
+        "icon": "iconHeavyBlow"
+      }
+    },
+    "holdPosition": {
+      "name": "Wait",
+      "description": "Data-driven equivalent of the wait command.",
+      "activation": "manual",
+      "targeting": {
+        "type": "self",
+        "rangeMin": 0,
+        "rangeMax": 0,
+        "requiresLineOfSight": false,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 500
+      },
+      "effects": [],
+      "ui": {
+        "category": "support",
+        "basic": false,
+        "order": 9
+      },
+      "assets": {
+        "icon": "iconHoldPosition"
+      }
+    },
+    "lineBlast": {
+      "name": "Line Blast",
+      "description": "Test ability: strikes a line away from the caster.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "line",
+          "length": 2
+        }
+      },
+      "timing": {
+        "recovery": 700,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "magical",
+          "power": 60,
+          "canMiss": false
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": false,
+        "order": 12,
+        "tags": [
+          "shape"
+        ]
+      },
+      "assets": {
+        "icon": "iconPoisonDart"
+      }
+    },
+    "overwatch": {
+      "name": "Overwatch",
+      "description": "Holds a firing lane: +15 accuracy and +10 evasion while this mech stays still.",
+      "activation": "manual",
+      "targeting": {
+        "type": "self",
+        "rangeMin": 0,
+        "rangeMax": 0,
+        "requiresLineOfSight": false,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 400,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "applyStatus",
+          "statusId": "overwatching",
+          "chance": 1,
+          "applyTo": "source"
+        }
+      ],
+      "ui": {
+        "glyph": "👁",
+        "category": "support",
+        "basic": false,
+        "order": 4,
+        "tags": [
+          "stance"
+        ]
+      },
+      "assets": {
+        "icon": "iconQuickStrike"
+      }
+    },
+    "poisonDart": {
+      "name": "Poison Dart",
+      "description": "Ranged magic dart that usually leaves Poison behind.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 4,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 850
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "magical",
+          "power": 45,
+          "canMiss": true
+        },
+        {
+          "type": "applyStatus",
+          "statusId": "poison",
+          "chance": 0.9
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": true,
+        "order": 1
+      },
+      "assets": {
+        "icon": "iconPoisonDart"
+      }
+    },
+    "precisionShot": {
+      "name": "Precision Shot",
+      "description": "Braced long-range shot. Requires Brace, consumes it, and needs two activations to cycle.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 2,
+        "rangeMax": 6,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 1000,
+        "cooldown": 2
+      },
+      "conditions": [
+        {
+          "type": "sourceHasStatus",
+          "statusId": "braced"
+        }
+      ],
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "physical",
+          "power": 145,
+          "canMiss": true,
+          "accuracyBonus": 10
+        },
+        {
+          "type": "removeStatus",
+          "statusId": "braced",
+          "applyTo": "source"
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": false,
+        "order": 2,
+        "tags": [
+          "sniper"
+        ],
+        "glyph": "🎯"
+      },
+      "assets": {
+        "icon": "iconPoisonDart"
+      },
+      "requirementText": "Requires Brace."
+    },
+    "quickStrike": {
+      "name": "Quick Strike",
+      "description": "Cheap melee jab with short recovery.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 1,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 700
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "physical",
+          "power": 75,
+          "canMiss": true
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": true,
+        "order": 1
+      },
+      "assets": {
+        "icon": "iconQuickStrike"
+      }
+    },
+    "raiseTestSkeleton": {
+      "name": "Raise Test Skeleton",
+      "description": "Summons a fragile test construct on an empty tile.",
+      "activation": "manual",
+      "targeting": {
+        "type": "emptyTile",
+        "rangeMin": 1,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 800,
+        "cooldown": 2
+      },
+      "costs": {
+        "mana": 30
+      },
+      "effects": [
+        {
+          "type": "spawnUnit",
+          "definitionId": "testSkeleton",
+          "team": "sourceTeam",
+          "placement": {
+            "type": "targetTile"
+          },
+          "duration": 6
+        }
+      ],
+      "ui": {
+        "category": "summon",
+        "basic": false,
+        "order": 8,
+        "tags": [
+          "summon"
+        ]
+      },
+      "assets": {
+        "icon": "iconHoldPosition"
+      }
+    },
+    "reinforce": {
+      "name": "Reinforce",
+      "description": "Reinforces an ally: +25 defense for three activations plus a 40 point shield.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 600,
+        "cooldown": 2
+      },
+      "effects": [
+        {
+          "type": "applyStatus",
+          "statusId": "reinforced",
+          "chance": 1
+        },
+        {
+          "type": "shield",
+          "amount": 40,
+          "duration": {
+            "type": "targetActivations",
+            "amount": 3
+          }
+        }
+      ],
+      "ui": {
+        "glyph": "🧱",
+        "category": "support",
+        "basic": false,
+        "order": 3,
+        "tags": [
+          "armor"
+        ]
+      },
+      "assets": {
+        "icon": "iconHoldPosition"
+      }
+    },
+    "repairDrone": {
+      "name": "Repair Drone",
+      "description": "Deploys a repair drone on an empty tile for six activations.",
+      "activation": "manual",
+      "targeting": {
+        "type": "emptyTile",
+        "rangeMin": 1,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 800,
+        "cooldown": 3
+      },
+      "effects": [
+        {
+          "type": "spawnUnit",
+          "definitionId": "repairDroneMech",
+          "team": "sourceTeam",
+          "placement": {
+            "type": "targetTile"
+          },
+          "duration": 6
+        }
+      ],
+      "ui": {
+        "glyph": "🛰",
+        "category": "summon",
+        "basic": false,
+        "order": 4,
+        "tags": [
+          "summon"
+        ]
+      },
+      "assets": {
+        "icon": "iconHoldPosition"
+      }
+    },
+    "ringNova": {
+      "name": "Ring Nova",
+      "description": "Test ability: damages a ring around the target tile.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "ring",
+          "radius": 2,
+          "innerRadius": 2
+        }
+      },
+      "timing": {
+        "recovery": 700,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "magical",
+          "power": 50,
+          "canMiss": false
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": false,
+        "order": 13,
+        "tags": [
+          "shape"
+        ]
+      },
+      "assets": {
+        "icon": "iconPoisonDart"
+      }
+    },
+    "scatterShot": {
+      "name": "Scatter Shot",
+      "description": "Close-range shotgun blast. Reliable damage inside two tiles.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 2,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 700,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "damage",
+          "formula": "physical",
+          "power": 105,
+          "canMiss": true
+        }
+      ],
+      "ui": {
+        "glyph": "💥",
+        "category": "attack",
+        "basic": true,
+        "order": 1,
+        "tags": [
+          "shotgun"
+        ]
+      },
+      "assets": {
+        "icon": "iconHeavyBlow"
+      }
+    },
+    "shieldAlly": {
+      "name": "Shield Ally",
+      "description": "Grants an ally a temporary damage shield.",
+      "activation": "manual",
+      "targeting": {
+        "type": "ally",
+        "rangeMin": 0,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 600,
+        "cooldown": 0
+      },
+      "costs": {
+        "mana": 20
+      },
+      "effects": [
+        {
+          "type": "shield",
+          "amount": 30,
+          "duration": {
+            "type": "targetActivations",
+            "amount": 3
+          },
+          "tags": [
+            "barrier"
+          ]
+        }
+      ],
+      "ui": {
+        "category": "support",
+        "basic": false,
+        "order": 3,
+        "tags": [
+          "shield"
+        ]
+      },
+      "assets": {
+        "icon": "iconBasicHeal"
+      }
+    },
+    "stabilize": {
+      "name": "Stabilize",
+      "description": "Clears every negative status on this mech and adds a 25 point shield.",
+      "activation": "manual",
+      "targeting": {
+        "type": "self",
+        "rangeMin": 0,
+        "rangeMax": 0,
+        "requiresLineOfSight": false,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 500,
+        "cooldown": 2
+      },
+      "effects": [
+        {
+          "type": "cleanse",
+          "category": "negative",
+          "applyTo": "source"
+        },
+        {
+          "type": "shield",
+          "amount": 25,
+          "duration": {
+            "type": "targetActivations",
+            "amount": 2
+          },
+          "applyTo": "source"
+        }
+      ],
+      "ui": {
+        "glyph": "🔧",
+        "category": "support",
+        "basic": false,
+        "order": 3,
+        "tags": [
+          "selfRepair"
+        ]
+      },
+      "assets": {
+        "icon": "iconHoldPosition"
+      }
+    },
+    "tacticalWithdrawal": {
+      "name": "Tactical Withdrawal",
+      "description": "Boosts away from a target by two tiles and raises Speed for two activations.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 2,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 400,
+        "cooldown": 2
+      },
+      "effects": [
+        {
+          "type": "pull",
+          "distance": 2,
+          "applyTo": "source",
+          "movementPolicy": "forced"
+        },
+        {
+          "type": "modifyStat",
+          "stat": "speed",
+          "mode": "multiplier",
+          "value": 1.25,
+          "duration": {
+            "type": "targetActivations",
+            "amount": 2
+          },
+          "applyTo": "source"
+        }
+      ],
+      "ui": {
+        "glyph": "💨",
+        "category": "movement",
+        "basic": false,
+        "order": 4,
+        "tags": [
+          "disengage"
+        ]
+      },
+      "assets": {
+        "icon": "iconDelayStrike"
+      }
+    },
+    "targetMark": {
+      "name": "Target Mark",
+      "description": "Paints a target: -25 evasion and -15 defense for three activations.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 6,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 450,
+        "cooldown": 1
+      },
+      "effects": [
+        {
+          "type": "applyStatus",
+          "statusId": "marked",
+          "chance": 1
+        }
+      ],
+      "ui": {
+        "glyph": "📍",
+        "category": "control",
+        "basic": false,
+        "order": 3,
+        "tags": [
+          "debuff"
+        ]
+      },
+      "assets": {
+        "icon": "iconDelayStrike"
+      }
+    },
+    "tripleShot": {
+      "name": "Triple Shot",
+      "description": "Three quick shots resolved separately.",
+      "activation": "manual",
+      "targeting": {
+        "type": "enemy",
+        "rangeMin": 1,
+        "rangeMax": 3,
+        "requiresLineOfSight": true,
+        "area": {
+          "shape": "single"
+        }
+      },
+      "timing": {
+        "recovery": 700,
+        "cooldown": 0
+      },
+      "effects": [
+        {
+          "type": "repeatEffect",
+          "count": 3,
+          "effects": [
+            {
+              "type": "damage",
+              "formula": "physical",
+              "power": 35,
+              "canMiss": true
+            }
+          ]
+        }
+      ],
+      "ui": {
+        "category": "attack",
+        "basic": false,
+        "order": 10,
+        "tags": [
+          "multiHit"
+        ]
+      },
+      "assets": {
+        "icon": "iconQuickStrike"
+      }
+    }
+  }
+}
