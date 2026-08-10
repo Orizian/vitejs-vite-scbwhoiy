@@ -27,6 +27,8 @@ import {
 } from "../content/mission-format.js";
 import { PLAYTEST_STORAGE_KEY } from "../content/mission-registry.js";
 import { terrainById } from "../content/catalog.js";
+import SceneEditor from "./SceneEditor.jsx";
+import { writePreviewScene } from "../content/scene-registry.js";
 
 /* =========================================================================
  * STATUS ZERO — MISSION EDITOR
@@ -50,12 +52,13 @@ const TABS = [
   { id: "objectives", label: "Objectives" },
   { id: "phases", label: "Phases" },
   { id: "triggers", label: "Triggers" },
-  { id: "scenes", label: "Scenes" },
+  { id: "scenes", label: "Briefing lines" },
   { id: "objective", label: "Fallback" },
   { id: "barks", label: "Barks" }
 ];
 
 const AUTOSAVE_KEY = "statuszero.editor.draft";
+const EDITOR_MODE_KEY = "statuszero.editor.mode";
 const HISTORY_LIMIT = 60;
 
 /**
@@ -65,7 +68,34 @@ const HISTORY_LIMIT = 60;
  *                same control navigates to the game's front door instead.
  *                Either way the button is present and does the obvious thing.
  */
-export default function Editor({ onExit }) {
+/**
+ * The editor shell.
+ *
+ * Two authoring modes so far, and they share everything worth sharing: the
+ * content catalog, the validation style, the export/import workflow and this
+ * chrome. Missions and scenes are different documents, not different tools.
+ *
+ * @param onScenePreview  Hands a scene up to the host to run in the real game
+ *                        player. Absent when the editor runs standalone, where
+ *                        preview opens the game in a new tab instead.
+ */
+export default function Editor({ onExit, onScenePreview }) {
+  const [mode, setMode] = React.useState(() => {
+    try {
+      return localStorage.getItem(EDITOR_MODE_KEY) === "scene" ? "scene" : "mission";
+    } catch {
+      return "mission";
+    }
+  });
+  const chooseMode = React.useCallback((next) => {
+    setMode(next);
+    try {
+      localStorage.setItem(EDITOR_MODE_KEY, next);
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, []);
+
   const leaveEditor = React.useCallback(() => {
     if (typeof onExit === "function") {
       onExit();
@@ -374,16 +404,66 @@ export default function Editor({ onExit }) {
     return total;
   }, [mission.map.terrain]);
 
-  return (
-    <div className="flex h-screen w-screen flex-col bg-slate-950 text-slate-200">
-      {/* ---- top bar ---- */}
+  /* ---- scene preview ----
+   * Handed to the host when the editor is mounted in the game shell, so the
+   * preview is the actual player rather than a lookalike. Standalone there is
+   * no host, so it takes the same route Playtest does: write the slot, open
+   * the game. Either way the scene is run by the game's own renderer. */
+  const previewScene = React.useCallback(
+    (scene, startIndex) => {
+      if (typeof onScenePreview === "function") {
+        onScenePreview(scene, startIndex);
+        return;
+      }
+      writePreviewScene(scene);
+      if (typeof window !== "undefined") {
+        window.open("/?boot=scene&step=" + (startIndex || 0), "_blank");
+      }
+    },
+    [onScenePreview]
+  );
+
+  const chrome = (children) => (
+    <div className="flex h-full w-full flex-col bg-slate-950 text-slate-200">
       <header className="flex items-center gap-2 border-b border-slate-800 bg-slate-900/70 px-3 py-2">
         <Btn onClick={leaveEditor} title="Back to the title screen">
           ‹ Main Menu
         </Btn>
         <span className="mx-2 h-5 w-px bg-slate-700" />
-        <span className="mr-2 text-[11px] font-bold uppercase tracking-[0.2em] text-sky-400">
-          Status Zero · Mission Editor
+        <span className="mr-3 text-[11px] font-bold uppercase tracking-[0.2em] text-sky-400">
+          Status Zero · Editor
+        </span>
+        {/* Only working editors appear here. A mode that does not exist yet is
+         *  not a tab; it is nothing. */}
+        {[["mission", "Missions"], ["scene", "Scenes"]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => chooseMode(id)}
+            className={
+              "rounded border px-3 py-1 text-[11px] uppercase tracking-wider transition " +
+              (mode === id
+                ? "border-sky-400 bg-sky-900/60 text-sky-100"
+                : "border-slate-700 bg-slate-900 text-slate-400 hover:text-slate-200")
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </header>
+      <div className="min-h-0 flex-1">{children}</div>
+    </div>
+  );
+
+  if (mode === "scene") {
+    return chrome(<SceneEditor onPreview={previewScene} previewLabel="Preview" />);
+  }
+
+  return chrome(
+    <div className="flex h-full w-full flex-col bg-slate-950 text-slate-200">
+      {/* ---- top bar ---- */}
+      <header className="flex items-center gap-2 border-b border-slate-800 bg-slate-900/70 px-3 py-2">
+        <span className="mr-2 text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">
+          Mission
         </span>
         <Btn
           onClick={() => {

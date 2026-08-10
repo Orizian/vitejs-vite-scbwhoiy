@@ -55,10 +55,10 @@ check(
 
 /* ---- editor round trip ---- */
 console.log("editor");
-await page.getByRole("button", { name: /MISSION EDITOR/i }).click();
+await page.getByRole("button", { name: /^EDITOR\b/i }).click();
 await page.waitForTimeout(1600);
-const editorVisible = (await page.locator("canvas").count()) > 0 && /MISSION EDITOR/i.test(await text(page));
-check("2. the mission editor opens from the menu", editorVisible);
+const editorVisible = (await page.locator("canvas").count()) > 0 && /STATUS ZERO · EDITOR/i.test(await text(page));
+check("2. the editor opens from the menu", editorVisible);
 check("   with a Back to Main Menu control", await page.getByRole("button", { name: /Main Menu/i }).isVisible());
 
 const urlInEditor = page.url();

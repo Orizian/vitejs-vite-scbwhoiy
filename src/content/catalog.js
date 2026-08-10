@@ -162,6 +162,56 @@ export function speakerById(id) {
 
 export const SCENE_KINDS = ["briefing", "dialogue", "propaganda", "aftermath", "interlude"];
 
+/* ---------------------------------------------------------------
+ * SCENE VOCABULARY
+ *
+ * Portrait states and backgrounds an authored scene may name. Both are
+ * convention-based rather than files that must exist: the asset layer renders
+ * a readable placeholder for anything missing, so writing can run ahead of
+ * art. The editor offers these as a dropdown and still accepts a new id typed
+ * by hand — validation warns rather than blocks, because "this art does not
+ * exist yet" is a normal state for a scene in progress.
+ * -------------------------------------------------------------*/
+
+export const EXPRESSION_CATALOG = [
+  { id: "neutral", label: "Neutral" },
+  { id: "concerned", label: "Concerned" },
+  { id: "resolute", label: "Resolute" },
+  { id: "angry", label: "Angry" },
+  { id: "shaken", label: "Shaken" },
+  { id: "wry", label: "Wry" },
+  { id: "exhausted", label: "Exhausted" }
+];
+
+export const EXPRESSION_IDS = EXPRESSION_CATALOG.map((entry) => entry.id);
+
+export const BACKGROUND_CATALOG = [
+  { id: "resistance-base", label: "Resistance Base" },
+  { id: "quarry-hangar", label: "Quarry Hangar" },
+  { id: "warner-road", label: "Warner Road" },
+  { id: "warner-collapse", label: "Warner Collapse" },
+  { id: "bellview-pump-station", label: "Bellview Pump Station" },
+  { id: "hollowmere-perimeter", label: "Hollowmere Perimeter" },
+  { id: "grayfield-yard", label: "Grayfield Yard" },
+  { id: "command-room", label: "Government Command Room" },
+  { id: "hale-office", label: "Hale's Office" },
+  { id: "broadcast-studio", label: "State Broadcast Studio" },
+  { id: "night-approach", label: "Night Approach" }
+];
+
+export const BACKGROUND_IDS = BACKGROUND_CATALOG.map((entry) => entry.id);
+
+/** Music contexts a scene may request. Mirrors App.jsx's context table. */
+export const MUSIC_CONTEXT_IDS = [
+  "base",
+  "missions",
+  "briefing",
+  "deployment",
+  "battle",
+  "results",
+  "ending"
+];
+
 /** Objective types the engine can actually resolve today. Anything not on
  *  this list is a validation error, not a silent no-op. */
 export const OBJECTIVE_TYPES = [

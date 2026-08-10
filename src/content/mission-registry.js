@@ -18,6 +18,7 @@
  * =======================================================================*/
 
 import { compileMission, normalizeMission, validateMission } from "./mission-format.js";
+import { allSceneIds } from "./scene-registry.js";
 
 export const PLAYTEST_STORAGE_KEY = "statuszero.playtest.mission";
 
@@ -64,7 +65,10 @@ function collect() {
       return null;
     }
 
-    const report = validateMission(mission);
+    // Scene ids are part of the vocabulary a mission may reference, so a
+    // mission naming a scene that does not exist fails here rather than at
+    // the moment a player would have watched it.
+    const report = validateMission(mission, { sceneIds: allSceneIds() });
     for (const message of report.errors) errors.push(origin + ": " + message);
     for (const message of report.warnings) warnings.push(origin + ": " + message);
     if (!report.ok) return null;
@@ -94,7 +98,9 @@ function collect() {
       name: compiled.encounter.name,
       origin,
       campaign: compiled.campaign,
-      runtimeIdByRef: compiled.runtimeIdByRef
+      runtimeIdByRef: compiled.runtimeIdByRef,
+      preMissionScene: compiled.mission.preMissionScene || null,
+      postMissionScene: compiled.mission.postMissionScene || null
     };
     return compiled;
   };

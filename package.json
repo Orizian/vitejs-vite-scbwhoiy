@@ -13,6 +13,7 @@
     "editor": "vite --open /editor.html",
     "check:grayfield": "node scripts/grayfield-check.mjs",
     "check:menu": "node scripts/menu-check.mjs",
+    "check:scene": "node scripts/scene-check.mjs",
     "check:reactions": "node scripts/reaction-check.mjs",
     "check:knowledge": "node scripts/knowledge-check.mjs",
     "check:questions": "node scripts/knowledge-questions.mjs",

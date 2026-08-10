@@ -1,0 +1,86 @@
+{
+  "format": "statuszero.scene",
+  "formatVersion": 1,
+  "id": "act1-warner-arrival",
+  "name": "Arrival at Warner",
+  "description": "ACCEPTANCE SCENE, not final canon. Exercises the whole step vocabulary end to end: background, music, two characters entering, a reaction between lines, an exit and a clean ending. The writing is placeholder.",
+  "steps": [
+    {
+      "type": "background",
+      "background": "warner-road",
+      "label": "The Warner Road, dusk"
+    },
+    {
+      "type": "music",
+      "mode": "play",
+      "context": "briefing"
+    },
+    {
+      "type": "characterEnter",
+      "character": "commander",
+      "position": "left",
+      "expression": "neutral"
+    },
+    {
+      "type": "dialogue",
+      "speaker": "commander",
+      "text": "Convoy stopped a klick back. Whatever came through here, it came through fast."
+    },
+    {
+      "type": "characterEnter",
+      "character": "reyes",
+      "position": "right",
+      "expression": "neutral"
+    },
+    {
+      "type": "dialogue",
+      "speaker": "reyes",
+      "text": "I pulled the district file on the way in. Warner was evacuated eleven days ago. Signed off, stamped, filed."
+    },
+    {
+      "type": "dialogue",
+      "speaker": "commander",
+      "text": "Then the report says Warner was evacuated."
+    },
+    {
+      "type": "expression",
+      "character": "reyes",
+      "expression": "concerned"
+    },
+    {
+      "type": "dialogue",
+      "speaker": "reyes",
+      "text": "Vale... no it doesn't. It says the evacuation was *authorised*. Nobody ever filed the part where anyone left."
+    },
+    {
+      "type": "expression",
+      "character": "commander",
+      "expression": "resolute"
+    },
+    {
+      "type": "dialogue",
+      "speaker": "commander",
+      "text": "Then there are still people down there. Get Kell on the ridge and tell him to keep his hands off the trigger until I say so."
+    },
+    {
+      "type": "dialogue",
+      "speaker": "reyes",
+      "text": "Telling Kell not to shoot. My favourite part of the job."
+    },
+    {
+      "type": "characterExit",
+      "character": "reyes"
+    },
+    {
+      "type": "dialogue",
+      "speaker": "commander",
+      "text": "Eleven days. And not one of them thought to check."
+    },
+    {
+      "type": "clear"
+    },
+    {
+      "type": "end"
+    }
+  ]
+}

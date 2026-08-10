@@ -7,6 +7,26 @@ import {
 } from "./content/mission-registry.js";
 import { catalogDriftIssues } from "./content/mission-format.js";
 import {
+  SCENE_CONTENT,
+  sceneById,
+  allSceneIds,
+  contentSceneRefs
+} from "./content/scene-registry.js";
+import {
+  normalizeScene,
+  normalizeStep,
+  validateScene,
+  serializeScene,
+  parseScene,
+  advanceScene,
+  stageBefore,
+  stageAt,
+  sceneStepCount,
+  blockingStepIndices
+} from "./scene/format.js";
+import { SCENE_STEP_TYPES, SCENE_STEP_PALETTE, createStage } from "./scene/steps.js";
+import { sceneFromLegacy, legacySceneIsConvertible, legacySceneBlocker } from "./scene/legacy.js";
+import {
   createFactionState,
   relationshipBetween,
   factionsHostile,
@@ -56,7 +76,11 @@ import {
   reactionEventTypeById,
   deriveReactionEvents
 } from "./reactions/events.js";
-import { validateMission as validateMissionFile, normalizeMission } from "./content/mission-format.js";
+import {
+  validateMission as validateMissionFile,
+  normalizeMission,
+  serializeMission as serializeMissionFile
+} from "./content/mission-format.js";
 import {
   OBSERVATION_CHANNELS,
   CHANNEL_ORDER,
@@ -9416,6 +9440,18 @@ function refreshReactionLinks(state) {
 function reactionModel(state) {
   if (!state.reactions) return null;
   return describeReactions(state, reactionDeps());
+}
+
+/**
+ * The authored scene a mission names for a hook, or null.
+ *
+ * Missions reference scenes by stable id, never by embedding them, so the same
+ * scene can be shared by several missions and edited in one place.
+ */
+function missionSceneFor(missionId, hook) {
+  const entry = missionId ? MISSION_CONTENT.missions[missionId] : null;
+  const sceneId = entry ? entry[hook] : null;
+  return sceneId ? sceneById(sceneId) : null;
 }
 
 /** Compiled mission scripts, keyed by the id stored on battle state. Kept out
@@ -21669,6 +21705,363 @@ test("Front door", "Entering the editor cannot touch the campaign slot", () => {
   });
 });
 
+/* =========================================================================
+ * SCENES
+ *
+ * The authored-scene format, its round trip, and the property the whole
+ * design rests on: the stage at any step is a pure fold, so previewing from
+ * step 37 lands in the same world as playing to step 37.
+ * =======================================================================*/
+
+const SCENE_TEST_REFS = () => contentSceneRefs(allSceneIds());
+
+function buildTestScene(steps, id) {
+  return normalizeScene({ id: id || "test-scene", name: "Test Scene", steps });
+}
+
+test("Scenes", "A scene is an ordered list of steps and nothing else", () => {
+  const scene = buildTestScene([
+    { type: "background", background: "warner-road" },
+    { type: "dialogue", speaker: "commander", text: "One." },
+    { type: "dialogue", speaker: "reyes", text: "Two." },
+    { type: "end" }
+  ]);
+  assertEqual(sceneStepCount(scene), 4);
+  assertEqual(
+    scene.steps.map((step) => step.type).join(","),
+    "background,dialogue,dialogue,end",
+    "order is the model"
+  );
+  // Only dialogue stops for the player; presentation resolves in the same beat.
+  assertEqual(blockingStepIndices(scene).join(","), "1,2");
+});
+
+test("Scenes", "Presentation steps between lines cost the player nothing", () => {
+  const scene = buildTestScene([
+    { type: "background", background: "warner-road" },
+    { type: "music", mode: "play", context: "briefing" },
+    { type: "characterEnter", character: "commander", position: "left" },
+    { type: "dialogue", speaker: "commander", text: "Here." }
+  ]);
+  // One advance from the start runs three presentation steps and stops on the
+  // line, with all three already applied.
+  const first = advanceScene(scene, 0, createStage());
+  assertEqual(first.index, 3, "stopped on the dialogue step");
+  assertEqual(first.stage.background.id, "warner-road");
+  assertEqual(first.stage.music.context, "briefing");
+  assertEqual(first.stage.characters.length, 1);
+  assertEqual(first.stage.line.text, "Here.");
+});
+
+test("Scenes", "The stage at a step is a pure fold, so Play from here is exact", () => {
+  const scene = sceneById("act1-warner-arrival");
+  assert(scene, "the acceptance scene is registered");
+
+  // Play the scene the slow way, one advance at a time, recording the stage
+  // at every step the player stops on.
+  const byPlaying = {};
+  let position = advanceScene(scene, 0, createStage());
+  for (let guard = 0; guard < 200; guard += 1) {
+    byPlaying[position.index] = JSON.stringify(position.stage);
+    if (position.done) break;
+    position = advanceScene(scene, position.index + 1, { ...position.stage, line: null });
+  }
+
+  // Now reconstruct each of those points directly. If reconstruction and
+  // playing could ever disagree, Play from here would be a lie.
+  let compared = 0;
+  for (const key of Object.keys(byPlaying)) {
+    const index = Number(key);
+    const rebuilt = advanceScene(scene, index, stageBefore(scene, index));
+    assertEqual(
+      JSON.stringify(rebuilt.stage),
+      byPlaying[key],
+      "step " + (index + 1) + " reconstructs identically"
+    );
+    compared += 1;
+  }
+  assert(compared >= 6, "compared a meaningful number of stopping points, got " + compared);
+});
+
+test("Scenes", "Entering, reacting and exiting change the stage in order", () => {
+  const scene = buildTestScene([
+    { type: "characterEnter", character: "commander", position: "left", expression: "neutral" },
+    { type: "characterEnter", character: "reyes", position: "right", expression: "neutral" },
+    { type: "expression", character: "reyes", expression: "concerned" },
+    { type: "characterExit", character: "commander" },
+    { type: "clear" }
+  ]);
+  const afterEnter = stageAt(scene, 1);
+  assertEqual(afterEnter.characters.map((entry) => entry.character).join(","), "commander,reyes");
+  assertEqual(afterEnter.characters[1].position, "right");
+
+  const afterReaction = stageAt(scene, 2);
+  assertEqual(afterReaction.characters[1].expression, "concerned", "the reaction landed");
+  assertEqual(afterReaction.characters[0].expression, "neutral", "and only on its subject");
+
+  assertEqual(stageAt(scene, 3).characters.map((e) => e.character).join(","), "reyes");
+  assertEqual(stageAt(scene, 4).characters.length, 0, "clear empties the stage");
+});
+
+test("Scenes", "Speaking puts a character on stage", () => {
+  // An author who writes a line without an explicit enter should get the
+  // obvious result rather than an invisible speaker.
+  const scene = buildTestScene([{ type: "dialogue", speaker: "nyx", text: "Moving." }]);
+  const stage = stageAt(scene, 0);
+  assertEqual(stage.characters.length, 1);
+  assertEqual(stage.characters[0].character, "nyx");
+});
+
+test("Scenes", "A scene round-trips through serialize and parse", () => {
+  const original = sceneById("act1-warner-arrival");
+  const text = serializeScene(original);
+  const reloaded = parseScene(text);
+
+  assertEqual(reloaded.id, original.id);
+  assertEqual(reloaded.name, original.name);
+  assertEqual(reloaded.steps.length, original.steps.length, "no steps lost");
+  for (let i = 0; i < original.steps.length; i += 1) {
+    const before = { ...original.steps[i] };
+    const after = { ...reloaded.steps[i] };
+    // `key` is editor bookkeeping and deliberately not written to disk.
+    delete before.key;
+    delete after.key;
+    assertEqual(JSON.stringify(after), JSON.stringify(before), "step " + (i + 1) + " survived");
+  }
+  // And the file itself is stable: serializing the reloaded copy is byte-identical.
+  assertEqual(serializeScene(reloaded), text, "serialization is deterministic");
+});
+
+test("Scenes", "Exported scenes carry no editor state", () => {
+  const scene = buildTestScene([{ type: "dialogue", speaker: "commander", text: "Hi." }]);
+  const text = serializeScene(scene);
+  assertEqual(text.includes('"key"'), false, "step keys stay in the editor");
+  assert(text.endsWith("\n"), "files end with a newline so diffs stay clean");
+});
+
+test("Scenes", "Validation names the exact step that is wrong", () => {
+  const report = validateScene(
+    buildTestScene([
+      { type: "background", background: "warner-road" },
+      { type: "dialogue", speaker: "vlae", text: "Typo." },
+      { type: "dialogue", speaker: "commander", text: "" },
+      { type: "characterEnter", character: "reyes", position: "overhead" },
+      { type: "expression", character: "reyes", expression: "smouldering" },
+      { type: "end" }
+    ]),
+    SCENE_TEST_REFS()
+  );
+
+  assertEqual(report.ok, false, "the scene must not export");
+  const joined = report.errors.join(" | ");
+  assert(/Step 2 .* unknown character "vlae"/.test(joined), joined);
+  assert(/Step 3 .* no dialogue text/.test(joined), joined);
+  assert(/Step 4 .* unknown position "overhead"/.test(joined), joined);
+  assert(/Step 5 .* unknown expression "smouldering"/.test(joined), joined);
+});
+
+test("Scenes", "Missing art warns rather than blocking the writing", () => {
+  const report = validateScene(
+    buildTestScene([
+      { type: "background", background: "a-place-with-no-art-yet" },
+      { type: "dialogue", speaker: "commander", text: "Still writable." },
+      { type: "end" }
+    ]),
+    SCENE_TEST_REFS()
+  );
+  assertEqual(report.ok, true, "writing is not blocked by absent artwork");
+  assert(
+    report.warnings.some((message) => /no asset convention/.test(message)),
+    report.warnings.join(" | ")
+  );
+});
+
+test("Scenes", "Structural problems are caught", () => {
+  const empty = validateScene(buildTestScene([]), SCENE_TEST_REFS());
+  assertEqual(empty.ok, false, "an empty scene is not a scene");
+
+  const badId = validateScene(
+    normalizeScene({ id: "not a slug", steps: [{ type: "end" }] }),
+    SCENE_TEST_REFS()
+  );
+  assertEqual(badId.ok, false, "ids must be stable slugs");
+
+  const duplicate = validateScene(
+    buildTestScene([{ type: "dialogue", speaker: "commander", text: "x" }], "dupe"),
+    { ...SCENE_TEST_REFS(), knownSceneIds: ["dupe", "dupe"] }
+  );
+  assert(
+    duplicate.errors.some((message) => /Duplicate scene id/.test(message)),
+    duplicate.errors.join(" | ")
+  );
+
+  const unreachable = validateScene(
+    buildTestScene([
+      { type: "end" },
+      { type: "dialogue", speaker: "commander", text: "never runs" }
+    ]),
+    SCENE_TEST_REFS()
+  );
+  assert(
+    unreachable.warnings.some((message) => /never run/.test(message)),
+    unreachable.warnings.join(" | ")
+  );
+});
+
+test("Scenes", "Every shipped scene is valid", () => {
+  assertEqual(
+    SCENE_CONTENT.errors.length,
+    0,
+    "scene registry errors: " + SCENE_CONTENT.errors.join(" | ")
+  );
+  assert(allSceneIds().length > 0, "at least one scene ships");
+  for (const sceneId of allSceneIds()) {
+    const report = validateScene(sceneById(sceneId), SCENE_TEST_REFS());
+    assertEqual(report.ok, true, sceneId + ": " + report.errors.join(" | "));
+  }
+});
+
+test("Scenes", "A scene runs to completion with no battle anywhere near it", () => {
+  const scene = sceneById("act1-warner-arrival");
+  let position = advanceScene(scene, 0, createStage());
+  const lines = [];
+  let guard = 0;
+  while (!position.done && guard < 200) {
+    if (position.stage.line) lines.push(position.stage.line.speaker + ": " + position.stage.line.text);
+    position = advanceScene(scene, position.index + 1, { ...position.stage, line: null });
+    guard += 1;
+  }
+  assertEqual(position.done, true, "the scene ended");
+  assert(lines.length >= 5, "and delivered its dialogue, got " + lines.length);
+  assertEqual(
+    lines[0].startsWith("commander:"),
+    true,
+    "in the authored order, starting with " + lines[0]
+  );
+});
+
+test("Scenes", "The legacy lines format lifts into steps without a second runtime", () => {
+  const legacy = {
+    title: "Old Scene",
+    location: "Warner Road",
+    lines: [
+      { speaker: "commander", text: "First." },
+      { speaker: "reyes", text: "Second." }
+    ]
+  };
+  assertEqual(legacySceneIsConvertible(legacy), true);
+  const lifted = sceneFromLegacy(legacy, "lifted-scene");
+  assertEqual(
+    lifted.steps.map((step) => step.type).join(","),
+    "background,dialogue,dialogue,end",
+    "a location becomes a background and lines become dialogue"
+  );
+  assertEqual(lifted.steps[0].background, "warner-road", "the location slugged cleanly");
+  assertEqual(lifted.steps[1].text, "First.", "text survives verbatim");
+
+  // Branching is out of scope, so a scene using it stays on the legacy path
+  // rather than being silently flattened into something it is not.
+  const branching = { ...legacy, choices: [{ id: "c1", options: [] }] };
+  assertEqual(legacySceneIsConvertible(branching), false);
+  assertEqual(legacySceneBlocker(branching), "uses branching choices");
+});
+
+test("Scenes", "Every legacy mission scene is either liftable or explained", () => {
+  const unexplained = [];
+  for (const mission of Object.values(MISSION_CONTENT.missions)) {
+    const script = MISSION_CONTENT.scripts[mission.missionId];
+    for (const sceneId of Object.keys((script && script.scenes) || {})) {
+      const legacy = script.scenes[sceneId];
+      if (legacySceneIsConvertible(legacy)) continue;
+      if (!legacySceneBlocker(legacy)) unexplained.push(mission.missionId + "/" + sceneId);
+    }
+  }
+  assertEqual(unexplained.length, 0, "unexplained legacy scenes: " + unexplained.join(", "));
+});
+
+test("Scenes", "Missions reference scenes by id, and a bad reference fails validation", () => {
+  const baseMission = {
+    id: "scene-hook-probe",
+    map: { width: 8, height: 8, terrain: null },
+    units: [
+      { ref: "a", definitionId: "assaultMech", teamId: "player", x: 1, y: 1 },
+      { ref: "b", definitionId: "rifleGrunt", teamId: "foe", x: 5, y: 5 }
+    ],
+    objective: { type: "defeatAllEnemies", teamId: "player", opposingTeamId: "foe" }
+  };
+
+  const good = validateMissionFile(
+    { ...baseMission, preMissionScene: "act1-warner-arrival" },
+    { sceneIds: allSceneIds() }
+  );
+  assert(
+    !good.errors.some((message) => /preMissionScene/.test(message)),
+    "a real scene id is accepted: " + good.errors.join(" | ")
+  );
+
+  const bad = validateMissionFile(
+    { ...baseMission, postMissionScene: "no-such-scene" },
+    { sceneIds: allSceneIds() }
+  );
+  assert(
+    bad.errors.some((message) => /postMissionScene references unknown scene/.test(message)),
+    "a missing scene is caught: " + bad.errors.join(" | ")
+  );
+});
+
+test("Scenes", "Mission scene hooks survive a mission round trip", () => {
+  const mission = normalizeMission({
+    id: "hook-round-trip",
+    map: { width: 8, height: 8 },
+    preMissionScene: "act1-warner-arrival",
+    postMissionScene: "act1-warner-arrival"
+  });
+  const reloaded = normalizeMission(JSON.parse(serializeMissionFile(mission)));
+  assertEqual(reloaded.preMissionScene, "act1-warner-arrival");
+  assertEqual(reloaded.postMissionScene, "act1-warner-arrival");
+});
+
+test("Scenes", "The step registry drives the editor, so a new type needs no editor change", () => {
+  // Every palette entry must be renderable and editable purely from its own
+  // declaration. If this ever fails, someone special-cased a step somewhere.
+  for (const type of SCENE_STEP_PALETTE) {
+    const definition = SCENE_STEP_TYPES[type];
+    assert(definition, type + " is in the palette but not the registry");
+    assert(typeof definition.label === "string" && definition.label, type + " needs a label");
+    assert(typeof definition.summary === "function", type + " needs a summary");
+    assert(typeof definition.defaults === "function", type + " needs defaults");
+    assert(typeof definition.validate === "function", type + " needs validation");
+    assert(typeof definition.apply === "function", type + " needs an apply");
+    assert(Array.isArray(definition.fields), type + " needs a field list");
+
+    // A default step of every type must be valid once its required free text
+    // is filled in — that is the only thing the author must supply. Anything
+    // else missing would mean "add step" creates something broken.
+    const step = normalizeStep({ type });
+    const placeholders = { text: "placeholder", line: "placeholder", background: "warner-road" };
+    for (const field of definition.fields) {
+      if (field.required && !step[field.key] && placeholders[field.kind]) {
+        step[field.key] = placeholders[field.kind];
+      }
+    }
+    const report = validateScene(
+      buildTestScene([{ type: "dialogue", speaker: "commander", text: "x" }, step]),
+      SCENE_TEST_REFS()
+    );
+    assertEqual(report.ok, true, type + " default is invalid: " + report.errors.join(" | "));
+
+    // And every declared field must use a kind the inspector knows.
+    for (const field of definition.fields) {
+      assert(
+        ["text", "line", "speaker", "expression", "position", "background", "musicContext", "enum"].includes(
+          field.kind
+        ),
+        type + "." + field.key + ' uses unknown field kind "' + field.kind + '"'
+      );
+    }
+  }
+});
+
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
   const audit = auditArchitecture();
   assert(audit.pass, audit.failures.join(" | "));
@@ -31669,6 +32062,252 @@ function MissionBoard({ board, onSelect, onBack }) {
   );
 }
 
+/* =========================================================================
+ * SCENE PLAYER
+ *
+ * Runs an authored scene (src/scene/format.js). The same component the game
+ * uses for a standalone or mission-attached scene *is* the editor's preview —
+ * there is no approximation, so "it looked right in the editor" and "it looks
+ * right in the game" are the same statement.
+ *
+ * Sequencing is the format's own pure fold: `advanceScene` runs presentation
+ * steps until it reaches one the player must acknowledge. This component owns
+ * only what a component should — the current index, keyboard input, and the
+ * drawing.
+ * =======================================================================*/
+
+/** Portrait for a character, preferring an expression-specific file. */
+function scenePortraitAsset(characterId, expression) {
+  const speaker = CAMPAIGN.speakers[characterId] || { name: characterId, glyph: "💬" };
+  const stems = [];
+  if (expression) stems.push("portraits/" + characterId + "-" + expression);
+  stems.push("portraits/" + characterId);
+  return {
+    id: "speaker." + characterId + (expression ? "." + expression : ""),
+    type: "image",
+    src: null,
+    // Falls back from the expression to the plain portrait to a silhouette, so
+    // writing a reaction never depends on that artwork existing yet.
+    srcCandidates: stems.flatMap((stem) => assetFileCandidates(stem)),
+    value: speaker.glyph,
+    fallback: { type: "portraitSilhouette", value: speaker.glyph || "?", label: speaker.name },
+    recommended: "512x512 portrait",
+    missing: false
+  };
+}
+
+function sceneBackgroundAsset(background) {
+  const id = (background && background.id) || "unknown";
+  const label = (background && background.label) || id;
+  return {
+    id: "scene.background." + id,
+    type: "image",
+    src: null,
+    srcCandidates: assetFileCandidates("backgrounds/" + id),
+    value: label,
+    fallback: { type: "sceneLabel", value: label, label },
+    recommended: "1920x1080 background",
+    missing: false
+  };
+}
+
+const SCENE_PORTRAIT_SLOTS = { left: 0.2, center: 0.5, right: 0.8 };
+
+function ScenePlayer({ scene, startIndex, title, onComplete, onExit, exitLabel, autoAdvanceMs }) {
+  const appSettings = React.useContext(SettingsContext);
+  const [position, setPosition] = React.useState(() => {
+    const from = Math.max(0, startIndex || 0);
+    return advanceScene(scene, from, stageBefore(scene, from));
+  });
+
+  // Restarting, or jumping to a different step, is a fresh fold from the same
+  // data — which is exactly why Play from here can exist at all.
+  React.useEffect(() => {
+    const from = Math.max(0, startIndex || 0);
+    setPosition(advanceScene(scene, from, stageBefore(scene, from)));
+  }, [scene, startIndex]);
+
+  const stage = position.stage;
+  const step = scene.steps[position.index] || null;
+
+  const advance = React.useCallback(() => {
+    if (position.done) {
+      if (onComplete) onComplete();
+      return;
+    }
+    setPosition((current) =>
+      advanceScene(scene, current.index + 1, { ...current.stage, line: null })
+    );
+  }, [position.done, scene, onComplete]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onKey = (event) => {
+      if (appSettings && appSettings.settingsOpen) return;
+      if (event.repeat) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        advance();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [advance, appSettings && appSettings.settingsOpen]);
+
+  React.useEffect(() => {
+    if (!autoAdvanceMs || position.done) return undefined;
+    const timer = setTimeout(advance, autoAdvanceMs);
+    return () => clearTimeout(timer);
+  }, [autoAdvanceMs, advance, position.index, position.done]);
+
+  // Music is a request to the existing audio layer, not a second player.
+  React.useEffect(() => {
+    if (!appSettings || !appSettings.setMusicRequest || !stage.music) return;
+    appSettings.setMusicRequest({
+      context: stage.music.context || "briefing",
+      missionId: stage.music.track || null
+    });
+  }, [appSettings, stage.music && stage.music.context, stage.music && stage.music.track]);
+
+  const layout = calculateCinematicDialogueLayout(
+    appSettings && appSettings.logicalViewport,
+    "story"
+  );
+  const viewport = (appSettings && appSettings.logicalViewport) || UI_DESIGN_RESOLUTION;
+  const line = stage.line;
+  const speaker = line ? CAMPAIGN.speakers[line.speaker] || { name: line.speaker, glyph: "💬" } : null;
+  const speaking = line ? stage.characters.find((entry) => entry.character === line.speaker) : null;
+
+  return (
+    <div
+      style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", background: "#02070d" }}
+      className="font-mono pixel-crisp-text text-slate-100"
+      onClick={advance}
+    >
+      <AssetImage
+        asset={sceneBackgroundAsset(stage.background)}
+        width="100%"
+        height="100%"
+        cover
+        alt={(stage.background && stage.background.label) || "scene background"}
+        className="absolute inset-0 h-full w-full"
+      />
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(180deg, rgba(2,7,13,0.58) 0%, rgba(2,7,13,0.05) 36%, rgba(2,7,13,0.18) 58%, rgba(2,7,13,0.9) 100%)"
+        }}
+      />
+
+      {/* Everyone on stage, dimmed unless they are the one talking. */}
+      {stage.characters.map((entry) => {
+        const slot = SCENE_PORTRAIT_SLOTS[entry.position] == null ? 0.5 : SCENE_PORTRAIT_SLOTS[entry.position];
+        const width = Math.round(viewport.width * 0.26);
+        const isSpeaking = !!line && line.speaker === entry.character;
+        return (
+          <div
+            key={entry.character}
+            className="pointer-events-none absolute transition-opacity duration-200"
+            style={{
+              // Standing on the floor, behind the dialogue box, the way a
+              // portrait in a visual novel does. The box draws over their feet.
+              left: Math.round(viewport.width * slot - width / 2),
+              bottom: 0,
+              width,
+              height: Math.round(viewport.height * 0.82),
+              zIndex: isSpeaking ? 12 : 10,
+              opacity: !line || isSpeaking ? 1 : 0.5,
+              filter: !line || isSpeaking ? "none" : "brightness(0.6) saturate(0.7)"
+            }}
+          >
+            <AssetImage
+              asset={scenePortraitAsset(entry.character, entry.expression)}
+              width="100%"
+              height="100%"
+              className="h-full w-full object-contain object-bottom drop-shadow-[0_24px_35px_rgba(0,0,0,0.7)]"
+              alt={(CAMPAIGN.speakers[entry.character] || {}).name || entry.character}
+            />
+          </div>
+        );
+      })}
+
+      <div className="absolute left-[58px] top-[48px] z-20">
+        <TitlePlaque
+          width={400}
+          eyebrow={"SCENE" + (stage.background && stage.background.label ? " · " + stage.background.label : "")}
+          title={title || scene.name}
+          subtitle={
+            "Step " + (position.index + 1) + " of " + scene.steps.length +
+            (step ? " · " + (SCENE_STEP_TYPES[step.type] || {}).label : "")
+          }
+        />
+      </div>
+
+      {onExit ? (
+        <div className="absolute right-[58px] top-[48px] z-30 flex gap-3">
+          <Button size="sm" onClick={(event) => { event.stopPropagation(); onExit(); }}>
+            {exitLabel || "Stop"}
+          </Button>
+        </div>
+      ) : null}
+
+      {line ? (
+        <>
+          <div
+            className="absolute z-20 border border-sky-200/55 bg-slate-950/94 px-9 pb-8 pt-12 shadow-2xl"
+            style={{
+              bottom: layout.bottom,
+              left: layout.portraitLeft,
+              right: layout.dialogueRight,
+              minHeight: layout.dialogueHeight
+            }}
+          >
+            <FrameCorners />
+            <div
+              className="absolute -top-[62px] left-0 border border-sky-200/55 bg-sky-300/75 px-7 py-4 text-slate-950"
+              style={{ width: layout.nameplateWidth, maxWidth: "78%" }}
+            >
+              <p className="font-display truncate text-[22px] font-black uppercase tracking-[0.025em]">
+                {speaker.name}
+              </p>
+              {speaking && speaking.expression ? (
+                <p className="truncate text-[10px] uppercase tracking-[0.2em] opacity-65">
+                  {speaking.expression}
+                </p>
+              ) : null}
+            </div>
+            <p
+              className="overflow-y-auto pr-3 leading-[1.65] text-sky-100"
+              style={{ fontSize: layout.textSize, maxHeight: layout.textMaxHeight }}
+            >
+              {line.text}
+            </p>
+            <div className="absolute bottom-5 right-7 flex items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-sky-300/70">
+              <span>Space</span>
+              <span className="text-[20px]">▼</span>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {position.done ? (
+        <div className="absolute inset-x-0 bottom-0 z-30 flex justify-center pb-10">
+          <Button
+            tone="primary"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (onComplete) onComplete();
+            }}
+          >
+            Scene complete — continue
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function StorySequenceScreen({ sequence, title, subtitle, onChoose, onSceneComplete, onComplete }) {
   const appSettings = React.useContext(SettingsContext);
   const [sceneIndex, setSceneIndex] = React.useState(0);
@@ -32494,6 +33133,9 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     MISSION_CONTENT.playtestMissionId || null
   );
   const [missionResult, setMissionResult] = React.useState(null);
+  // The authored scene the campaign is currently showing, and where to go once
+  // it finishes. Null whenever no scene is playing.
+  const [pendingScene, setPendingScene] = React.useState(null);
   const [pendingOutcome, setPendingOutcome] = React.useState(null);
   const [saveNote, setSaveNote] = React.useState(
     initialCampaign ? "Campaign loaded from your last save." : "Campaign not saved yet."
@@ -33672,7 +34314,11 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     firedTriggersRef.current = [];
     setStoryLog([]);
     setCombatDialogueQueue([]);
-    setScreen("briefing");
+    // An authored scene, if the mission names one, plays before the briefing.
+    // Missions without one behave exactly as before.
+    const authored = missionSceneFor(missionId, "preMissionScene");
+    setPendingScene(authored ? { scene: authored, next: "briefing" } : null);
+    setScreen(authored ? "authoredScene" : "briefing");
   };
 
   const finishMission = (victory) => {
@@ -33802,16 +34448,34 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     );
   }
 
+  // An authored scene playing inside the campaign flow. The same player the
+  // editor previews with, so what an author sees is what a player gets.
+  if (screen === "authoredScene" && pendingScene) {
+    return (
+      <ScenePlayer
+        scene={pendingScene.scene}
+        onComplete={() => {
+          const next = pendingScene.next;
+          setPendingScene(null);
+          setScreen(next);
+        }}
+      />
+    );
+  }
+
   if (screen === "results" && missionResult) {
     return (
       <ResultsScreen
         result={missionResult}
         onRetry={() => launchMission(missionResult.missionId)}
         onContinue={() => {
+          const after = missionSceneFor(missionResult.missionId, "postMissionScene");
+          const destination = missionResult.prototypeComplete ? "prototypeEnd" : "base";
           setPendingMissionId(null);
           setDeployment(null);
-          setScreen(missionResult.prototypeComplete ? "prototypeEnd" : "base");
           setMissionResult(null);
+          setPendingScene(after ? { scene: after, next: destination } : null);
+          setScreen(after ? "authoredScene" : destination);
         }}
       />
     );
@@ -34242,7 +34906,7 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
  * missing above it.
  * =======================================================================*/
 
-const APP_ROUTES = ["menu", "game", "editor"];
+const APP_ROUTES = ["menu", "game", "editor", "scene"];
 
 /**
  * Where the application starts.
@@ -34376,8 +35040,8 @@ function MainMenu({ hasSave, saveSummary, onContinue, onNewGame, onEditor, onSet
 
                 <MenuGroup label="Tools">
                   <MenuItem
-                    label="Mission Editor"
-                    hint="Paint a map, script it, playtest it. Authoring only — never touches your campaign."
+                    label="Editor"
+                    hint="Missions and scenes. Paint a map or write a cutscene, then play it. Authoring only — never touches your campaign."
                     onClick={onEditor}
                   />
                 </MenuGroup>
@@ -34436,6 +35100,20 @@ export default function TacticalBattle() {
   // Remounts the campaign so New Game after Continue genuinely starts over
   // rather than reusing the previous run's component state.
   const [gameInstance, setGameInstance] = React.useState(0);
+  // A scene being previewed from the editor, and where it should start. Held
+  // in state rather than round-tripped through storage, so the editor's
+  // Preview button shows exactly what is on screen right now.
+  const [scenePreview, setScenePreview] = React.useState(() => {
+    if (typeof window === "undefined") return null;
+    if (resolveStartupRoute(window.location.search) !== "scene") return null;
+    const previewed = SCENE_CONTENT.previewSceneId
+      ? sceneById(SCENE_CONTENT.previewSceneId)
+      : null;
+    const requested = (window.location.search.match(/[?&]scene=([a-z0-9-]+)/i) || [])[1];
+    const step = Number((window.location.search.match(/[?&]step=(\d+)/) || [])[1] || 0);
+    const scene = (requested && sceneById(requested)) || previewed;
+    return scene ? { scene, startIndex: step, from: "standalone" } : null;
+  });
   const [saveSlot, setSaveSlot] = React.useState(() => (route === "menu" ? hasCampaignSlot() : false));
   const [masterVolume, setMasterVolume] = React.useState(() => readStoredPercent("tactical-master-volume", 80));
   const [musicVolume, setMusicVolume] = React.useState(() => readStoredPercent("tactical-music-volume", 70));
@@ -34511,6 +35189,18 @@ export default function TacticalBattle() {
     setRoute("game");
   }, []);
 
+  const openScenePreview = React.useCallback((scene, startIndex) => {
+    setScenePreview({ scene, startIndex: startIndex || 0, from: "editor" });
+    setRoute("scene");
+  }, []);
+
+  const closeScenePreview = React.useCallback(() => {
+    // Back to wherever the preview was launched from. An editor preview
+    // returns to the editor with the draft untouched; a standalone preview
+    // (a new tab from the editor) has nowhere to go but the title screen.
+    setRoute(scenePreview && scenePreview.from === "editor" ? "editor" : "menu");
+  }, [scenePreview]);
+
   const startNewCampaign = React.useCallback(() => {
     // No save is written here. A new campaign only reaches disk when the
     // player saves it, so backing out of one costs nothing.
@@ -34535,8 +35225,8 @@ export default function TacticalBattle() {
     return (
       <SettingsContext.Provider value={settingsContextValue}>
         <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }} className="bg-[#020609]">
-          <React.Suspense fallback={<RouteLoading label="Loading mission editor…" />}>
-            <LazyMissionEditor onExit={openMenu} />
+          <React.Suspense fallback={<RouteLoading label="Loading editor…" />}>
+            <LazyMissionEditor onExit={openMenu} onScenePreview={openScenePreview} />
           </React.Suspense>
         </div>
       </SettingsContext.Provider>
@@ -34560,7 +35250,17 @@ export default function TacticalBattle() {
             boxShadow: "0 0 0 1px rgba(82,132,171,0.42), 0 30px 100px rgba(0,0,0,0.9)"
           }}
         >
-          {route === "menu" ? (
+          {route === "scene" && scenePreview ? (
+            <ScenePlayer
+              scene={scenePreview.scene}
+              startIndex={scenePreview.startIndex}
+              onComplete={closeScenePreview}
+              onExit={closeScenePreview}
+              exitLabel={scenePreview.from === "editor" ? "Back to editor" : "Stop"}
+            />
+          ) : route === "scene" ? (
+            <RouteLoading label="No scene to preview" />
+          ) : route === "menu" ? (
             <MainMenu
               hasSave={saveSlot}
               saveSummary="Resume your saved campaign."
@@ -34636,6 +35336,7 @@ const UI_COMPONENTS = {
   Screen,
   ResistanceBase,
   MissionBoard,
+  ScenePlayer,
   StorySequenceScreen,
   RosterScreen,
   ResultsScreen,

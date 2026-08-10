@@ -151,7 +151,14 @@ export function normalizeMission(raw) {
     ),
     objectives: (Array.isArray(source.objectives) ? source.objectives : []).map(normalizeObjectiveEntry),
     beats: (Array.isArray(source.beats) ? source.beats : []).map(normalizeBeat),
-    startPhaseId: source.startPhaseId || null
+    startPhaseId: source.startPhaseId || null,
+
+    /* ---- authored scenes ----
+     * Stable ids into the scene registry, played around the battle rather
+     * than inside it. In-battle lines stay where they belong: mission beats
+     * and reactions, which fire in context and do not take over the screen. */
+    preMissionScene: source.preMissionScene || null,
+    postMissionScene: source.postMissionScene || null
   };
 }
 
@@ -613,6 +620,18 @@ export function validateMission(mission, catalog) {
       push(errors, label + " shares tile " + key + " with \"" + occupied.get(key) + '".');
     } else {
       occupied.set(key, unit.ref);
+    }
+  }
+
+  /* --- authored scene hooks --- */
+  const knownScenes = (catalog && catalog.sceneIds) || null;
+  for (const [field, sceneId] of [
+    ["preMissionScene", m.preMissionScene],
+    ["postMissionScene", m.postMissionScene]
+  ]) {
+    if (!sceneId) continue;
+    if (knownScenes && !knownScenes.includes(sceneId)) {
+      push(errors, field + ' references unknown scene "' + sceneId + '".');
     }
   }
 
@@ -1348,6 +1367,8 @@ export function serializeMission(mission) {
       phases: m.phases,
       beats: m.beats,
       ...(m.startPhaseId ? { startPhaseId: m.startPhaseId } : {}),
+      ...(m.preMissionScene ? { preMissionScene: m.preMissionScene } : {}),
+      ...(m.postMissionScene ? { postMissionScene: m.postMissionScene } : {}),
       ...(m.campaign ? { campaign: m.campaign } : {})
     },
     null,
