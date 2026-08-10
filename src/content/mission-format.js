@@ -1294,8 +1294,14 @@ function encodeElevation(value) {
 /* ---------------------------------------------------------------
  * DRIFT CHECK
  *
- * Called by the game's own test suite with the live CONTENT registry, so the
- * hand-mirrored catalog.js can never silently fall out of date.
+ * Called by the game's own test suite with the live CONTENT registry.
+ *
+ * Most of catalog.js is now derived from the authored gameplay files rather
+ * than mirrored by hand, so these checks are no longer guarding a copy — they
+ * are guarding the claim that the derivation is complete. If the engine ever
+ * grows a unit, ability, status or part that the authored files do not
+ * contain, an author would be unable to see it in the Studio or place it in
+ * the mission editor, and this is what says so.
  * -------------------------------------------------------------*/
 
 export function catalogDriftIssues(content) {
@@ -1305,15 +1311,25 @@ export function catalogDriftIssues(content) {
       if (!liveIds.includes(id)) issues.push(label + ' "' + id + '" is in catalog.js but not in the game.');
     }
   };
-  check("Terrain", TERRAIN_IDS, Object.keys(content.terrains));
-  check("Chassis", UNIT_IDS, Object.keys(content.units));
-  check("AI profile", AI_PROFILE_IDS, Object.keys(content.aiProfiles));
-  check("Ability", ABILITY_IDS, Object.keys(content.abilities));
-  check("Status", STATUS_IDS, Object.keys(content.statuses));
-  check("Equipment", EQUIPMENT_IDS, Object.keys(content.equipment));
+  const checkBoth = (label, catalogIds, liveIds) => {
+    check(label, catalogIds, liveIds);
+    for (const id of liveIds) {
+      if (!catalogIds.includes(id)) {
+        issues.push(label + ' "' + id + '" is in the game but not in the authored data.');
+      }
+    }
+  };
 
-  // The reverse direction is a warning, not an error: not every internal test
-  // fixture needs to be placeable in the editor.
+  // Terrain is still an App.jsx literal, so the catalog still mirrors it and
+  // the reverse direction stays a non-error. See docs/GAMEPLAY_DATA.md.
+  check("Terrain", TERRAIN_IDS, Object.keys(content.terrains));
+
+  checkBoth("Chassis", UNIT_IDS, Object.keys(content.units));
+  checkBoth("AI profile", AI_PROFILE_IDS, Object.keys(content.aiProfiles));
+  checkBoth("Ability", ABILITY_IDS, Object.keys(content.abilities));
+  checkBoth("Status", STATUS_IDS, Object.keys(content.statuses));
+  checkBoth("Equipment", EQUIPMENT_IDS, Object.keys(content.equipment));
+
   return issues;
 }
 

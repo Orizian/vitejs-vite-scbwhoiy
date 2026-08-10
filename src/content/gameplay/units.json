@@ -2,7 +2,7 @@
   "format": "statuszero.gameplay",
   "formatVersion": 1,
   "registry": "units",
-  "description": "Combat unit definitions — the frame. Durability, mobility, sensors, emissions, native abilities and art. Both a player chassis and an enemy archetype are entries here; nothing distinguishes them but usage.",
+  "description": "Combat unit definitions — the frame. Durability, mobility, sensors, emissions and native abilities. Both a player chassis and an enemy archetype are entries here; nothing distinguishes them but usage.",
   "entries": {
     "assaultMech": {
       "name": "Assault Mech",
@@ -15,17 +15,17 @@
         "deployable"
       ],
       "baseStats": {
-        "maxHp": 130,
-        "attack": 95,
-        "magic": 30,
-        "defense": 70,
-        "resistance": 45,
         "accuracy": 88,
+        "attack": 95,
+        "defense": 70,
         "evasion": 8,
-        "speed": 100,
-        "movement": 4,
+        "magic": 30,
         "maxClimb": 1,
-        "maxDrop": 1
+        "maxDrop": 1,
+        "maxHp": 130,
+        "movement": 4,
+        "resistance": 45,
+        "speed": 100
       },
       "abilities": [
         "scatterShot",
@@ -36,14 +36,10 @@
       "defaultAbilityId": "scatterShot",
       "aiProfile": "aggressive",
       "defaultEquipment": {
-        "primaryWeapon": "closeShotgun",
         "armor": "plateArmor",
-        "utilitySystem": "targetingSuite",
-        "coreSystem": "standardCore"
-      },
-      "assets": {
-        "portrait": "ironboundPortrait",
-        "battlefield": "ironboundBattle"
+        "coreSystem": "standardCore",
+        "primaryWeapon": "closeShotgun",
+        "utilitySystem": "targetingSuite"
       }
     },
     "civilianTransport": {
@@ -56,25 +52,21 @@
         "civilian"
       ],
       "baseStats": {
-        "maxHp": 150,
-        "attack": 10,
-        "magic": 10,
-        "defense": 55,
-        "resistance": 45,
         "accuracy": 60,
+        "attack": 10,
+        "defense": 55,
         "evasion": 5,
-        "speed": 70,
-        "movement": 3,
+        "magic": 10,
         "maxClimb": 1,
-        "maxDrop": 1
+        "maxDrop": 1,
+        "maxHp": 150,
+        "movement": 3,
+        "resistance": 45,
+        "speed": 70
       },
       "abilities": [],
       "defaultAbilityId": null,
-      "aiProfile": "cautious",
-      "assets": {
-        "portrait": "fieldMedicPortrait",
-        "battlefield": "fieldMedicBattle"
-      }
+      "aiProfile": "cautious"
     },
     "fieldMedic": {
       "name": "Field Medic",
@@ -82,26 +74,22 @@
       "glyph": "M",
       "description": "Keeps the line alive; the heal needs a full activation to recharge.",
       "baseStats": {
-        "maxHp": 95,
-        "attack": 35,
-        "magic": 60,
-        "defense": 35,
-        "resistance": 45,
-        "speed": 110,
         "accuracy": 100,
+        "attack": 35,
+        "defense": 35,
         "evasion": 100,
-        "movement": 4
+        "magic": 60,
+        "maxHp": 95,
+        "movement": 4,
+        "resistance": 45,
+        "speed": 110
       },
       "abilities": [
         "basicHeal",
         "quickStrike"
       ],
       "defaultAbilityId": "quickStrike",
-      "aiProfile": "support",
-      "assets": {
-        "portrait": "fieldMedicPortrait",
-        "battlefield": "fieldMedicBattle"
-      }
+      "aiProfile": "support"
     },
     "governmentCommander": {
       "name": "Government Commander",
@@ -115,17 +103,17 @@
         "elite"
       ],
       "baseStats": {
-        "maxHp": 160,
-        "attack": 105,
-        "magic": 45,
-        "defense": 70,
-        "resistance": 60,
         "accuracy": 94,
+        "attack": 105,
+        "defense": 70,
         "evasion": 15,
-        "speed": 125,
-        "movement": 4,
+        "magic": 45,
         "maxClimb": 1,
-        "maxDrop": 2
+        "maxDrop": 2,
+        "maxHp": 160,
+        "movement": 4,
+        "resistance": 60,
+        "speed": 125
       },
       "abilities": [
         "scatterShot",
@@ -134,11 +122,7 @@
         "stabilize"
       ],
       "defaultAbilityId": "scatterShot",
-      "aiProfile": "aggressive",
-      "assets": {
-        "portrait": "ironboundPortrait",
-        "battlefield": "ironboundBattle"
-      }
+      "aiProfile": "aggressive"
     },
     "governmentDrone": {
       "name": "Repair Drone",
@@ -151,28 +135,24 @@
         "government"
       ],
       "baseStats": {
-        "maxHp": 45,
-        "attack": 20,
-        "magic": 55,
-        "defense": 30,
-        "resistance": 30,
         "accuracy": 86,
+        "attack": 20,
+        "defense": 30,
         "evasion": 18,
-        "speed": 115,
-        "movement": 4,
+        "magic": 55,
         "maxClimb": 1,
-        "maxDrop": 2
+        "maxDrop": 2,
+        "maxHp": 45,
+        "movement": 4,
+        "resistance": 30,
+        "speed": 115
       },
       "abilities": [
         "droneWeld",
         "fieldRepair"
       ],
       "defaultAbilityId": "droneWeld",
-      "aiProfile": "support",
-      "assets": {
-        "portrait": "fieldMedicPortrait",
-        "battlefield": "fieldMedicBattle"
-      }
+      "aiProfile": "support"
     },
     "heavyEnforcer": {
       "name": "Heavy Enforcer",
@@ -185,28 +165,24 @@
         "government"
       ],
       "baseStats": {
-        "maxHp": 145,
-        "attack": 90,
-        "magic": 20,
-        "defense": 75,
-        "resistance": 45,
         "accuracy": 84,
+        "attack": 90,
+        "defense": 75,
         "evasion": 5,
-        "speed": 85,
-        "movement": 3,
+        "magic": 20,
         "maxClimb": 1,
-        "maxDrop": 1
+        "maxDrop": 1,
+        "maxHp": 145,
+        "movement": 3,
+        "resistance": 45,
+        "speed": 85
       },
       "abilities": [
         "scatterShot",
         "stabilize"
       ],
       "defaultAbilityId": "scatterShot",
-      "aiProfile": "aggressive",
-      "assets": {
-        "portrait": "ironboundPortrait",
-        "battlefield": "ironboundBattle"
-      }
+      "aiProfile": "aggressive"
     },
     "ironbound": {
       "name": "Ironbound",
@@ -214,25 +190,21 @@
       "glyph": "I",
       "description": "Slow armoured vanguard that hits hard when it finally acts.",
       "baseStats": {
-        "maxHp": 120,
-        "attack": 70,
-        "magic": 10,
-        "defense": 40,
-        "resistance": 35,
-        "speed": 85,
         "accuracy": 100,
+        "attack": 70,
+        "defense": 40,
         "evasion": 85,
-        "movement": 3
+        "magic": 10,
+        "maxHp": 120,
+        "movement": 3,
+        "resistance": 35,
+        "speed": 85
       },
       "abilities": [
         "heavyBlow"
       ],
       "defaultAbilityId": "heavyBlow",
-      "aiProfile": "aggressive",
-      "assets": {
-        "portrait": "ironboundPortrait",
-        "battlefield": "ironboundBattle"
-      }
+      "aiProfile": "aggressive"
     },
     "lightPursuit": {
       "name": "Light Pursuit Mech",
@@ -245,27 +217,23 @@
         "government"
       ],
       "baseStats": {
-        "maxHp": 55,
-        "attack": 70,
-        "magic": 15,
-        "defense": 25,
-        "resistance": 20,
         "accuracy": 88,
+        "attack": 70,
+        "defense": 25,
         "evasion": 25,
-        "speed": 145,
-        "movement": 6,
+        "magic": 15,
         "maxClimb": 2,
-        "maxDrop": 2
+        "maxDrop": 2,
+        "maxHp": 55,
+        "movement": 6,
+        "resistance": 20,
+        "speed": 145
       },
       "abilities": [
         "burstFire"
       ],
       "defaultAbilityId": "burstFire",
-      "aiProfile": "aggressive",
-      "assets": {
-        "portrait": "swiftbladePortrait",
-        "battlefield": "swiftbladeBattle"
-      }
+      "aiProfile": "aggressive"
     },
     "missileCarrier": {
       "name": "Missile Carrier",
@@ -278,17 +246,17 @@
         "government"
       ],
       "baseStats": {
-        "maxHp": 70,
-        "attack": 95,
-        "magic": 40,
-        "defense": 35,
-        "resistance": 30,
         "accuracy": 90,
+        "attack": 95,
+        "defense": 35,
         "evasion": 8,
-        "speed": 95,
-        "movement": 3,
+        "magic": 40,
         "maxClimb": 1,
-        "maxDrop": 1
+        "maxDrop": 1,
+        "maxHp": 70,
+        "movement": 3,
+        "resistance": 30,
+        "speed": 95
       },
       "abilities": [
         "handCannon",
@@ -297,11 +265,7 @@
         "targetMark"
       ],
       "defaultAbilityId": "precisionShot",
-      "aiProfile": "cautious",
-      "assets": {
-        "portrait": "venomAdeptPortrait",
-        "battlefield": "venomAdeptBattle"
-      }
+      "aiProfile": "cautious"
     },
     "repairDroneMech": {
       "name": "Repair Drone",
@@ -315,27 +279,23 @@
         "summoned"
       ],
       "baseStats": {
-        "maxHp": 35,
-        "attack": 20,
-        "magic": 45,
-        "defense": 25,
-        "resistance": 25,
         "accuracy": 85,
+        "attack": 20,
+        "defense": 25,
         "evasion": 20,
-        "speed": 110,
-        "movement": 4,
+        "magic": 45,
         "maxClimb": 1,
-        "maxDrop": 2
+        "maxDrop": 2,
+        "maxHp": 35,
+        "movement": 4,
+        "resistance": 25,
+        "speed": 110
       },
       "abilities": [
         "droneWeld"
       ],
       "defaultAbilityId": "droneWeld",
-      "aiProfile": "support",
-      "assets": {
-        "portrait": "fieldMedicPortrait",
-        "battlefield": "fieldMedicBattle"
-      }
+      "aiProfile": "support"
     },
     "rifleGrunt": {
       "name": "Rifle Grunt",
@@ -348,27 +308,23 @@
         "government"
       ],
       "baseStats": {
-        "maxHp": 60,
-        "attack": 65,
-        "magic": 15,
-        "defense": 30,
-        "resistance": 20,
         "accuracy": 84,
+        "attack": 65,
+        "defense": 30,
         "evasion": 10,
-        "speed": 100,
-        "movement": 3,
+        "magic": 15,
         "maxClimb": 1,
-        "maxDrop": 1
+        "maxDrop": 1,
+        "maxHp": 60,
+        "movement": 3,
+        "resistance": 20,
+        "speed": 100
       },
       "abilities": [
         "handCannon"
       ],
       "defaultAbilityId": "handCannon",
-      "aiProfile": "aggressive",
-      "assets": {
-        "portrait": "swiftbladePortrait",
-        "battlefield": "swiftbladeBattle"
-      }
+      "aiProfile": "aggressive"
     },
     "securityTurret": {
       "name": "Security Turret",
@@ -382,27 +338,23 @@
         "emplacement"
       ],
       "baseStats": {
-        "maxHp": 80,
-        "attack": 85,
-        "magic": 15,
-        "defense": 60,
-        "resistance": 40,
         "accuracy": 92,
+        "attack": 85,
+        "defense": 60,
         "evasion": 0,
-        "speed": 90,
-        "movement": 0,
+        "magic": 15,
         "maxClimb": 0,
-        "maxDrop": 0
+        "maxDrop": 0,
+        "maxHp": 80,
+        "movement": 0,
+        "resistance": 40,
+        "speed": 90
       },
       "abilities": [
         "handCannon"
       ],
       "defaultAbilityId": "handCannon",
-      "aiProfile": "cautious",
-      "assets": {
-        "portrait": "ironboundPortrait",
-        "battlefield": "ironboundBattle"
-      }
+      "aiProfile": "cautious"
     },
     "sniperMech": {
       "name": "Sniper Mech",
@@ -415,17 +367,17 @@
         "deployable"
       ],
       "baseStats": {
-        "maxHp": 90,
-        "attack": 105,
-        "magic": 30,
-        "defense": 40,
-        "resistance": 35,
         "accuracy": 96,
+        "attack": 105,
+        "defense": 40,
         "evasion": 12,
-        "speed": 105,
-        "movement": 3,
+        "magic": 30,
         "maxClimb": 1,
-        "maxDrop": 2
+        "maxDrop": 2,
+        "maxHp": 90,
+        "movement": 3,
+        "resistance": 35,
+        "speed": 105
       },
       "abilities": [
         "handCannon",
@@ -437,14 +389,10 @@
       "defaultAbilityId": "handCannon",
       "aiProfile": "cautious",
       "defaultEquipment": {
-        "primaryWeapon": "longRifle",
         "armor": "lightPlating",
-        "utilitySystem": "targetingSuite",
-        "coreSystem": "standardCore"
-      },
-      "assets": {
-        "portrait": "venomAdeptPortrait",
-        "battlefield": "venomAdeptBattle"
+        "coreSystem": "standardCore",
+        "primaryWeapon": "longRifle",
+        "utilitySystem": "targetingSuite"
       }
     },
     "stealthMech": {
@@ -458,17 +406,17 @@
         "deployable"
       ],
       "baseStats": {
-        "maxHp": 85,
-        "attack": 90,
-        "magic": 25,
-        "defense": 35,
-        "resistance": 30,
         "accuracy": 92,
+        "attack": 90,
+        "defense": 35,
         "evasion": 35,
-        "speed": 150,
-        "movement": 6,
+        "magic": 25,
         "maxClimb": 2,
-        "maxDrop": 2
+        "maxDrop": 2,
+        "maxHp": 85,
+        "movement": 6,
+        "resistance": 30,
+        "speed": 150
       },
       "abilities": [
         "burstFire",
@@ -479,14 +427,10 @@
       "defaultAbilityId": "burstFire",
       "aiProfile": "aggressive",
       "defaultEquipment": {
-        "primaryWeapon": "autogun",
         "armor": "lightPlating",
-        "utilitySystem": "jumpJets",
-        "coreSystem": "standardCore"
-      },
-      "assets": {
-        "portrait": "swiftbladePortrait",
-        "battlefield": "swiftbladeBattle"
+        "coreSystem": "standardCore",
+        "primaryWeapon": "autogun",
+        "utilitySystem": "jumpJets"
       }
     },
     "supplyDepot": {
@@ -499,25 +443,21 @@
         "structure"
       ],
       "baseStats": {
-        "maxHp": 55,
-        "attack": 1,
-        "magic": 1,
-        "defense": 20,
-        "resistance": 20,
         "accuracy": 1,
+        "attack": 1,
+        "defense": 20,
         "evasion": 0,
-        "speed": 60,
-        "movement": 0,
+        "magic": 1,
         "maxClimb": 0,
-        "maxDrop": 0
+        "maxDrop": 0,
+        "maxHp": 55,
+        "movement": 0,
+        "resistance": 20,
+        "speed": 60
       },
       "abilities": [],
       "defaultAbilityId": null,
-      "aiProfile": "cautious",
-      "assets": {
-        "portrait": "ironboundPortrait",
-        "battlefield": "ironboundBattle"
-      }
+      "aiProfile": "cautious"
     },
     "supportMech": {
       "name": "Support Mech",
@@ -530,17 +470,17 @@
         "deployable"
       ],
       "baseStats": {
-        "maxHp": 105,
-        "attack": 55,
-        "magic": 85,
-        "defense": 50,
-        "resistance": 55,
         "accuracy": 90,
+        "attack": 55,
+        "defense": 50,
         "evasion": 15,
-        "speed": 115,
-        "movement": 4,
+        "magic": 85,
         "maxClimb": 1,
-        "maxDrop": 1
+        "maxDrop": 1,
+        "maxHp": 105,
+        "movement": 4,
+        "resistance": 55,
+        "speed": 115
       },
       "abilities": [
         "arcWelder",
@@ -551,14 +491,10 @@
       "defaultAbilityId": "arcWelder",
       "aiProfile": "support",
       "defaultEquipment": {
-        "primaryWeapon": "arcWelderRig",
         "armor": "plateArmor",
-        "utilitySystem": "repairKit",
-        "coreSystem": "standardCore"
-      },
-      "assets": {
-        "portrait": "fieldMedicPortrait",
-        "battlefield": "fieldMedicBattle"
+        "coreSystem": "standardCore",
+        "primaryWeapon": "arcWelderRig",
+        "utilitySystem": "repairKit"
       }
     },
     "swiftblade": {
@@ -567,25 +503,21 @@
       "glyph": "S",
       "description": "Fragile skirmisher who acts roughly twice as often as anyone else.",
       "baseStats": {
-        "maxHp": 70,
-        "attack": 55,
-        "magic": 25,
-        "defense": 30,
-        "resistance": 25,
-        "speed": 200,
         "accuracy": 105,
+        "attack": 55,
+        "defense": 30,
         "evasion": 115,
-        "movement": 5
+        "magic": 25,
+        "maxHp": 70,
+        "movement": 5,
+        "resistance": 25,
+        "speed": 200
       },
       "abilities": [
         "quickStrike"
       ],
       "defaultAbilityId": "quickStrike",
-      "aiProfile": "aggressive",
-      "assets": {
-        "portrait": "swiftbladePortrait",
-        "battlefield": "swiftbladeBattle"
-      }
+      "aiProfile": "aggressive"
     },
     "testChanneler": {
       "name": "Test Channeler",
@@ -596,15 +528,15 @@
         "caster"
       ],
       "baseStats": {
-        "maxHp": 70,
-        "attack": 40,
-        "magic": 90,
-        "defense": 30,
-        "resistance": 40,
         "accuracy": 95,
+        "attack": 40,
+        "defense": 30,
         "evasion": 10,
-        "speed": 120,
-        "movement": 4
+        "magic": 90,
+        "maxHp": 70,
+        "movement": 4,
+        "resistance": 40,
+        "speed": 120
       },
       "resources": {
         "mana": {
@@ -625,11 +557,7 @@
         "guardAura"
       ],
       "defaultAbilityId": "forcePush",
-      "aiProfile": "cautious",
-      "assets": {
-        "portrait": "venomAdeptPortrait",
-        "battlefield": "venomAdeptBattle"
-      }
+      "aiProfile": "cautious"
     },
     "testSkeleton": {
       "name": "Test Skeleton",
@@ -641,25 +569,21 @@
         "summoned"
       ],
       "baseStats": {
-        "maxHp": 30,
-        "attack": 40,
-        "magic": 10,
-        "defense": 20,
-        "resistance": 10,
         "accuracy": 85,
+        "attack": 40,
+        "defense": 20,
         "evasion": 5,
-        "speed": 90,
-        "movement": 3
+        "magic": 10,
+        "maxHp": 30,
+        "movement": 3,
+        "resistance": 10,
+        "speed": 90
       },
       "abilities": [
         "quickStrike"
       ],
       "defaultAbilityId": "quickStrike",
-      "aiProfile": "aggressive",
-      "assets": {
-        "portrait": "swiftbladePortrait",
-        "battlefield": "swiftbladeBattle"
-      }
+      "aiProfile": "aggressive"
     },
     "venomAdept": {
       "name": "Venom Adept",
@@ -667,26 +591,22 @@
       "glyph": "V",
       "description": "Ranged attrition: poison over time and timeline manipulation.",
       "baseStats": {
-        "maxHp": 90,
-        "attack": 40,
-        "magic": 55,
-        "defense": 30,
-        "resistance": 40,
-        "speed": 105,
         "accuracy": 105,
+        "attack": 40,
+        "defense": 30,
         "evasion": 100,
-        "movement": 4
+        "magic": 55,
+        "maxHp": 90,
+        "movement": 4,
+        "resistance": 40,
+        "speed": 105
       },
       "abilities": [
         "poisonDart",
         "delayStrike"
       ],
       "defaultAbilityId": "poisonDart",
-      "aiProfile": "cautious",
-      "assets": {
-        "portrait": "venomAdeptPortrait",
-        "battlefield": "venomAdeptBattle"
-      }
+      "aiProfile": "cautious"
     }
   }
 }

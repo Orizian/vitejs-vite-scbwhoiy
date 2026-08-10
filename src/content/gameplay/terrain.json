@@ -1,0 +1,50 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "terrain",
+  "description": "The tile palette: what it costs to cross, whether it can be crossed at all, whether it blocks sight, and what standing in it does. `char` and `paint` are the map editor's swatch, kept here so the palette and the rules are one entry rather than two files that can disagree.",
+  "entries": {
+    "burningGround": {
+      "name": "Burning Ground",
+      "char": "!",
+      "paint": "#7c2d12",
+      "tags": [
+        "hazard",
+        "created"
+      ],
+      "walkable": true,
+      "movementCost": 2,
+      "blocksLineOfSight": false,
+      "modifiers": {
+        "evasionFlat": -5
+      }
+    },
+    "plain": {
+      "name": "Open Ground",
+      "char": ".",
+      "paint": "#1e293b",
+      "walkable": true,
+      "movementCost": 1,
+      "blocksLineOfSight": false,
+      "modifiers": {}
+    },
+    "rough": {
+      "name": "Rubble",
+      "char": "~",
+      "paint": "#334155",
+      "walkable": true,
+      "movementCost": 2,
+      "blocksLineOfSight": false,
+      "modifiers": {}
+    },
+    "wall": {
+      "name": "Wall",
+      "char": "#",
+      "paint": "#475569",
+      "walkable": false,
+      "movementCost": null,
+      "blocksLineOfSight": true,
+      "modifiers": {}
+    }
+  }
+}

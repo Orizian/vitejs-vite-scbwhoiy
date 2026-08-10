@@ -43,7 +43,7 @@ export const REGISTRY_KINDS = {
     path: "src/content/gameplay/units.json",
     summary:
       "Combat unit definitions — the frame. Durability, mobility, sensors, " +
-      "emissions, native abilities and art. Both a player chassis and an enemy " +
+      "emissions and native abilities. Both a player chassis and an enemy " +
       "archetype are entries here; nothing distinguishes them but usage.",
     fieldOrder: [
       "name",
@@ -58,8 +58,7 @@ export const REGISTRY_KINDS = {
       "defaultAbilityId",
       "aiProfile",
       "perception",
-      "defaultEquipment",
-      "assets"
+      "defaultEquipment"
     ]
   },
   abilities: {
@@ -78,10 +77,10 @@ export const REGISTRY_KINDS = {
       "timing",
       "costs",
       "conditions",
+      "requirementText",
       "effects",
       "tags",
-      "ui",
-      "assets"
+      "ui"
     ]
   },
   equipment: {
@@ -101,8 +100,7 @@ export const REGISTRY_KINDS = {
       "modifiers",
       "perception",
       "grantsAbilities",
-      "removesAbilities",
-      "assets"
+      "removesAbilities"
     ]
   },
   statuses: {
@@ -126,8 +124,8 @@ export const REGISTRY_KINDS = {
       "untargetable",
       "hidden",
       "removedOnHostileAction",
-      "perception",
-      "assets"
+      "removedOnMovement",
+      "perception"
     ]
   },
   aiProfiles: {
@@ -157,6 +155,28 @@ export const REGISTRY_KINDS = {
     path: "src/content/gameplay/perks.json",
     summary: "Per-operator progression choices, applied as stat modifiers.",
     fieldOrder: ["name", "description", "modifiers"]
+  },
+  terrain: {
+    id: "terrain",
+    label: "Terrain",
+    singular: "terrain type",
+    path: "src/content/gameplay/terrain.json",
+    summary:
+      "The tile palette: what it costs to cross, whether it can be crossed at " +
+      "all, whether it blocks sight, and what standing in it does. `char` and " +
+      "`paint` are the map editor's swatch, kept here so the palette and the " +
+      "rules are one entry rather than two files that can disagree.",
+    fieldOrder: [
+      "name",
+      "char",
+      "paint",
+      "description",
+      "tags",
+      "walkable",
+      "movementCost",
+      "blocksLineOfSight",
+      "modifiers"
+    ]
   }
 };
 
@@ -179,6 +199,19 @@ export function kindForPath(path) {
  * order, no transient fields, and a trailing newline so diffs stay clean.
  * -------------------------------------------------------------*/
 
+/**
+ * Ordered keys, at every depth.
+ *
+ * Declared fields first, in the order the registry declares them; everything
+ * else alphabetically. The second half is not decoration — authored key order
+ * is an accident of how someone typed, and letting it through would mean two
+ * people entering the same numbers produce different bytes, which quietly
+ * breaks both the diff and the export.
+ *
+ * Nested objects get the same treatment: a stat block reads slightly better in
+ * its authored order, but "slightly better" is not worth a phantom change the
+ * next time a field is cleared and retyped.
+ */
 function orderKeys(value, fieldOrder) {
   if (Array.isArray(value)) return value.map((entry) => orderKeys(entry, []));
   if (!value || typeof value !== "object") return value;
@@ -188,10 +221,7 @@ function orderKeys(value, fieldOrder) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
     out[key] = orderKeys(value[key], []);
   }
-  // Nested objects keep their own authored key order rather than being sorted:
-  // a stat block reads better as maxHp, attack, defense than alphabetically,
-  // and the authored order is already stable.
-  for (const key of Object.keys(value)) {
+  for (const key of Object.keys(value).sort()) {
     if (fieldOrder.includes(key)) continue;
     out[key] = orderKeys(value[key], []);
   }

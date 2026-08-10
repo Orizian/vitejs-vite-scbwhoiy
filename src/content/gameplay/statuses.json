@@ -13,17 +13,14 @@
         "mechanical"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 2
+        "amount": 2,
+        "type": "targetActivations"
       },
       "modifiers": {
         "accuracyFlat": 25,
         "attackFlat": 25
       },
       "triggers": [],
-      "assets": {
-        "icon": "iconHoldPosition"
-      },
       "removedOnMovement": true
     },
     "cloaked": {
@@ -35,8 +32,8 @@
         "mechanical"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 2
+        "amount": 2,
+        "type": "targetActivations"
       },
       "modifiers": {},
       "triggers": [],
@@ -47,9 +44,6 @@
         "emissions": {
           "optical": 0
         }
-      },
-      "assets": {
-        "icon": "iconHaste"
       }
     },
     "haste": {
@@ -60,14 +54,11 @@
         "speed"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 3
+        "amount": 3,
+        "type": "targetActivations"
       },
       "modifiers": {
         "speedMultiplier": 1.3
-      },
-      "assets": {
-        "icon": "iconHaste"
       }
     },
     "marked": {
@@ -79,17 +70,14 @@
         "mechanical"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 3
+        "amount": 3,
+        "type": "targetActivations"
       },
       "modifiers": {
-        "evasionFlat": -25,
-        "defenseFlat": -15
+        "defenseFlat": -15,
+        "evasionFlat": -25
       },
-      "triggers": [],
-      "assets": {
-        "icon": "iconDelayStrike"
-      }
+      "triggers": []
     },
     "overwatching": {
       "name": "Overwatch Stance",
@@ -100,17 +88,14 @@
         "mechanical"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 2
+        "amount": 2,
+        "type": "targetActivations"
       },
       "modifiers": {
         "accuracyFlat": 15,
         "evasionFlat": 10
       },
       "triggers": [],
-      "assets": {
-        "icon": "iconQuickStrike"
-      },
       "removedOnMovement": true
     },
     "poison": {
@@ -121,24 +106,21 @@
         "damageOverTime"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 3
+        "amount": 3,
+        "type": "targetActivations"
       },
       "triggers": [
         {
-          "event": "activationStart",
           "effects": [
             {
-              "type": "damage",
               "formula": "percentMaxHp",
-              "power": 6
+              "power": 6,
+              "type": "damage"
             }
-          ]
+          ],
+          "event": "activationStart"
         }
-      ],
-      "assets": {
-        "icon": "iconPoison"
-      }
+      ]
     },
     "reinforced": {
       "name": "Reinforced",
@@ -149,17 +131,14 @@
         "mechanical"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 3
+        "amount": 3,
+        "type": "targetActivations"
       },
       "modifiers": {
         "defenseFlat": 25,
         "resistanceFlat": 15
       },
-      "triggers": [],
-      "assets": {
-        "icon": "iconBasicHeal"
-      }
+      "triggers": []
     },
     "slow": {
       "name": "Slow",
@@ -169,14 +148,11 @@
         "speed"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 3
+        "amount": 3,
+        "type": "targetActivations"
       },
       "modifiers": {
         "speedMultiplier": 0.7
-      },
-      "assets": {
-        "icon": "iconSlow"
       }
     },
     "stun": {
@@ -187,13 +163,10 @@
         "control"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 1
+        "amount": 1,
+        "type": "targetActivations"
       },
-      "preventsAction": true,
-      "assets": {
-        "icon": "iconStun"
-      }
+      "preventsAction": true
     },
     "surefooted": {
       "name": "Surefooted",
@@ -203,17 +176,14 @@
         "traversal"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 2
+        "amount": 2,
+        "type": "targetActivations"
       },
       "modifiers": {
         "maxClimbFlat": 2,
         "maxDropFlat": 2
       },
-      "triggers": [],
-      "assets": {
-        "icon": "iconHaste"
-      }
+      "triggers": []
     },
     "systemsFault": {
       "name": "Systems Fault",
@@ -224,17 +194,14 @@
         "debuff"
       ],
       "duration": {
-        "type": "targetActivations",
-        "amount": 3
+        "amount": 3,
+        "type": "targetActivations"
       },
       "modifiers": {
         "accuracyFlat": -20,
         "speedMultiplier": 0.85
       },
-      "triggers": [],
-      "assets": {
-        "icon": "iconSlow"
-      }
+      "triggers": []
     }
   }
 }

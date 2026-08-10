@@ -1,0 +1,149 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-test-arena",
+  "name": "Developer Test Arena",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. The arena the Gameplay Data Studio's Test Unit drops into. Laid out so one battle exercises the circumstances that usually reveal a bad number: open ground to measure movement, cover and a wall to break line of sight, elevation, a durable target that survives long enough to read damage against, a fast target that does not, a cluster for area effects, and a sensor-equipped watcher for perception work. Balance is deliberately flat; this is a measuring device.",
+  "map": {
+    "name": "Arena",
+    "width": 20,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "....................",
+      "....................",
+      "....................",
+      "..........#####.....",
+      "..........#####.....",
+      "....................",
+      "......~~~~..........",
+      "......~~~~..........",
+      "....................",
+      "..####..............",
+      "..####..............",
+      "....................",
+      "....................",
+      "....................",
+      "....................",
+      "...................."
+    ],
+    "elevationRows": [
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000001111100000",
+      "00000000001111100000",
+      "00000000000000000000",
+      "00000011110000000000",
+      "00000011110000000000",
+      "00000000000000000000",
+      "00111100000000000000",
+      "00111100000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000",
+      "00000000000000000000"
+    ]
+  },
+  "teams": [
+    { "id": "player", "name": "Test Subject", "controller": "human", "marker": "▲", "accent": "emerald" },
+    { "id": "foe", "name": "Targets", "controller": "ai", "marker": "■", "accent": "rose" }
+  ],
+  "units": [
+    {
+      "ref": "subject",
+      "definitionId": "assaultMech",
+      "teamId": "player",
+      "x": 3,
+      "y": 14,
+      "facing": "northeast",
+      "note": "The unit under test. Test Unit swaps this chassis and loadout for whatever is selected in the Studio."
+    },
+    {
+      "ref": "durableTarget",
+      "definitionId": "heavyEnforcer",
+      "teamId": "foe",
+      "x": 10,
+      "y": 8,
+      "facing": "southwest",
+      "note": "Survives long enough to read damage numbers against."
+    },
+    {
+      "ref": "mobileTarget",
+      "definitionId": "lightPursuit",
+      "teamId": "foe",
+      "x": 16,
+      "y": 12,
+      "facing": "southwest",
+      "note": "Fast and fragile: shows whether something can actually catch it."
+    },
+    {
+      "ref": "clusterA",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 15,
+      "y": 6,
+      "facing": "southwest",
+      "note": "Cluster for area effects."
+    },
+    {
+      "ref": "clusterB",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 16,
+      "y": 6,
+      "facing": "southwest"
+    },
+    {
+      "ref": "clusterC",
+      "definitionId": "rifleGrunt",
+      "teamId": "foe",
+      "x": 15,
+      "y": 7,
+      "facing": "southwest"
+    },
+    {
+      "ref": "watcher",
+      "definitionId": "securityTurret",
+      "teamId": "foe",
+      "x": 4,
+      "y": 3,
+      "facing": "southeast",
+      "equipment": { "utilitySystem": "thermalOptics" },
+      "note": "Thermal optics: sees through concealment, so stealth work has something to defeat."
+    }
+  ],
+  "regions": [
+    {
+      "id": "openGround",
+      "name": "Open ground",
+      "color": "#38bdf8",
+      "kind": "generic",
+      "tiles": [
+        { "x": 2, "y": 12 }, { "x": 3, "y": 12 }, { "x": 4, "y": 12 }, { "x": 5, "y": 12 },
+        { "x": 6, "y": 12 }, { "x": 7, "y": 12 }, { "x": 8, "y": 12 }, { "x": 9, "y": 12 },
+        { "x": 10, "y": 12 }, { "x": 11, "y": 12 }, { "x": 12, "y": 12 }
+      ]
+    }
+  ],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Measure something",
+    "teamId": "player",
+    "opposingTeamId": "foe"
+  },
+  "factions": { "relationships": [] },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": { "briefing": [], "victory": [], "defeat": [] },
+  "midBattle": []
+}

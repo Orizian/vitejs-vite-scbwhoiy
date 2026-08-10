@@ -6,24 +6,24 @@
   "entries": {
     "aggressive": {
       "expectedDamage": 1,
-      "lethalBonus": 50,
       "healing": 0.3,
+      "lethalBonus": 50,
       "selfDanger": -0.5,
       "targetProximity": 2,
       "timelineDelay": 0.1
     },
     "cautious": {
       "expectedDamage": 0.7,
-      "lethalBonus": 30,
       "healing": 1,
+      "lethalBonus": 30,
       "selfDanger": -2,
       "targetProximity": 0.5,
       "timelineDelay": 0.1
     },
     "support": {
       "expectedDamage": 0.4,
-      "lethalBonus": 20,
       "healing": 1.5,
+      "lethalBonus": 20,
       "selfDanger": -1.2,
       "targetProximity": 0.5,
       "timelineDelay": 0.2

@@ -144,9 +144,9 @@ Against the GDD §8 catalogue. **Met** / **Partial** / **Missing**.
 | BRN-01 | Outcome fact/flag system | **Met** | The best-implemented advanced requirement in the project. Facts are derived from battle state, and the architecture audit *tests* that a dialogue promise does not set the flag. |
 | SAV-01 | Mid-mission save/resume | **Met** | **[CLOSED]** `serializeBattle` / `deserializeBattle` cover RNG state, timeline, terrain overrides, factions, the objective stack and the whole mission runtime including the half-executed beat. Verified in a browser: saving mid-cinematic and reloading resumes at the same action and never replays it. |
 | AUD-01 | Contextual audio control | **Partial** | Per-screen and per-mission music with fallback chains. No per-phase changes or stingers. |
-| DBG-01 | Mission authoring/debug tools | **Partial** | Strong developer panel, validation panel, soak tests, replay check, a Knowledge tab showing every faction's contacts and clocks, and an Intel overlay marking last-known positions. No phase jump, flag setting or group spawning. |
+| DBG-01 | Mission authoring/debug tools | **Partial** | Strong developer panel, validation panel, soak tests, replay check, a Knowledge tab showing every faction's contacts and clocks, and an Intel overlay marking last-known positions. Three authoring surfaces now share one shell: missions, scenes and the **Gameplay Data Studio** (`docs/GAMEPLAY_DATA.md`), which edits the authored registries the game actually loads and exports a bundle that can be applied to the repository mechanically. Still no phase jump, flag setting or group spawning. |
 
-**Tally after the knowledge phase: 19 met, 11 partial, 10 missing.** (Was 17 / 11 / 12 after reactions, 15 / 12 / 13 after mission scripting, and 7 / 13 / 20 at the original audit.)
+**Tally: 19 met, 11 partial, 10 missing.** (Was 17 / 11 / 12 after reactions, 15 / 12 / 13 after mission scripting, and 7 / 13 / 20 at the original audit.) The main-menu, scene-editor and gameplay-data phases since then were tooling and integration rather than simulation requirements, so they moved DBG-01's substance without moving the count.
 
 Of the ten still missing, most are downstream of the four character kits and the subsystem-damage model. The four foundational systems — mission scripting, the faction matrix, reactions and now perception — are all in place, and each of the remaining kits is content plus a resource economy on top of them rather than new architecture.
 
@@ -239,10 +239,10 @@ This is not an engine problem, but it is a **planning** problem: thirteen missio
 
 `src/App.jsx` is 29,530 lines containing content, engine, presentation adapter, tests and UI. The internal discipline is genuinely good — the divider comments are respected and the architecture audit enforces the boundary — but:
 
-- Editing content means opening the engine.
+- Editing content means opening the engine. *(Largely fixed for gameplay data: units, abilities, equipment, statuses, AI profiles, operators, perks and terrain are now `src/content/gameplay/*.json`, edited in the Studio. What remains inside App.jsx is the campaign structure, the balance formulas and the engine itself.)*
 - The test suite cannot run outside a browser (addressed in this pass, see §6).
 - Merge conflicts between a designer editing content and a programmer editing the engine are guaranteed.
-- Any tool that wants to know what a `rifleGrunt` is has to import the entire game.
+- Any tool that wants to know what a `rifleGrunt` is has to import the entire game. *(Fixed: `catalog.js` derives the vocabulary from the authored JSON, so the editor never loads App.jsx.)*
 
 **Fix:** split along the boundaries that already exist as comments — `content/`, `engine/`, `presentation/`, `ui/`, `tests/`. The audit function already knows where the lines are; it will keep them honest through the move. This is low-risk, mechanical and pays back immediately.
 
@@ -251,6 +251,8 @@ This is not an engine problem, but it is a **planning** problem: thirteen missio
 `CONTENT` is constructed at module scope and `deepFreeze`d (line 3745). Nothing can be registered after load. That is a defensible choice for integrity, but it means hot-reloading a mission, loading DLC-style content, or letting a tool inject a map all require a page reload.
 
 Worth revisiting when App.jsx is split: a `createContentRegistry()` that can be re-run, with the frozen instance as the default export.
+
+The Studio works *with* this rather than around it: a gameplay draft is written to a storage slot and takes effect on the next load, which is why `Test Unit` opens a tab rather than mutating a live registry. That is the honest consequence of the freeze, and it is cheap. If `createContentRegistry()` ever lands, Test Unit becomes instant and nothing else about the workflow changes.
 
 ---
 

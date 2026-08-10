@@ -27,8 +27,9 @@ import {
 } from "../content/mission-format.js";
 import { PLAYTEST_STORAGE_KEY } from "../content/mission-registry.js";
 import { terrainById } from "../content/catalog.js";
-import SceneEditor from "./SceneEditor.jsx";
 import { writePreviewScene } from "../content/scene-registry.js";
+import { buildArenaMission } from "../content/gameplay/arena.js";
+import arenaFixture from "../content/missions/fixture-test-arena.json";
 
 /* =========================================================================
  * STATUS ZERO — MISSION EDITOR
@@ -57,8 +58,24 @@ const TABS = [
   { id: "barks", label: "Barks" }
 ];
 
+/* The two secondary authoring modes, split out of the mission editor's chunk.
+ * Opening a map to paint a tile should not download the scene timeline or the
+ * gameplay schema, validation and exchange layers — the same reasoning that
+ * keeps the whole editor out of the game's bundle. */
+const LazySceneEditor = React.lazy(() => import("./SceneEditor.jsx"));
+const LazyGameplayStudio = React.lazy(() => import("./GameplayStudio.jsx"));
+
+function ModeLoading({ label }) {
+  return (
+    <div className="flex h-full w-full items-center justify-center text-[11px] uppercase tracking-[0.24em] text-slate-600">
+      {label}
+    </div>
+  );
+}
+
 const AUTOSAVE_KEY = "statuszero.editor.draft";
 const EDITOR_MODE_KEY = "statuszero.editor.mode";
+const EDITOR_MODES = ["mission", "scene", "gameplay"];
 const HISTORY_LIMIT = 60;
 
 /**
@@ -71,9 +88,10 @@ const HISTORY_LIMIT = 60;
 /**
  * The editor shell.
  *
- * Two authoring modes so far, and they share everything worth sharing: the
- * content catalog, the validation style, the export/import workflow and this
- * chrome. Missions and scenes are different documents, not different tools.
+ * Three authoring modes, and they share everything worth sharing: the content
+ * catalog, the validation style, the export/import workflow and this chrome.
+ * Missions, scenes and gameplay data are different documents, not different
+ * tools — and all three edit the files the game actually loads.
  *
  * @param onScenePreview  Hands a scene up to the host to run in the real game
  *                        player. Absent when the editor runs standalone, where
@@ -82,7 +100,8 @@ const HISTORY_LIMIT = 60;
 export default function Editor({ onExit, onScenePreview }) {
   const [mode, setMode] = React.useState(() => {
     try {
-      return localStorage.getItem(EDITOR_MODE_KEY) === "scene" ? "scene" : "mission";
+      const stored = localStorage.getItem(EDITOR_MODE_KEY);
+      return EDITOR_MODES.includes(stored) ? stored : "mission";
     } catch {
       return "mission";
     }
@@ -139,7 +158,16 @@ export default function Editor({ onExit, onScenePreview }) {
   const fileInput = React.useRef(null);
 
   /* ---- autosave so a refresh never loses work ---- */
+  // Skips the run on mount. What is in state at that point is either exactly
+  // what was just read from storage — writing it back achieves nothing — or a
+  // blank mission nobody asked to save, and saving that would overwrite a
+  // draft another tab is holding. Only an actual edit is worth persisting.
+  const savedOnce = React.useRef(false);
   React.useEffect(() => {
+    if (!savedOnce.current) {
+      savedOnce.current = true;
+      return undefined;
+    }
     const id = setTimeout(() => {
       try {
         localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(mission));
@@ -423,6 +451,26 @@ export default function Editor({ onExit, onScenePreview }) {
     [onScenePreview]
   );
 
+  /* ---- gameplay data test ----
+   * The Studio has already written its draft to the slot the content registry
+   * overlays at import. All that is left is to put the resolved subject into
+   * the arena and open the game, which is the ordinary playtest path — the
+   * battle is created by the same registry, compiler and engine as any other.
+   *
+   * A new tab, and therefore a fresh module graph, is not a workaround: the
+   * engine's CONTENT registry is built once at import and frozen, so a draft
+   * can only reach the simulation on a load that happens after it was written.
+   * Keeping that property is worth a tab. */
+  const testGameplayEntity = React.useCallback((request) => {
+    try {
+      const mission = buildArenaMission(arenaFixture, request.plan);
+      localStorage.setItem(PLAYTEST_STORAGE_KEY, JSON.stringify(mission));
+      window.open("/", "_blank");
+    } catch (error) {
+      alert("Could not open the test arena: " + error.message);
+    }
+  }, []);
+
   const chrome = (children) => (
     <div className="flex h-full w-full flex-col bg-slate-950 text-slate-200">
       <header className="flex items-center gap-2 border-b border-slate-800 bg-slate-900/70 px-3 py-2">
@@ -435,7 +483,7 @@ export default function Editor({ onExit, onScenePreview }) {
         </span>
         {/* Only working editors appear here. A mode that does not exist yet is
          *  not a tab; it is nothing. */}
-        {[["mission", "Missions"], ["scene", "Scenes"]].map(([id, label]) => (
+        {[["mission", "Missions"], ["scene", "Scenes"], ["gameplay", "Gameplay Data"]].map(([id, label]) => (
           <button
             key={id}
             onClick={() => chooseMode(id)}
@@ -455,7 +503,19 @@ export default function Editor({ onExit, onScenePreview }) {
   );
 
   if (mode === "scene") {
-    return chrome(<SceneEditor onPreview={previewScene} previewLabel="Preview" />);
+    return chrome(
+      <React.Suspense fallback={<ModeLoading label="Loading scene editor…" />}>
+        <LazySceneEditor onPreview={previewScene} previewLabel="Preview" />
+      </React.Suspense>
+    );
+  }
+
+  if (mode === "gameplay") {
+    return chrome(
+      <React.Suspense fallback={<ModeLoading label="Loading gameplay data…" />}>
+        <LazyGameplayStudio onTestUnit={testGameplayEntity} />
+      </React.Suspense>
+    );
   }
 
   return chrome(

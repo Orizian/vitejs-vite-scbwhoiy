@@ -24,6 +24,7 @@ import equipment from "./equipment.json";
 import aiProfiles from "./ai-profiles.json";
 import operators from "./operators.json";
 import perks from "./perks.json";
+import terrain from "./terrain.json";
 
 export const GAMEPLAY_DRAFT_STORAGE_KEY = "statuszero.gameplay.draft";
 
@@ -34,7 +35,8 @@ const CANONICAL_FILES = {
   equipment,
   aiProfiles,
   operators,
-  perks
+  perks,
+  terrain
 };
 
 /** The data exactly as it ships, before any draft. */
@@ -110,7 +112,8 @@ function applyDraft(canonical, draft) {
   return { data, active: Object.keys(counts).length > 0, counts };
 }
 
-const applied = applyDraft(CANONICAL_GAMEPLAY, readDraft());
+const draftAtLoad = readDraft();
+const applied = applyDraft(CANONICAL_GAMEPLAY, draftAtLoad);
 
 /** What the game actually runs on. */
 export const GAMEPLAY_CONTENT = applied.data;
@@ -118,6 +121,15 @@ export const GAMEPLAY_CONTENT = applied.data;
 /** True while a Studio draft is shaping the running content. */
 export const GAMEPLAY_DRAFT_ACTIVE = applied.active;
 export const GAMEPLAY_DRAFT_COUNTS = applied.counts;
+
+/**
+ * What the Studio said it was testing, if this load came from Test Unit.
+ *
+ * Carried so the running game can name it on screen. A draft that changes the
+ * rules must never be invisible — the banner this feeds is the difference
+ * between "the numbers moved" and "the numbers are wrong".
+ */
+export const GAMEPLAY_DRAFT_TEST = (draftAtLoad && draftAtLoad.test) || null;
 
 export function canonicalEntries(kindId) {
   return CANONICAL_GAMEPLAY[kindId] || {};
@@ -130,6 +142,26 @@ export function gameplayEntries(kindId) {
 export function gameplayEntity(kindId, id) {
   const entries = GAMEPLAY_CONTENT[kindId];
   return (entries && entries[id]) || null;
+}
+
+/**
+ * Terrain in the shape the engine's pathfinder expects.
+ *
+ * One value needs restoring: an impassable tile costs `Infinity`, which JSON
+ * cannot spell, so the file writes `null` and this puts it back. That is the
+ * entire adapter — everything else passes through untouched, and `walkable`
+ * remains the authoritative flag either way.
+ */
+export function engineTerrain() {
+  const out = {};
+  for (const id of Object.keys(GAMEPLAY_CONTENT.terrain || {})) {
+    const entry = GAMEPLAY_CONTENT.terrain[id];
+    out[id] = {
+      ...entry,
+      movementCost: entry.movementCost == null ? Infinity : entry.movementCost
+    };
+  }
+  return out;
 }
 
 export { REGISTRY_IDS, REGISTRY_KINDS };

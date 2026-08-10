@@ -17,8 +17,8 @@
       ],
       "modifiers": [
         {
-          "stat": "magic",
           "mode": "flat",
+          "stat": "magic",
           "value": 10
         }
       ],
@@ -37,8 +37,8 @@
       ],
       "modifiers": [
         {
-          "stat": "accuracy",
           "mode": "flat",
+          "stat": "accuracy",
           "value": 4
         }
       ],
@@ -57,13 +57,13 @@
       ],
       "modifiers": [
         {
-          "stat": "attack",
           "mode": "flat",
+          "stat": "attack",
           "value": 30
         },
         {
-          "stat": "speed",
           "mode": "flat",
+          "stat": "speed",
           "value": -10
         }
       ],
@@ -83,13 +83,13 @@
       ],
       "modifiers": [
         {
-          "stat": "maxHp",
           "mode": "flat",
+          "stat": "maxHp",
           "value": 30
         },
         {
-          "stat": "speed",
           "mode": "flat",
+          "stat": "speed",
           "value": -10
         }
       ],
@@ -108,8 +108,8 @@
       ],
       "modifiers": [
         {
-          "stat": "attack",
           "mode": "flat",
+          "stat": "attack",
           "value": 10
         }
       ],
@@ -125,18 +125,18 @@
       ],
       "modifiers": [
         {
+          "mode": "flat",
           "stat": "movement",
-          "mode": "flat",
           "value": 1
         },
         {
+          "mode": "flat",
           "stat": "maxClimb",
-          "mode": "flat",
           "value": 1
         },
         {
-          "stat": "maxDrop",
           "mode": "flat",
+          "stat": "maxDrop",
           "value": 2
         }
       ],
@@ -156,13 +156,13 @@
       ],
       "modifiers": [
         {
-          "stat": "evasion",
           "mode": "flat",
+          "stat": "evasion",
           "value": 10
         },
         {
-          "stat": "defense",
           "mode": "flat",
+          "stat": "defense",
           "value": 4
         }
       ],
@@ -181,8 +181,8 @@
       ],
       "modifiers": [
         {
-          "stat": "accuracy",
           "mode": "flat",
+          "stat": "accuracy",
           "value": 4
         }
       ],
@@ -199,13 +199,13 @@
       ],
       "modifiers": [
         {
-          "stat": "speed",
           "mode": "flat",
+          "stat": "speed",
           "value": 25
         },
         {
-          "stat": "maxHp",
           "mode": "flat",
+          "stat": "maxHp",
           "value": -15
         }
       ],
@@ -221,13 +221,13 @@
       ],
       "modifiers": [
         {
-          "stat": "defense",
           "mode": "flat",
+          "stat": "defense",
           "value": 12
         },
         {
-          "stat": "maxHp",
           "mode": "flat",
+          "stat": "maxHp",
           "value": 15
         }
       ],
@@ -246,8 +246,8 @@
       ],
       "modifiers": [
         {
-          "stat": "magic",
           "mode": "flat",
+          "stat": "magic",
           "value": 25
         }
       ],
@@ -268,13 +268,13 @@
       ],
       "modifiers": [
         {
-          "stat": "attack",
           "mode": "flat",
+          "stat": "attack",
           "value": 25
         },
         {
-          "stat": "speed",
           "mode": "flat",
+          "stat": "speed",
           "value": -15
         }
       ],
@@ -294,13 +294,13 @@
       ],
       "modifiers": [
         {
-          "stat": "defense",
           "mode": "flat",
+          "stat": "defense",
           "value": 25
         },
         {
-          "stat": "movement",
           "mode": "flat",
+          "stat": "movement",
           "value": -1
         }
       ],
@@ -350,13 +350,13 @@
       ],
       "modifiers": [
         {
-          "stat": "attack",
           "mode": "flat",
+          "stat": "attack",
           "value": -8
         },
         {
-          "stat": "evasion",
           "mode": "flat",
+          "stat": "evasion",
           "value": 12
         }
       ],
@@ -383,8 +383,8 @@
       ],
       "modifiers": [
         {
-          "stat": "accuracy",
           "mode": "flat",
+          "stat": "accuracy",
           "value": 6
         }
       ],

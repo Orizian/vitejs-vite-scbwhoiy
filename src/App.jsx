@@ -10,8 +10,32 @@ import {
   GAMEPLAY_CONTENT,
   CANONICAL_GAMEPLAY,
   GAMEPLAY_DRAFT_ACTIVE,
-  GAMEPLAY_DRAFT_COUNTS
+  GAMEPLAY_DRAFT_COUNTS,
+  GAMEPLAY_DRAFT_TEST,
+  GAMEPLAY_DRAFT_STORAGE_KEY,
+  clearGameplayDraft,
+  engineTerrain
 } from "./content/gameplay/registry.js";
+import {
+  REGISTRY_IDS,
+  REGISTRY_KINDS,
+  serializeRegistryFile,
+  parseRegistryFile,
+  canonicalEntity,
+  entitiesEqual
+} from "./content/gameplay/format.js";
+import { REGISTRY_SCHEMAS, blankEntity } from "./content/gameplay/schema.js";
+import { validateGameplayData, referencesTo } from "./content/gameplay/validate.js";
+import {
+  diffAgainstCanonical,
+  buildBundle,
+  bundleToText,
+  bundleFromText,
+  draftFromBundle,
+  manifestFromFiles
+} from "./content/gameplay/exchange.js";
+import { resolveTestSubject, buildArenaMission, ARENA_SUBJECT_REF } from "./content/gameplay/arena.js";
+import ARENA_FIXTURE from "./content/missions/fixture-test-arena.json";
 import {
   SCENE_CONTENT,
   sceneById,
@@ -443,44 +467,10 @@ const STATUSES = GAMEPLAY_CONTENT.statuses;
 /* ===============================================================
  * TERRAIN DEFINITIONS
  * =============================================================*/
-const TERRAINS = {
-  plain: {
-    assets: { tile: "terrainPlain" },
-    name: "Open Ground",
-    walkable: true,
-    movementCost: 1,
-    blocksLineOfSight: false,
-    modifiers: {}
-  },
-
-  rough: {
-    assets: { tile: "terrainRough" },
-    name: "Rubble",
-    walkable: true,
-    movementCost: 2,
-    blocksLineOfSight: false,
-    modifiers: {}
-  },
-
-  burningGround: {
-    assets: { tile: "terrainRough" },
-    name: "Burning Ground",
-    tags: ["hazard", "created"],
-    walkable: true,
-    movementCost: 2,
-    blocksLineOfSight: false,
-    modifiers: { evasionFlat: -5 }
-  },
-
-  wall: {
-    assets: { tile: "terrainWall" },
-    name: "Wall",
-    walkable: false,
-    movementCost: Infinity,
-    blocksLineOfSight: true,
-    modifiers: {}
-  }
-};
+/* Authored in src/content/gameplay/terrain.json, alongside the map editor's
+ * own swatch for each tile — the palette and the rules are one entry now,
+ * rather than two files that can disagree about what a wall is. */
+const TERRAINS = engineTerrain();
 
 /* ===============================================================
  * EQUIPMENT
@@ -2354,6 +2344,22 @@ function rollChance(state, probability) {
  * Equipment fitted to a unit right now. Runtime state stores ids only; the
  * definitions themselves are never copied or mutated.
  */
+/* ---------------------------------------------------------------
+ * DEFINITION LOOKUP
+ *
+ * Every real battle resolves definitions straight out of the frozen CONTENT
+ * registry. `state.contentOverride` is null in all of them — it exists so the
+ * Gameplay Data Studio can compose stats for data it has not saved yet, using
+ * this pipeline rather than a second copy of it. Nothing in the simulation
+ * ever sets it, and `serializeBattle` does not carry it.
+ * -------------------------------------------------------------*/
+
+function definitionFrom(state, group, id) {
+  const override = state && state.contentOverride;
+  const supplied = override && override[group] && override[group][id];
+  return supplied || CONTENT[group][id];
+}
+
 function equippedItems(state, unitId) {
   const unit = state.units[unitId];
   if (!unit || !unit.equipment) return [];
@@ -2361,7 +2367,7 @@ function equippedItems(state, unitId) {
   for (const slot of GAME_CONFIG.equipment.slots) {
     const equipmentId = unit.equipment[slot];
     if (!equipmentId) continue;
-    const definition = CONTENT.equipment[equipmentId];
+    const definition = definitionFrom(state, "equipment", equipmentId);
     if (definition) items.push(definition);
   }
   return items;
@@ -2392,7 +2398,7 @@ function equipmentCompatibilityReason(definitionId, equipmentId) {
 function getUnitAbilities(state, unitId) {
   const unit = state.units[unitId];
   if (!unit) return [];
-  const definition = CONTENT.units[unit.definitionId];
+  const definition = definitionFrom(state, "units", unit.definitionId);
   const abilities = definition.abilities.slice();
   const removed = new Set();
   for (const item of equippedItems(state, unitId)) {
@@ -2411,7 +2417,7 @@ const STAT_LAYERS = [
 
   function statusModifierLayer(stats, context) {
     for (const applied of context.unit.statuses) {
-      const def = CONTENT.statuses[applied.statusId];
+      const def = definitionFrom(context.state, "statuses", applied.statusId);
       if (!def || !def.modifiers) continue;
       for (const key of Object.keys(def.modifiers)) {
         const value = def.modifiers[key];
@@ -2486,7 +2492,7 @@ const STAT_LAYERS = [
 
 function calculateUnitStats(state, unitId) {
   const unit = state.units[unitId];
-  const definition = CONTENT.units[unit.definitionId];
+  const definition = definitionFrom(state, "units", unit.definitionId);
   const stats = {};
   const context = { state, unit, definition };
   for (const layer of STAT_LAYERS) layer(stats, context);
@@ -2500,6 +2506,118 @@ function calculateUnitStats(state, unitId) {
 
 function turnRateOf(state, unitId) {
   return FORMULAS.timeline.turnRate(calculateUnitStats(state, unitId).speed);
+}
+
+/**
+ * What a chassis plus a loadout actually composes into.
+ *
+ * Built for the Gameplay Data Studio, which must never own a second stat
+ * calculator: two calculators eventually disagree, and the one you are reading
+ * is always the wrong one. So this stands up the smallest possible unit the
+ * real pipeline accepts and runs `calculateUnitStats` — the same function the
+ * battle uses — over it.
+ *
+ * The unit is off-board, unstatused and unmodified, so what comes back is the
+ * chassis and its equipment and nothing else. Terrain, statuses and buffs are
+ * battle circumstances, and reading them here would be reading noise.
+ *
+ * @param request.registries  Optional unsaved definitions, resolved ahead of
+ *                            CONTENT, so the Studio can compose a change
+ *                            before it has been saved or tested.
+ */
+function composeUnitPreview(request) {
+  const definitionId = request && request.definitionId;
+  // `registries` lets the Studio compose data it has not saved yet: unsaved
+  // definitions are handed in and resolved ahead of CONTENT, so the numbers on
+  // screen follow the number being typed. Omitted, this is the shipped data.
+  // Authored data, run through the registry's own normalizers before the
+  // pipeline sees it. Raw JSON omits every default — an item with no
+  // `removesAbilities`, a chassis with no `resources` — and the engine is
+  // entitled to assume those are present, because for CONTENT they always are.
+  const supplied = request && request.registries;
+  const overrides = supplied
+    ? (() => {
+        const normalized = buildContentRegistry({
+          units: supplied.units || {},
+          abilities: supplied.abilities || CONTENT.abilities,
+          statuses: supplied.statuses || {},
+          terrains: {},
+          maps: {},
+          encounters: {},
+          aiProfiles: supplied.aiProfiles || CONTENT.aiProfiles,
+          equipment: supplied.equipment || {},
+          presentationAssets: {}
+        });
+        return {
+          units: normalized.units,
+          equipment: normalized.equipment,
+          statuses: normalized.statuses
+        };
+      })()
+    : null;
+
+  const state = {
+    units: {},
+    unitOrder: ["preview"],
+    terrainOverrides: null,
+    contentOverride: overrides
+  };
+
+  const definition = definitionFrom(state, "units", definitionId);
+  if (!definition) return { error: 'No unit definition "' + String(definitionId) + '".' };
+
+  const equipment = {};
+  const requested = (request && request.equipment) || definition.defaultEquipment || {};
+  for (const slot of GAME_CONFIG.equipment.slots) {
+    if (requested[slot]) equipment[slot] = requested[slot];
+  }
+
+  const unit = {
+    id: "preview",
+    definitionId,
+    equipment,
+    statuses: [],
+    modifiers: [],
+    x: 0,
+    y: 0,
+    alive: true
+  };
+  state.units.preview = unit;
+
+  const total = calculateUnitStats(state, "preview");
+  const base = definition.baseStats;
+  const items = equippedItems(state, "preview");
+
+  const rows = Object.keys(base).map((stat) => {
+    const contributions = [];
+    for (const item of items) {
+      for (const modifier of item.modifiers) {
+        if (modifier.stat !== stat) continue;
+        contributions.push(
+          item.name + " " +
+            (modifier.mode === "multiplier"
+              ? "×" + modifier.value
+              : modifier.mode === "override"
+                ? "=" + modifier.value
+                : (modifier.value >= 0 ? "+" : "") + modifier.value)
+        );
+      }
+    }
+    return {
+      stat,
+      base: base[stat],
+      total: total[stat],
+      sources: contributions.length ? "base " + base[stat] + " · " + contributions.join(" · ") : "base only"
+    };
+  });
+
+  return {
+    definitionId,
+    equipment,
+    rows,
+    abilities: getUnitAbilities(state, "preview"),
+    slots: GAME_CONFIG.equipment.slots.map((slot) => ({ slot, equipmentId: equipment[slot] || null }))
+  };
 }
 
 /* ---------------------------------------------------------------
@@ -9831,7 +9949,11 @@ function prepareAssetAwareContentSources(sources) {
   for (const [id, definition] of Object.entries(terrains)) {
     const assetId = "terrain." + id + ".tile";
     definition.assets.tile = assetId;
-    const legacy = definition.walkable === false ? "#475569" : definition.movementCost > 1 ? "#334155" : "#1e293b";
+    // The authored swatch is the fallback colour too, so a tile with no art
+    // looks the same in the map editor and in the game.
+    const legacy =
+      definition.paint ||
+      (definition.walkable === false ? "#475569" : definition.movementCost > 1 ? "#334155" : "#1e293b");
     assets[assetId] = {
       type: "image",
       src: null,
@@ -20272,6 +20394,441 @@ test("Scenes", "The step registry drives the editor, so a new type needs no edit
       );
     }
   }
+});
+
+/* =========================================================================
+ * GAMEPLAY DATA
+ *
+ * The property the whole Studio workflow rests on: authored data is a set of
+ * files, the game reads exactly those files, and a bundle exported from the
+ * Studio can be applied to the repository mechanically. Every test below is
+ * defending one link in that chain.
+ * =======================================================================*/
+
+/** Deep equality that ignores key order, which the engine is free to change. */
+function sameAuthoredValue(live, authored) {
+  if (Array.isArray(authored)) {
+    return (
+      Array.isArray(live) &&
+      live.length === authored.length &&
+      authored.every((entry, index) => sameAuthoredValue(live[index], entry))
+    );
+  }
+  if (authored && typeof authored === "object") {
+    if (!live || typeof live !== "object") return false;
+    return Object.keys(authored).every((key) => sameAuthoredValue(live[key], authored[key]));
+  }
+  return live === authored;
+}
+
+/** A deep copy of the shipped data, safe to mutate in a test. */
+function gameplayDraftFixture() {
+  const out = {};
+  for (const kindId of REGISTRY_IDS) out[kindId] = JSON.parse(JSON.stringify(CANONICAL_GAMEPLAY[kindId]));
+  return out;
+}
+
+test("Gameplay data", "Serialization is canonical, stable and lossless", () => {
+  for (const kindId of REGISTRY_IDS) {
+    const entries = CANONICAL_GAMEPLAY[kindId];
+    assert(Object.keys(entries).length > 0, kindId + " is empty");
+
+    const text = serializeRegistryFile(kindId, entries);
+    const reread = parseRegistryFile(text).entries;
+    assertEqual(
+      JSON.stringify(reread),
+      JSON.stringify(parseRegistryFile(serializeRegistryFile(kindId, reread)).entries),
+      kindId + " does not survive a round trip"
+    );
+
+    // Same bytes twice: an export must be identifiable by its content alone,
+    // with no clock, no counter and no insertion order leaking in.
+    assertEqual(text, serializeRegistryFile(kindId, entries), kindId + " serialization is not stable");
+
+    // Key order is not a matter of taste here. Two authors editing the same
+    // entity must produce the same file, so a shuffled entity is byte-equal.
+    const firstId = Object.keys(entries).sort()[0];
+    const shuffled = {};
+    for (const key of Object.keys(entries[firstId]).reverse()) shuffled[key] = entries[firstId][key];
+    assertEqual(
+      JSON.stringify(canonicalEntity(kindId, shuffled)),
+      JSON.stringify(canonicalEntity(kindId, entries[firstId])),
+      kindId + ": key order changes the canonical form"
+    );
+    assert(entitiesEqual(kindId, shuffled, entries[firstId]), kindId + ": reordering counts as a change");
+
+    // Entities are written in id order, so a diff of two exports shows only
+    // what moved.
+    const ids = Object.keys(JSON.parse(text).entries);
+    assertEqual(ids.join(","), ids.slice().sort().join(","), kindId + " entries are not id-ordered");
+  }
+});
+
+test("Gameplay data", "The shipped files are already in canonical form", () => {
+  // Guards against a hand-edit landing in a shape the Studio would rewrite:
+  // if this fails, an export of unmodified data would produce a spurious diff.
+  for (const kindId of REGISTRY_IDS) {
+    const rewritten = JSON.parse(serializeRegistryFile(kindId, CANONICAL_GAMEPLAY[kindId]));
+    assertEqual(rewritten.registry, kindId, kindId + " file declares the wrong registry");
+    assertEqual(
+      JSON.stringify(rewritten.entries),
+      JSON.stringify(CANONICAL_GAMEPLAY[kindId]),
+      kindId + ".json is not in canonical form — re-export it"
+    );
+  }
+});
+
+test("Gameplay data", "The game runs on the authored files, not a copy of them", () => {
+  // The registries App.jsx builds CONTENT from must be the ones on disk. If
+  // this ever fails, the Studio would be editing data the game ignores.
+  const pairs = [
+    ["units", CONTENT.units],
+    ["abilities", CONTENT.abilities],
+    ["statuses", CONTENT.statuses],
+    ["equipment", CONTENT.equipment]
+  ];
+  for (const [kindId, live] of pairs) {
+    const authored = GAMEPLAY_CONTENT[kindId];
+    assertEqual(
+      Object.keys(live).sort().join(","),
+      Object.keys(authored).sort().join(","),
+      kindId + ": the engine and the files disagree about which entities exist"
+    );
+    for (const id of Object.keys(authored)) {
+      for (const key of Object.keys(authored[id])) {
+        // Key order is not the claim here — the engine normalizes some of
+        // these on the way in. The claim is that no authored value was lost.
+        assert(
+          sameAuthoredValue(live[id][key], authored[id][key]),
+          kindId + "." + id + "." + key + " differs between the file and the engine"
+        );
+      }
+    }
+  }
+  assert(
+    Object.keys(GAMEPLAY_CONTENT.aiProfiles).every((id) => AI_PROFILES[id]),
+    "AI profiles are not loaded from the file"
+  );
+});
+
+test("Gameplay data", "The shipped data validates, and broken references do not", () => {
+  const clean = validateGameplayData(CANONICAL_GAMEPLAY, {
+    missionIds: Object.keys(MISSION_CONTENT.missions)
+  });
+  assertEqual(clean.errors.length, 0, clean.errors.join(" | "));
+
+  const broken = gameplayDraftFixture();
+  broken.units.assaultMech.abilities = ["scatterShot", "thisAbilityDoesNotExist"];
+  const report = validateGameplayData(broken);
+  assertEqual(report.ok, false, "a dangling ability reference must fail");
+  assert(
+    report.errors.some((message) => /thisAbilityDoesNotExist/.test(message)),
+    report.errors.join(" | ")
+  );
+
+  const badSlot = gameplayDraftFixture();
+  badSlot.units.assaultMech.defaultEquipment = { primaryWeapon: "plateArmor" };
+  assertEqual(validateGameplayData(badSlot).ok, false, "armour in a weapon slot must fail");
+
+  const badClass = gameplayDraftFixture();
+  badClass.equipment.closeShotgun.compatibleClasses = ["support"];
+  assertEqual(
+    validateGameplayData(badClass).ok,
+    false,
+    "a chassis holding a part it may not hold must fail"
+  );
+});
+
+test("Gameplay data", "Deleting something other data depends on is refused", () => {
+  const references = referencesTo(CANONICAL_GAMEPLAY, "abilities", "scatterShot", {});
+  assert(references.length > 0, "scatterShot is used by a unit but nothing reported it");
+  assert(
+    references.every((entry) => typeof entry.where === "string" && entry.where),
+    "a reference must say where it is"
+  );
+  assertEqual(
+    referencesTo(CANONICAL_GAMEPLAY, "abilities", "noSuchAbility", {}).length,
+    0,
+    "an unreferenced id has no dependents"
+  );
+});
+
+test("Gameplay data", "The diff is semantic: only a real change is a change", () => {
+  const untouched = gameplayDraftFixture();
+  assertEqual(diffAgainstCanonical(CANONICAL_GAMEPLAY, untouched).length, 0, "a copy is not a change");
+
+  // Re-serializing everything must still be no change, which is what makes
+  // "export changes" trustworthy.
+  const rewritten = {};
+  for (const kindId of REGISTRY_IDS) {
+    rewritten[kindId] = parseRegistryFile(serializeRegistryFile(kindId, CANONICAL_GAMEPLAY[kindId])).entries;
+  }
+  assertEqual(diffAgainstCanonical(CANONICAL_GAMEPLAY, rewritten).length, 0, "a round trip is not a change");
+
+  const edited = gameplayDraftFixture();
+  edited.units.assaultMech.baseStats.maxHp = 999;
+  edited.abilities.newThing = { name: "New Thing", effects: [] };
+  delete edited.perks.valeBulwark;
+  const changes = diffAgainstCanonical(CANONICAL_GAMEPLAY, edited);
+  assertEqual(changes.length, 3, changes.map((entry) => entry.id).join(","));
+  const byId = Object.fromEntries(changes.map((entry) => [entry.id, entry.operation]));
+  assertEqual(byId.assaultMech, "modify");
+  assertEqual(byId.newThing, "add");
+  assertEqual(byId.valeBulwark, "delete");
+});
+
+test("Gameplay data", "A changes export names every entity and ships whole files", () => {
+  const edited = gameplayDraftFixture();
+  edited.units.assaultMech.baseStats.maxHp = 999;
+
+  const bundle = buildBundle(CANONICAL_GAMEPLAY, edited, { mode: "changes" });
+  assertEqual(bundle.changes.length, 1);
+  assertEqual(bundle.manifest.entityCount, 1);
+  assertEqual(bundle.manifest.entities[0].id, "assaultMech");
+  assertEqual(bundle.manifest.entities[0].operation, "modify");
+  assertEqual(bundle.manifest.entities[0].path, REGISTRY_KINDS.units.path);
+
+  // Only the touched registry travels, and it travels complete: a partial
+  // registry file is not something the game could load.
+  assert(bundle.files[REGISTRY_KINDS.units.path], "the units file is missing");
+  assert(!bundle.files[REGISTRY_KINDS.perks.path], "an untouched registry must not be exported");
+  const shipped = parseRegistryFile(bundle.files[REGISTRY_KINDS.units.path]).entries;
+  assertEqual(
+    Object.keys(shipped).length,
+    Object.keys(CANONICAL_GAMEPLAY.units).length,
+    "the exported file must contain every unit, not just the edited one"
+  );
+  assertEqual(shipped.assaultMech.baseStats.maxHp, 999);
+
+  // The handoff has to be readable by whoever applies it.
+  assert(bundle.files["manifest.json"], "no manifest");
+  assert(/assaultMech/.test(bundle.files["README.md"]), "the README does not name the change");
+  assert(/src\/content\/gameplay\/units\.json/.test(bundle.files["README.md"]), "no destination path");
+
+  // Deterministic: the same authored state exports the same bytes.
+  assertEqual(
+    bundleToText(bundle),
+    bundleToText(buildBundle(CANONICAL_GAMEPLAY, gameplayDraftFixture_withHp(999), { mode: "changes" })),
+    "two exports of the same state differ"
+  );
+});
+
+function gameplayDraftFixture_withHp(value) {
+  const draft = gameplayDraftFixture();
+  draft.units.assaultMech.baseStats.maxHp = value;
+  return draft;
+}
+
+test("Gameplay data", "Export and import round trip exactly", () => {
+  const edited = gameplayDraftFixture();
+  edited.units.assaultMech.baseStats.maxHp = 999;
+  edited.equipment.closeShotgun.name = "Close Shotgun II";
+  edited.abilities.newThing = { name: "New Thing", description: "", effects: [] };
+
+  const bundle = buildBundle(CANONICAL_GAMEPLAY, edited, { mode: "changes" });
+  const files = bundleFromText(bundleToText(bundle));
+  assertEqual(
+    Object.keys(files).sort().join(","),
+    Object.keys(bundle.files).sort().join(","),
+    "the text form lost a file"
+  );
+  for (const path of Object.keys(bundle.files)) {
+    assertEqual(files[path], bundle.files[path], path + " changed passing through text");
+  }
+
+  const manifest = manifestFromFiles(files);
+  assertEqual(manifest.entityCount, 3);
+
+  const imported = draftFromBundle(CANONICAL_GAMEPLAY, files);
+  assertEqual(imported.problems.length, 0, imported.problems.join(" | "));
+  assertEqual(imported.applied.length, 3, "three registries should have been applied");
+
+  const reimportedChanges = diffAgainstCanonical(CANONICAL_GAMEPLAY, imported.draft);
+  assertEqual(
+    reimportedChanges.map((entry) => entry.kind + ":" + entry.id + ":" + entry.operation).sort().join(","),
+    diffAgainstCanonical(CANONICAL_GAMEPLAY, edited)
+      .map((entry) => entry.kind + ":" + entry.id + ":" + entry.operation)
+      .sort()
+      .join(","),
+    "the imported draft does not describe the same change set"
+  );
+
+  // Import is not an install: the canonical data this session loaded is
+  // untouched, and so is the running game.
+  assertEqual(CANONICAL_GAMEPLAY.units.assaultMech.baseStats.maxHp, 130, "import mutated canonical data");
+});
+
+test("Gameplay data", "A full export of unmodified data reproduces the shipped files", () => {
+  const bundle = buildBundle(CANONICAL_GAMEPLAY, gameplayDraftFixture(), { mode: "full" });
+  for (const kindId of REGISTRY_IDS) {
+    assertEqual(
+      bundle.files[REGISTRY_KINDS[kindId].path],
+      serializeRegistryFile(kindId, CANONICAL_GAMEPLAY[kindId]),
+      kindId + ": a full export does not match what is on disk"
+    );
+  }
+  const imported = draftFromBundle(CANONICAL_GAMEPLAY, bundleFromText(bundleToText(bundle)));
+  assertEqual(
+    diffAgainstCanonical(CANONICAL_GAMEPLAY, imported.draft).length,
+    0,
+    "exporting and reimporting unmodified data produced a change"
+  );
+});
+
+test("Gameplay data", "The schema describes every authored field", () => {
+  // The anti-opacity guard. Anything present in the data but absent from the
+  // schema would be invisible in the Studio and silently dropped by an author
+  // who edited around it.
+  for (const kindId of REGISTRY_IDS) {
+    const schema = REGISTRY_SCHEMAS[kindId];
+    assert(schema, kindId + " has no schema");
+    const declared = new Set();
+    for (const section of schema.sections) {
+      for (const field of section.fields) declared.add(field.key.split(".")[0]);
+    }
+    // `*` means the editor edits the whole entity as one map, which covers
+    // every key by construction (AI profiles are exactly that).
+    if (!declared.has("*")) {
+      const seen = new Set();
+      for (const id of Object.keys(CANONICAL_GAMEPLAY[kindId])) {
+        for (const key of Object.keys(CANONICAL_GAMEPLAY[kindId][id])) seen.add(key);
+      }
+      for (const key of seen) {
+        assert(declared.has(key), kindId + "." + key + " exists in the data but not in the schema");
+      }
+    }
+
+    // And a blank entity must be something the Studio can then save.
+    const probe = gameplayDraftFixture();
+    probe[kindId]["studioProbeEntity"] = blankEntity(kindId);
+    const report = validateGameplayData(probe);
+    assert(
+      !report.errors.some((message) => /studioProbeEntity/.test(message)),
+      "a new " + kindId + " entry is born invalid: " +
+        report.errors.filter((message) => /studioProbeEntity/.test(message)).join(" | ")
+    );
+  }
+});
+
+test("Gameplay data", "Every authored entity resolves to something the arena can field", () => {
+  for (const kindId of REGISTRY_IDS) {
+    for (const id of Object.keys(CANONICAL_GAMEPLAY[kindId]).sort()) {
+      const plan = resolveTestSubject(CANONICAL_GAMEPLAY, kindId, id);
+      if (plan.error) {
+        // A refusal is a legitimate answer, but it has to be a sentence an
+        // author can act on, not a silent nothing.
+        assert(plan.error.length > 20, kindId + "/" + id + " refused without explaining why");
+        continue;
+      }
+      assert(
+        CANONICAL_GAMEPLAY.units[plan.definitionId],
+        kindId + "/" + id + " resolved to a chassis that does not exist"
+      );
+      assert(plan.reason && plan.reason.length > 10, kindId + "/" + id + " deployed without saying who");
+      assert(
+        [ARENA_SUBJECT_REF, "durableTarget"].includes(plan.ref),
+        kindId + "/" + id + " targets an arena slot that is not rewritable"
+      );
+
+      // Deterministic: the same selection always fields the same unit.
+      assertEqual(
+        JSON.stringify(resolveTestSubject(CANONICAL_GAMEPLAY, kindId, id)),
+        JSON.stringify(plan),
+        kindId + "/" + id + " resolves differently on a second call"
+      );
+    }
+  }
+  assert(resolveTestSubject(CANONICAL_GAMEPLAY, "units", "noSuchUnit").error, "a missing id must refuse");
+});
+
+test("Gameplay data", "The arena mission stays a valid mission after a swap", () => {
+  const plan = resolveTestSubject(CANONICAL_GAMEPLAY, "operators", "kell");
+  assert(!plan.error, plan.error);
+
+  const mission = buildArenaMission(ARENA_FIXTURE, plan);
+  assertEqual(mission.id, ARENA_FIXTURE.id, "the arena must keep its id so it replaces the shipped copy");
+  const subject = mission.units.find((unit) => unit.ref === ARENA_SUBJECT_REF);
+  assertEqual(subject.definitionId, plan.definitionId);
+
+  const report = validateMissionFile(normalizeMission(mission), { sceneIds: allSceneIds() });
+  assertEqual(report.ok, true, report.errors.join(" | "));
+
+  // The fixture itself is untouched: the arena is a template, not state.
+  assertEqual(
+    ARENA_FIXTURE.units.find((unit) => unit.ref === ARENA_SUBJECT_REF).definitionId,
+    "assaultMech",
+    "buildArenaMission mutated the fixture"
+  );
+
+  // Equipment swaps land in the mission, so a part can be measured.
+  const partPlan = resolveTestSubject(CANONICAL_GAMEPLAY, "equipment", "longRifle");
+  const partMission = buildArenaMission(ARENA_FIXTURE, partPlan);
+  const equipped = partMission.units.find((unit) => unit.ref === partPlan.ref);
+  assertEqual(equipped.equipment.primaryWeapon, "longRifle");
+  assertEqual(
+    validateMissionFile(normalizeMission(partMission), { sceneIds: allSceneIds() }).ok,
+    true
+  );
+});
+
+test("Gameplay data", "The Studio reads derived values from the engine, not a copy", () => {
+  // §16: there must be exactly one stat calculator. This asserts the preview
+  // agrees with the battle for the same chassis and loadout, which is only
+  // possible if it is the same code.
+  const preview = composeUnitPreview({ definitionId: "assaultMech" });
+  assert(!preview.error, preview.error);
+
+  const state = createBattle(deploymentEncounterId(), 11);
+  const unitId = state.unitOrder.find((id) => state.units[id].definitionId === "assaultMech");
+  assert(unitId, "no assault mech in the deployment encounter");
+  state.units[unitId].equipment = { ...preview.equipment };
+  const live = calculateUnitStats(state, unitId);
+
+  for (const row of preview.rows) {
+    assertEqual(row.total, live[row.stat], "preview disagrees with the engine on " + row.stat);
+  }
+  assert(preview.rows.length >= 8, "the preview shows almost nothing");
+  assert(preview.abilities.includes("scatterShot"), "granted abilities are missing from the preview");
+
+  // Equipment contributions are attributed, not just totalled.
+  const withRifle = composeUnitPreview({
+    definitionId: "assaultMech",
+    equipment: { primaryWeapon: "closeShotgun", armor: "plateArmor" }
+  });
+  const defense = withRifle.rows.find((row) => row.stat === "defense");
+  assert(/Plate/.test(defense.sources), "the armour contribution is not named: " + defense.sources);
+
+  assert(composeUnitPreview({ definitionId: "nothingLikeThis" }).error, "an unknown chassis must refuse");
+
+  // Unsaved data composes through the same pipeline, which is what makes the
+  // Studio's derived-values panel follow the number being typed.
+  const draft = gameplayDraftFixture();
+  draft.units.assaultMech.baseStats.maxHp = 400;
+  draft.equipment.plateArmor.modifiers = [{ stat: "maxHp", mode: "flat", value: 50 }];
+  const unsaved = composeUnitPreview({ definitionId: "assaultMech", registries: draft });
+  const row = unsaved.rows.find((entry) => entry.stat === "maxHp");
+  assertEqual(row.base, 400, "the preview ignored the unsaved chassis");
+  assertEqual(row.total, 450, "the preview ignored the unsaved equipment");
+
+  // And nothing leaks: the shipped data is unchanged and a real battle never
+  // carries an override.
+  assertEqual(CONTENT.units.assaultMech.baseStats.maxHp, 130);
+  const battle = createBattle(deploymentEncounterId(), 3);
+  assertEqual(battle.contentOverride, undefined, "a battle must never carry a content override");
+  assertEqual(
+    JSON.parse(serializeBattle(battle)).contentOverride,
+    undefined,
+    "a content override must not serialize"
+  );
+});
+
+test("Gameplay data", "A draft changes the game only through the load-time overlay", () => {
+  // Draft isolation, stated as a property: nothing in the Studio's storage
+  // slot can affect a session that did not read it at import. This build did
+  // not, so the running content is the shipped content.
+  assertEqual(GAMEPLAY_DRAFT_ACTIVE, false, "a gameplay draft is active during the test run");
+  assertEqual(CONTENT.units.assaultMech.baseStats.maxHp, CANONICAL_GAMEPLAY.units.assaultMech.baseStats.maxHp);
+  assert(GAMEPLAY_DRAFT_STORAGE_KEY.startsWith("statuszero."), "the draft slot must be namespaced");
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
@@ -32745,21 +33302,40 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     >
       <div className="pointer-events-none absolute inset-0" style={{ background: "radial-gradient(circle at 50% 45%, rgba(30,73,105,0.18), transparent 52%), linear-gradient(180deg, #07111c, #02060c)" }} />
       <div className="pointer-events-none absolute inset-0 opacity-20" style={{ backgroundImage: "linear-gradient(rgba(125,183,226,0.07) 1px, transparent 1px)", backgroundSize: "100% 4px" }} />
-      {MISSION_CONTENT.playtestMissionId ? (
+      {MISSION_CONTENT.playtestMissionId || GAMEPLAY_DRAFT_ACTIVE ? (
         <div
           className="absolute left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-b border border-t-0 border-amber-500/60 bg-amber-950/90 px-3 py-1 text-[11px] text-amber-200"
           style={{ top: 0 }}
+          data-testid="playtest-banner"
         >
-          <span className="font-bold tracking-widest">PLAYTEST</span>
-          <span className="text-amber-100/80">{MISSION_CONTENT.playtestMissionId}</span>
+          <span className="font-bold tracking-widest">
+            {GAMEPLAY_DRAFT_ACTIVE ? "DATA TEST" : "PLAYTEST"}
+          </span>
+          {/* Unsaved gameplay data is shaping this battle. Saying which entity,
+           *  and how much else moved with it, is the difference between "the
+           *  numbers changed" and "the numbers are wrong". */}
+          <span className="text-amber-100/80">
+            {GAMEPLAY_DRAFT_TEST
+              ? GAMEPLAY_DRAFT_TEST.id + " · " + GAMEPLAY_DRAFT_TEST.changed + " edited"
+              : MISSION_CONTENT.playtestMissionId}
+          </span>
+          {GAMEPLAY_DRAFT_TEST && GAMEPLAY_DRAFT_TEST.reason ? (
+            <span className="max-w-[36ch] truncate text-amber-100/50" title={GAMEPLAY_DRAFT_TEST.reason}>
+              {GAMEPLAY_DRAFT_TEST.reason}
+            </span>
+          ) : null}
           <button
             className="rounded border border-amber-500/60 px-2 py-0.5 hover:bg-amber-800/60"
             onClick={() => {
+              // Both slots go together: the draft is only in play because a
+              // test put it there, and leaving it behind would silently change
+              // the next normal launch.
               clearPlaytestMission();
+              clearGameplayDraft();
               window.location.reload();
             }}
           >
-            Exit playtest
+            {GAMEPLAY_DRAFT_ACTIVE ? "Exit data test" : "Exit playtest"}
           </button>
         </div>
       ) : null}
@@ -33156,6 +33732,8 @@ function MenuItem({ label, hint, onClick, disabled, tone }) {
           ? "cursor-not-allowed border-slate-800 bg-slate-950/40 text-slate-700"
           : tone === "primary"
           ? "border-sky-300/45 bg-sky-950/25 text-slate-100 hover:border-sky-200/80 hover:bg-sky-900/30"
+          : tone === "warning"
+          ? "border-amber-400/50 bg-amber-950/25 text-amber-100 hover:border-amber-300/80 hover:bg-amber-900/30"
           : "border-slate-700 bg-slate-950/60 text-slate-200 hover:border-sky-300/50 hover:bg-slate-900/70")
       }
     >
@@ -33253,10 +33831,31 @@ function MainMenu({ hasSave, saveSummary, onContinue, onNewGame, onEditor, onSet
                 <MenuGroup label="Tools">
                   <MenuItem
                     label="Editor"
-                    hint="Missions and scenes. Paint a map or write a cutscene, then play it. Authoring only — never touches your campaign."
+                    hint="Missions, scenes and gameplay data. Paint a map, write a cutscene or retune a weapon, then play it. Authoring only — never touches your campaign."
                     onClick={onEditor}
                   />
                 </MenuGroup>
+
+                {/* A Studio draft rewrites the rules of every battle launched
+                 *  from here, so it is never allowed to be invisible on the
+                 *  screen you start a campaign from. */}
+                {GAMEPLAY_DRAFT_ACTIVE ? (
+                  <MenuGroup label="Gameplay data">
+                    <MenuItem
+                      label="Using draft data"
+                      tone="warning"
+                      hint={
+                        "Unsaved Studio edits are shaping the game" +
+                        (GAMEPLAY_DRAFT_TEST ? " (testing " + GAMEPLAY_DRAFT_TEST.id + ")" : "") +
+                        ". Select to discard them and reload on the shipped data."
+                      }
+                      onClick={() => {
+                        clearGameplayDraft();
+                        window.location.reload();
+                      }}
+                    />
+                  </MenuGroup>
+                ) : null}
 
                 <MenuGroup label="System">
                   <MenuItem
@@ -33670,6 +34269,16 @@ if (typeof window !== "undefined") {
       storageKey: CAMPAIGN_SAVE_KEY
     },
     resolveStartupRoute,
+    // The Studio's derived-values panel. Deliberately the engine's own stat
+    // pipeline rather than an editor copy of it.
+    composeUnitPreview,
+    gameplayDraft: {
+      active: GAMEPLAY_DRAFT_ACTIVE,
+      counts: GAMEPLAY_DRAFT_COUNTS,
+      test: GAMEPLAY_DRAFT_TEST,
+      clear: clearGameplayDraft,
+      storageKey: GAMEPLAY_DRAFT_STORAGE_KEY
+    },
     // The AI's targeting and threat-scoring path, as source, so an external
     // check can assert it names no stealth concept.
     enumerateAiTargets,

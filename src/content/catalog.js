@@ -1,61 +1,49 @@
 /* =========================================================================
  * SHARED CONTENT CATALOG
  *
- * A thin, dependency-free description of the content vocabulary the mission
- * format is allowed to reference. Both the game and the standalone editor
- * import this file, so the editor never has to load the 29k-line App.jsx to
- * know what a "rifleGrunt" is.
+ * The content vocabulary the mission format is allowed to reference. Both the
+ * game and the standalone editor import this file, so the editor never has to
+ * load App.jsx to know what a "rifleGrunt" is.
  *
- * This file is a MIRROR of the real definitions inside App.jsx. It is kept
- * honest by `catalogDriftIssues()` (see mission-format.js), which the game's
- * own test suite runs against the live CONTENT registry — if someone adds a
- * unit or terrain and forgets this file, the test suite fails.
+ * This used to be a hand-maintained mirror of the literals inside App.jsx,
+ * kept honest by `catalogDriftIssues()`. It no longer is: everything a Studio
+ * author can create is now DERIVED from `src/content/gameplay/*.json`, the
+ * same files the game loads. Adding a unit in the Gameplay Data Studio makes
+ * it placeable in the mission editor with no second edit, which is the whole
+ * point of having one source of truth.
  *
- * When App.jsx is eventually split into modules (see docs/ENGINE_ANALYSIS.md,
- * finding E-01) this file should be deleted and the real registries imported
- * directly.
+ * What remains hand-written here is what is not authored gameplay data yet:
+ * terrain (still a literal in App.jsx), and the editor's own presentation
+ * vocabulary — paint swatches, map characters, speakers, backgrounds. Those
+ * are listed as remaining debt in docs/GAMEPLAY_DATA.md.
  * =======================================================================*/
 
-/** Terrain palette. `paint` is the editor swatch colour, matching the
- *  engine's own fallback colours so the editor looks like the game. */
-export const TERRAIN_CATALOG = [
-  {
-    id: "plain",
-    name: "Open Ground",
-    char: ".",
-    paint: "#1e293b",
-    walkable: true,
-    movementCost: 1,
-    blocksLineOfSight: false
-  },
-  {
-    id: "rough",
-    name: "Rubble",
-    char: "~",
-    paint: "#334155",
-    walkable: true,
-    movementCost: 2,
-    blocksLineOfSight: false
-  },
-  {
-    id: "wall",
-    name: "Wall",
-    char: "#",
-    paint: "#475569",
-    walkable: false,
-    movementCost: Infinity,
-    blocksLineOfSight: true
-  },
-  {
-    id: "burningGround",
-    name: "Burning Ground",
-    char: "!",
-    paint: "#7c2d12",
-    walkable: true,
-    movementCost: 2,
-    blocksLineOfSight: false
-  }
-];
+import { GAMEPLAY_CONTENT } from "./gameplay/registry.js";
+
+/**
+ * Terrain palette, derived from the authored terrain file.
+ *
+ * `char` is the character the exported map uses for this tile and `paint` is
+ * the editor swatch — both authored beside the rules, so a new terrain type
+ * created in the Studio is immediately paintable here and looks the same in
+ * the game. `movementCost` is `null` in the file for an impassable tile
+ * (JSON has no Infinity) and is restored to Infinity for the editor's own
+ * arithmetic, exactly as the engine does.
+ */
+export const TERRAIN_CATALOG = Object.keys(GAMEPLAY_CONTENT.terrain)
+  .sort()
+  .map((id) => {
+    const entry = GAMEPLAY_CONTENT.terrain[id];
+    return {
+      id,
+      name: entry.name || id,
+      char: entry.char || id.charAt(0),
+      paint: entry.paint || "#1e293b",
+      walkable: entry.walkable !== false,
+      movementCost: entry.movementCost == null ? Infinity : entry.movementCost,
+      blocksLineOfSight: !!entry.blocksLineOfSight
+    };
+  });
 
 export const TERRAIN_IDS = TERRAIN_CATALOG.map((entry) => entry.id);
 
@@ -73,26 +61,26 @@ export function terrainById(id) {
   return TERRAIN_CATALOG.find((entry) => entry.id === id) || null;
 }
 
-/** Unit chassis available for placement. `deployable` marks the chassis the
- *  campaign roster can fly — those slots get overwritten by the player's
- *  actual loadout at deploy time, so in the editor they are placeholders
- *  that define *where* the squad starts, not who. */
-export const UNIT_CATALOG = [
-  { id: "assaultMech", name: "Assault Mech", glyph: "A", aiProfile: "aggressive", tags: ["mech", "deployable"] },
-  { id: "supportMech", name: "Support Mech", glyph: "R", aiProfile: "support", tags: ["mech", "deployable"] },
-  { id: "sniperMech", name: "Sniper Mech", glyph: "P", aiProfile: "cautious", tags: ["mech", "deployable"] },
-  { id: "stealthMech", name: "Stealth Mech", glyph: "S", aiProfile: "aggressive", tags: ["mech", "deployable"] },
-  { id: "rifleGrunt", name: "Rifle Grunt", glyph: "g", aiProfile: "aggressive", tags: ["mech", "government"] },
-  { id: "lightPursuit", name: "Light Pursuit Mech", glyph: "p", aiProfile: "aggressive", tags: ["mech", "government"] },
-  { id: "heavyEnforcer", name: "Heavy Enforcer", glyph: "E", aiProfile: "aggressive", tags: ["mech", "government"] },
-  { id: "missileCarrier", name: "Missile Carrier", glyph: "M", aiProfile: "cautious", tags: ["mech", "government"] },
-  { id: "securityTurret", name: "Security Turret", glyph: "T", aiProfile: "cautious", tags: ["mech", "government", "emplacement"] },
-  { id: "governmentDrone", name: "Repair Drone", glyph: "d", aiProfile: "support", tags: ["mech", "government"] },
-  { id: "governmentCommander", name: "Government Commander", glyph: "C", aiProfile: "aggressive", tags: ["mech", "government", "elite"] },
-  { id: "civilianTransport", name: "Civilian Transport", glyph: "c", aiProfile: "cautious", tags: ["civilian"] },
-  { id: "supplyDepot", name: "Supply Container", glyph: "▪", aiProfile: "cautious", tags: ["structure"] },
-  { id: "repairDroneMech", name: "Repair Drone (summon)", glyph: "d", aiProfile: "support", tags: ["mech", "drone", "summoned"] }
-];
+/**
+ * Unit chassis available for placement, derived from the authored units file.
+ *
+ * `deployable` in a unit's tags marks the chassis the campaign roster can fly —
+ * those slots get overwritten by the player's actual loadout at deploy time, so
+ * in the editor they are placeholders that define *where* the squad starts,
+ * not who.
+ */
+export const UNIT_CATALOG = Object.keys(GAMEPLAY_CONTENT.units)
+  .sort()
+  .map((id) => {
+    const unit = GAMEPLAY_CONTENT.units[id];
+    return {
+      id,
+      name: unit.name || id,
+      glyph: unit.glyph || "?",
+      aiProfile: unit.aiProfile || null,
+      tags: unit.tags || []
+    };
+  });
 
 export const UNIT_IDS = UNIT_CATALOG.map((entry) => entry.id);
 
@@ -100,33 +88,20 @@ export function unitById(id) {
   return UNIT_CATALOG.find((entry) => entry.id === id) || null;
 }
 
-export const AI_PROFILE_IDS = ["aggressive", "cautious", "support"];
+export const AI_PROFILE_IDS = Object.keys(GAMEPLAY_CONTENT.aiProfiles).sort();
 
 /** Abilities and statuses a mission script may name (scripted attacks, repairs
- *  and applyStatus). Mirrors App.jsx; `catalogDriftIssues()` keeps it honest. */
-export const ABILITY_IDS = [
-  "quickStrike", "heavyBlow", "basicHeal", "poisonDart", "delayStrike", "shieldAlly", "forcePush",
-  "blink", "hasteAlly", "cleanseAlly", "raiseTestSkeleton", "execution", "tripleShot", "emberField",
-  "lineBlast", "ringNova", "guardAura", "scatterShot", "coverAlly", "stabilize", "burstFire",
-  "bladeStrike", "cloak", "tacticalWithdrawal", "arcWelder", "fieldRepair", "reinforce", "repairDrone",
-  "handCannon", "precisionShot", "brace", "targetMark", "overwatch", "droneWeld", "holdPosition"
-];
+ *  and applyStatus). */
+export const ABILITY_IDS = Object.keys(GAMEPLAY_CONTENT.abilities).sort();
 
-export const STATUS_IDS = [
-  "poison", "haste", "slow", "surefooted", "cloaked", "braced", "marked", "reinforced",
-  "systemsFault", "overwatching", "stun"
-];
+export const STATUS_IDS = Object.keys(GAMEPLAY_CONTENT.statuses).sort();
 
 /** Loadout parts a mission may bolt onto a unit, and the slots they go in.
- *  Mirrors App.jsx; `catalogDriftIssues()` keeps it honest. */
+ *  The slot list is engine configuration (GAME_CONFIG.equipment.slots) and is
+ *  the one thing here an author cannot add to from the Studio. */
 export const EQUIPMENT_SLOTS = ["primaryWeapon", "armor", "utilitySystem", "coreSystem"];
 
-export const EQUIPMENT_IDS = [
-  "closeShotgun", "breacherShotgun", "autogun", "silencedSmg", "arcWelderRig", "pulseWelder",
-  "longRifle", "railBarrel", "plateArmor", "reactiveArmor", "lightPlating", "targetingSuite",
-  "thermalOptics", "signalScanner", "jumpJets", "repairKit", "standardCore", "overclockCore",
-  "bulwarkCore"
-];
+export const EQUIPMENT_IDS = Object.keys(GAMEPLAY_CONTENT.equipment).sort();
 
 export const FACINGS = ["northeast", "southeast", "southwest", "northwest"];
 
