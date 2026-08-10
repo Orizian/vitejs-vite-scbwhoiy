@@ -37,7 +37,12 @@ export const BASE_STAT_FIELDS = [
   { key: "evasion", label: "Evasion" },
   { key: "movement", label: "Movement" },
   { key: "maxClimb", label: "Max climb" },
-  { key: "maxDrop", label: "Max drop" }
+  { key: "maxDrop", label: "Max drop" },
+  {
+    key: "displacementResistance",
+    label: "Displacement resistance",
+    help: "Tiles subtracted from any forced move. A bolted-down emplacement shrugs off a shove."
+  }
 ];
 
 export const OBSERVATION_CHANNEL_FIELDS = ["optical", "thermal", "signal", "acoustic", "intel"];
@@ -229,6 +234,61 @@ export const REGISTRY_SCHEMAS = {
             kind: "objectList",
             typeKey: "type",
             behaviour: true
+          }
+        ]
+      },
+      {
+        id: "trajectory",
+        label: "Trajectory",
+        note:
+          "Present only on route actions. Leave it empty and the ability is an " +
+          "ordinary targeted one. `contactEffects` resolve where the route touches " +
+          "something and the route continues afterwards unless told not to.",
+        fields: [
+          {
+            key: "trajectory.maxSegments",
+            label: "Maximum segments",
+            kind: "number",
+            help: "A segment travels in one heading. Two segments means one turn."
+          },
+          {
+            key: "trajectory.maxDistance",
+            label: "Maximum distance",
+            kind: "number",
+            help: "Empty means the mover's own movement stat."
+          },
+          {
+            key: "trajectory.allowedRedirects",
+            label: "Permitted turns",
+            kind: "tags",
+            behaviour: true,
+            help: "straight · slight · quarter · sharp · reverse. Anything absent is refused before execution."
+          },
+          {
+            key: "trajectory.resourceId",
+            label: "Turns are paid from",
+            kind: "ref",
+            registry: "resources"
+          },
+          {
+            key: "trajectory.redirectCosts",
+            label: "Cost per turn category",
+            kind: "numberMap",
+            help: "Keys are turn categories; values are amounts of the resource above."
+          },
+          {
+            key: "trajectory.continueAfterContact",
+            label: "Route continues after contact",
+            kind: "boolean",
+            behaviour: true
+          },
+          {
+            key: "trajectory.contactEffects",
+            label: "On contact",
+            kind: "objectList",
+            typeKey: "type",
+            behaviour: true,
+            help: "A `displace` effect's distance is the maximum; the player chooses the actual distance."
           }
         ]
       },

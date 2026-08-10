@@ -142,13 +142,39 @@
       ],
       "grantsAbilities": []
     },
+    "lightCarbine": {
+      "name": "Light Carbine",
+      "slot": "primaryWeapon",
+      "description": "Chosen for what it does not weigh. Reliable at short and middle range; it will not win a firefight it did not start.",
+      "compatibleClasses": [
+        "interdictor"
+      ],
+      "tags": [
+        "ballistic",
+        "light"
+      ],
+      "modifiers": [
+        {
+          "mode": "flat",
+          "stat": "accuracy",
+          "value": 6
+        },
+        {
+          "mode": "flat",
+          "stat": "attack",
+          "value": -4
+        }
+      ],
+      "grantsAbilities": []
+    },
     "lightPlating": {
       "name": "Light Plating",
       "slot": "armor",
       "description": "Minimal plating that keeps the frame nimble.",
       "compatibleClasses": [
         "stealth",
-        "sniper"
+        "sniper",
+        "interdictor"
       ],
       "tags": [
         "armor",

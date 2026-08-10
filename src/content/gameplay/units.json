@@ -168,6 +168,7 @@
         "accuracy": 84,
         "attack": 90,
         "defense": 75,
+        "displacementResistance": 1,
         "evasion": 5,
         "magic": 20,
         "maxClimb": 1,
@@ -183,6 +184,52 @@
       ],
       "defaultAbilityId": "scatterShot",
       "aiProfile": "aggressive"
+    },
+    "interdictorFrame": {
+      "name": "Interdiction Frame",
+      "classId": "interdictor",
+      "role": "Pursuit frame built around propulsion and control rather than firepower.",
+      "glyph": "I",
+      "description": "Everything that could be traded for thrust was. Thin plating, a light carbine, and drive nacelles that turn approach distance into impact. Dangerous with runway; ordinary without it.",
+      "tags": [
+        "mech",
+        "deployable"
+      ],
+      "baseStats": {
+        "accuracy": 90,
+        "attack": 78,
+        "defense": 32,
+        "displacementResistance": 0,
+        "evasion": 18,
+        "magic": 20,
+        "maxClimb": 2,
+        "maxDrop": 3,
+        "maxHp": 95,
+        "movement": 7,
+        "resistance": 28,
+        "speed": 135
+      },
+      "resources": {
+        "burst": {
+          "max": 5,
+          "startsAt": 2
+        }
+      },
+      "abilities": [
+        "machStrike",
+        "vectorRoute",
+        "impactChain",
+        "carbineBurst",
+        "spoolDrive"
+      ],
+      "defaultAbilityId": "carbineBurst",
+      "aiProfile": "aggressive",
+      "defaultEquipment": {
+        "armor": "lightPlating",
+        "coreSystem": "standardCore",
+        "primaryWeapon": "lightCarbine",
+        "utilitySystem": "jumpJets"
+      }
     },
     "ironbound": {
       "name": "Ironbound",
@@ -341,6 +388,7 @@
         "accuracy": 92,
         "attack": 85,
         "defense": 60,
+        "displacementResistance": 3,
         "evasion": 0,
         "magic": 15,
         "maxClimb": 0,

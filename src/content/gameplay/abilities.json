@@ -259,6 +259,47 @@
         ]
       }
     },
+    "carbineBurst": {
+      "name": "Carbine Burst",
+      "description": "Two rounds from a weapon chosen for its weight. It will not decide a fight, but it reaches what the frame cannot.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 6,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 400
+      },
+      "effects": [
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 28,
+          "type": "damage"
+        },
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 22,
+          "type": "damage"
+        }
+      ],
+      "ui": {
+        "basic": true,
+        "category": "attack",
+        "glyph": "•",
+        "order": 4,
+        "tags": [
+          "ranged"
+        ]
+      }
+    },
     "cleanseAlly": {
       "name": "Cleanse",
       "description": "Removes negative statuses from an ally.",
@@ -783,6 +824,61 @@
         "order": 9
       }
     },
+    "impactChain": {
+      "name": "Impact Chain",
+      "description": "Acceleration spent on the target instead of the ground: three short impacts in the space of one, the last of which moves them.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 1,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 1,
+        "recovery": 650
+      },
+      "costs": {
+        "burst": 2
+      },
+      "requirementText": "Requires 2 Burst.",
+      "effects": [
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 34,
+          "type": "damage"
+        },
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 34,
+          "type": "damage"
+        },
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 40,
+          "type": "damage"
+        },
+        {
+          "distance": 1,
+          "type": "displace"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "attack",
+        "glyph": "✦",
+        "order": 3,
+        "tags": [
+          "melee"
+        ]
+      }
+    },
     "lineBlast": {
       "name": "Line Blast",
       "description": "Test ability: strikes a line away from the caster.",
@@ -815,6 +911,67 @@
         "order": 12,
         "tags": [
           "shape"
+        ]
+      }
+    },
+    "machStrike": {
+      "name": "Mach Strike",
+      "description": "Accelerate down a lane and put the frame through whatever is at the end of it. What the impact is worth depends entirely on how much runway there was, and the target does not stop where it was standing.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 1,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 700
+      },
+      "requirementText": "Needs a legal approach lane; the impact is worth what the runway was.",
+      "trajectory": {
+        "allowedRedirects": [
+          "slight",
+          "quarter"
+        ],
+        "contactEffects": [
+          {
+            "canMiss": true,
+            "formula": "physical",
+            "power": 55,
+            "scaling": {
+              "from": "approachDistance",
+              "max": 84,
+              "perUnit": 14
+            },
+            "type": "damage"
+          },
+          {
+            "distance": 4,
+            "type": "displace"
+          }
+        ],
+        "continueAfterContact": true,
+        "maxSegments": 2,
+        "redirectCosts": {
+          "quarter": 1,
+          "reverse": 3,
+          "sharp": 2
+        },
+        "resourceId": "burst"
+      },
+      "effects": [],
+      "ui": {
+        "basic": false,
+        "category": "attack",
+        "glyph": "➤",
+        "order": 1,
+        "tags": [
+          "trajectory",
+          "melee"
         ]
       }
     },
@@ -1199,6 +1356,47 @@
         ]
       }
     },
+    "spoolDrive": {
+      "name": "Spool Drive",
+      "description": "Wind the drives up instead of using them. Buys manoeuvring power at the cost of an activation spent watching nothing.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 0,
+        "rangeMin": 0,
+        "requiresLineOfSight": false,
+        "type": "self"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 900
+      },
+      "effects": [
+        {
+          "amount": 3,
+          "applyTo": "source",
+          "resourceId": "burst",
+          "type": "restoreResource"
+        },
+        {
+          "applyTo": "source",
+          "chance": 1,
+          "statusId": "spooling",
+          "type": "applyStatus"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "↑",
+        "order": 5,
+        "tags": [
+          "stance"
+        ]
+      }
+    },
     "stabilize": {
       "name": "Stabilize",
       "description": "Clears every negative status on this mech and adds a 25 point shield.",
@@ -1359,6 +1557,67 @@
         "order": 10,
         "tags": [
           "multiHit"
+        ]
+      }
+    },
+    "vectorRoute": {
+      "name": "Vector Route",
+      "description": "A planned high-speed line through a formation. Hard turns cost stored Burst; the frame can touch something on the way and keep going.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 0,
+        "rangeMin": 0,
+        "requiresLineOfSight": false,
+        "type": "self"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 450
+      },
+      "trajectory": {
+        "allowedRedirects": [
+          "slight",
+          "quarter",
+          "sharp",
+          "reverse"
+        ],
+        "contactEffects": [
+          {
+            "canMiss": true,
+            "formula": "physical",
+            "power": 30,
+            "scaling": {
+              "from": "segmentDistance",
+              "max": 40,
+              "perUnit": 8
+            },
+            "type": "damage"
+          },
+          {
+            "distance": 2,
+            "type": "displace"
+          }
+        ],
+        "continueAfterContact": true,
+        "maxSegments": 4,
+        "redirectCosts": {
+          "quarter": 1,
+          "reverse": 3,
+          "sharp": 2
+        },
+        "resourceId": "burst"
+      },
+      "effects": [],
+      "ui": {
+        "basic": false,
+        "category": "movement",
+        "glyph": "⇝",
+        "order": 2,
+        "tags": [
+          "trajectory"
         ]
       }
     }

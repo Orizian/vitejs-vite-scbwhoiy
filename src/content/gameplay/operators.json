@@ -45,6 +45,15 @@
         "reyesFieldPatch",
         "reyesReinforcement"
       ]
+    },
+    "veteran": {
+      "name": "Veteran Interdictor",
+      "ref": "veteran",
+      "glyph": "🧑‍✈️",
+      "role": "Career pursuit pilot, two decades in. Gets there first, decides where everyone else is standing, and leaves.",
+      "chassis": "interdictorFrame",
+      "recruit": true,
+      "perkChoices": []
     }
   }
 }

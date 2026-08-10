@@ -1,0 +1,156 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-trajectory-arena",
+  "name": "Trajectory Bench",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. Open ground with one sight-blocking wall and a short corridor, laid out so a high-speed route has room to turn and one obvious thing to break. Enemies are placed where a chosen displacement distance — not the maximum — is what decides whether the setup works.",
+  "map": {
+    "name": "Bench",
+    "width": 22,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "..........#...........",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......####............",
+      "......................",
+      "......................",
+      "......................",
+      "......................"
+    ],
+    "elevationRows": [
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000"
+    ]
+  },
+  "teams": [
+    { "id": "sectionSeven", "name": "Section Seven", "controller": "human", "marker": "▲", "accent": "emerald" },
+    { "id": "loyalist", "name": "Loyalists", "controller": "ai", "marker": "■", "accent": "rose" }
+  ],
+  "units": [
+    {
+      "ref": "veteran",
+      "definitionId": "interdictorFrame",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 8,
+      "facing": "southeast",
+      "note": "Starts with runway. Every trajectory test measures from here."
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 4,
+      "facing": "southeast",
+      "note": "Holds row 4. The wall at (10,4) is the only thing between him and the covered target."
+    },
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 12,
+      "facing": "southeast",
+      "note": "Present so the Section Seven link is complete and a kill can open his advance."
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 13,
+      "facing": "southeast",
+      "note": "Present for the link. Does nothing on its own."
+    },
+    {
+      "ref": "covered",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 11,
+      "y": 4,
+      "facing": "northwest",
+      "note": "Directly behind the wall from Kell. Displace it off row 4 and the lane opens — the exact distance is what the test is about."
+    },
+    {
+      "ref": "clusterA",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 14,
+      "y": 8,
+      "facing": "northwest",
+      "note": "Grouping fixture: pushed a chosen distance to meet clusterB."
+    },
+    {
+      "ref": "clusterB",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 18,
+      "y": 8,
+      "facing": "northwest",
+      "note": "Grouping fixture: pushed a different chosen distance from the other side."
+    },
+    {
+      "ref": "anchor",
+      "definitionId": "securityTurret",
+      "teamId": "loyalist",
+      "x": 14,
+      "y": 12,
+      "facing": "northwest",
+      "note": "Displacement-resistant by its own stats. Proves control degrades against something bolted down."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 14,
+      "facing": "northwest",
+      "note": "Keeps the battle from ending while a fixture is mid-route."
+    }
+  ],
+  "regions": [],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Exercise the route",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "factions": { "relationships": [] },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": { "briefing": [], "victory": [], "defeat": [] },
+  "midBattle": []
+}

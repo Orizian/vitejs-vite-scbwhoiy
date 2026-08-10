@@ -12,6 +12,7 @@
 
 import { REGISTRY_IDS, REGISTRY_KINDS } from "./format.js";
 import { validateResourceDefinition } from "../../combat/resources.js";
+import { REDIRECT_IDS } from "../../combat/trajectory.js";
 import { REACTION_EVENT_TYPE_IDS } from "../../reactions/events.js";
 import { validateReactionEffect } from "../../reactions/effects.js";
 import { validateReactionCondition } from "../../reactions/conditions.js";
@@ -115,14 +116,9 @@ export function validateGameplayData(data, context) {
   }
 
   /* ---- abilities ---- */
-  for (const id of Object.keys(abilities)) {
-    const ability = abilities[id] || {};
-    if (!ability.name) warnings.push(label("abilities", id) + " has no display name.");
-    const targeting = ability.targeting || {};
-    if (targeting.rangeMin != null && targeting.rangeMax != null && targeting.rangeMax < targeting.rangeMin) {
-      errors.push(label("abilities", id) + " has a maximum range below its minimum.");
-    }
-    for (const effect of ability.effects || []) {
+  /** Every reference an effect can make, wherever the effect is authored. */
+  const checkEffectRefs = (effects, id) => {
+    for (const effect of effects || []) {
       if (effect && effect.statusId && !has(statuses, effect.statusId)) {
         errors.push(label("abilities", id) + ' applies unknown status "' + effect.statusId + '".');
       }
@@ -132,7 +128,69 @@ export function validateGameplayData(data, context) {
       if (effect && effect.definitionId && !has(units, effect.definitionId)) {
         errors.push(label("abilities", id) + ' summons unknown unit "' + effect.definitionId + '".');
       }
+      if (effect && effect.resourceId && !has(resources, effect.resourceId)) {
+        errors.push(label("abilities", id) + ' moves unknown resource "' + effect.resourceId + '".');
+      }
     }
+  };
+
+  for (const id of Object.keys(abilities)) {
+    const ability = abilities[id] || {};
+    if (!ability.name) warnings.push(label("abilities", id) + " has no display name.");
+    const targeting = ability.targeting || {};
+    if (targeting.rangeMin != null && targeting.rangeMax != null && targeting.rangeMax < targeting.rangeMin) {
+      errors.push(label("abilities", id) + " has a maximum range below its minimum.");
+    }
+    checkEffectRefs(ability.effects, id);
+
+    /* ---- trajectory ----
+     *
+     * A route action's turn vocabulary and its price list are both authored,
+     * so both can be authored wrong. Catching it here means the Studio refuses
+     * the export rather than the player discovering it mid-charge. */
+    const trajectory = ability.trajectory;
+    if (trajectory) {
+      if (trajectory.maxSegments != null && trajectory.maxSegments < 1) {
+        errors.push(label("abilities", id) + " is a route action with no segments.");
+      }
+      if (trajectory.maxDistance != null && trajectory.maxDistance < 1) {
+        errors.push(label("abilities", id) + " is a route action that cannot travel.");
+      }
+      if (trajectory.resourceId && !has(resources, trajectory.resourceId)) {
+        errors.push(
+          label("abilities", id) + ' prices its turns in unknown resource "' + trajectory.resourceId + '".'
+        );
+      }
+      for (const category of trajectory.allowedRedirects || []) {
+        if (!REDIRECT_IDS.includes(category)) {
+          errors.push(label("abilities", id) + ' permits unknown turn category "' + category + '".');
+        }
+      }
+      const priced = Object.keys(trajectory.redirectCosts || {});
+      for (const category of priced) {
+        if (!REDIRECT_IDS.includes(category)) {
+          errors.push(label("abilities", id) + ' prices unknown turn category "' + category + '".');
+        } else if (
+          trajectory.allowedRedirects &&
+          !trajectory.allowedRedirects.includes(category) &&
+          category !== "straight"
+        ) {
+          warnings.push(
+            label("abilities", id) + ' prices "' + category + '" turns but does not permit them.'
+          );
+        }
+      }
+      if (priced.length && !trajectory.resourceId) {
+        errors.push(label("abilities", id) + " prices its turns but names no resource to pay with.");
+      }
+      checkEffectRefs(trajectory.contactEffects, id);
+      for (const effect of trajectory.contactEffects || []) {
+        if (effect && effect.type === "displace" && effect.distance != null && effect.distance < 0) {
+          errors.push(label("abilities", id) + " displaces a negative distance on contact.");
+        }
+      }
+    }
+
     for (const resourceId of Object.keys(ability.costs || {})) {
       const users = Object.keys(units).filter((unitId) => (units[unitId].abilities || []).includes(id));
       const unmet = users.filter((unitId) => !((units[unitId].resources || {})[resourceId]));

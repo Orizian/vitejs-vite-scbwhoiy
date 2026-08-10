@@ -24,7 +24,7 @@ import {
   canonicalEntity,
   entitiesEqual
 } from "./content/gameplay/format.js";
-import { REGISTRY_SCHEMAS, blankEntity } from "./content/gameplay/schema.js";
+import { REGISTRY_SCHEMAS, BASE_STAT_FIELDS, blankEntity } from "./content/gameplay/schema.js";
 import { validateGameplayData, referencesTo } from "./content/gameplay/validate.js";
 import {
   diffAgainstCanonical,
@@ -51,6 +51,20 @@ import {
   describeResources,
   validateResourceDefinition
 } from "./combat/resources.js";
+import {
+  HEADINGS,
+  HEADING_IDS,
+  REDIRECT_IDS,
+  headingById,
+  headingBetween,
+  redirectCategory,
+  planTrajectory,
+  createTrajectoryContext,
+  advanceContext,
+  redirectTally,
+  redirectCost,
+  planDisplacement
+} from "./combat/trajectory.js";
 import {
   createCausalityState,
   beginChain,
@@ -2122,6 +2136,11 @@ function deriveIds(source, normalize) {
 }
 
 const DEFAULT_BASE_STATS = {
+  // How many tiles of forced movement this frame simply absorbs. Zero for
+  // almost everything; an anchored emplacement or a heavy frame declares more.
+  // An ordinary stat on purpose, so equipment, statuses and perks can move it
+  // through the pipeline that already exists rather than a bespoke one.
+  displacementResistance: 0,
   maxHp: 1,
   attack: 0,
   magic: 0,
@@ -3813,6 +3832,64 @@ function effectContextStats(state, sourceUnitId, targetUnitId, effect) {
   };
 }
 
+/**
+ * Named quantities an effect may scale from.
+ *
+ * A registry rather than an expression language, on purpose. Content says
+ * "scale from approach distance, 12 per tile, capped at 60"; it does not write
+ * arithmetic, and the engine never evaluates authored code. Adding a source is
+ * one entry here plus a line of documentation.
+ */
+const EFFECT_SCALING_SOURCES = {
+  approachDistance: {
+    label: "Approach distance",
+    summary: "Tiles the source travelled on the route that produced this effect.",
+    read: (state, context) => {
+      const trajectory = state.trajectory;
+      if (!trajectory || trajectory.unitId !== context.sourceUnitId) return 0;
+      return trajectory.distanceTravelled;
+    }
+  },
+  segmentDistance: {
+    label: "Current segment distance",
+    summary: "Tiles travelled in the segment that produced this effect.",
+    read: (state, context) => {
+      const trajectory = state.trajectory;
+      if (!trajectory || trajectory.unitId !== context.sourceUnitId) return 0;
+      return trajectory.segmentDistance;
+    }
+  },
+  redirectCount: {
+    label: "Redirects taken",
+    summary: "How many hard turns the route has made so far.",
+    read: (state, context) => {
+      const trajectory = state.trajectory;
+      if (!trajectory || trajectory.unitId !== context.sourceUnitId) return 0;
+      return trajectory.redirectCount;
+    }
+  }
+};
+
+export const EFFECT_SCALING_IDS = Object.keys(EFFECT_SCALING_SOURCES);
+
+/**
+ * Extra power an effect earns from a named source.
+ *
+ * Zero when the source is unknown or the context does not apply — a strike
+ * made standing still scales from nothing, which is exactly the counterplay
+ * the operator is supposed to have.
+ */
+function scalingBonus(state, context, scaling) {
+  if (!scaling || !scaling.from) return 0;
+  const source = EFFECT_SCALING_SOURCES[scaling.from];
+  if (!source) return 0;
+  const value = source.read(state, context) || 0;
+  const per = Number(scaling.perUnit || 0);
+  const raw = value * per;
+  const cap = scaling.max == null ? Infinity : Number(scaling.max);
+  return Math.max(0, Math.min(cap, raw));
+}
+
 function resolveDamageEffect(state, context) {
   const { sourceUnitId, targetUnitId, effect } = context;
   const formula = FORMULAS.damage[effect.formula];
@@ -3821,6 +3898,10 @@ function resolveDamageEffect(state, context) {
     return;
   }
   const numbers = effectContextStats(state, sourceUnitId, targetUnitId, effect);
+  // Approach distance, redirects taken — earned power from a named source
+  // rather than a bespoke calculator per ability.
+  const bonus = scalingBonus(state, context, effect.scaling);
+  if (bonus) numbers.power += bonus;
   const flank = flankProfile(state, sourceUnitId, targetUnitId, {
     sourceTile: context.sourceTile,
     targetTile: context.targetTile
@@ -3861,7 +3942,8 @@ function resolveDamageEffect(state, context) {
     flankArc: flank.arc,
     targetFacing: flank.targetFacing,
     attackerDirection: flank.attackerDirection,
-    damageMultiplier: flank.damageMultiplier
+    damageMultiplier: flank.damageMultiplier,
+    scalingBonus: bonus || 0
   });
 }
 
@@ -4001,6 +4083,8 @@ function resolveForcedMovement(state, context, direction, distance) {
   if (path.length > 1) {
     // The whole subtree below a shove is "because it was forced", which is how
     // a reaction can care that a target did not choose to be there.
+    const blockTile = blocked ? { x: x + direction.dx, y: y + direction.dy } : null;
+    const blocker = blockTile ? unitAt(state, blockTile.x, blockTile.y, unit.id) : null;
     const forcedEvent = queueEvent(state, {
       type: "unitForcedMove",
       sourceUnitId: context.sourceUnitId,
@@ -4010,7 +4094,13 @@ function resolveForcedMovement(state, context, direction, distance) {
       to: path[path.length - 1],
       path,
       tiles: path.length - 1,
-      blocked
+      requested: distance,
+      blocked,
+      // Why it stopped short, and against what. Enough for a collision
+      // consequence to be authored without a physics model.
+      blockReason: blocked ? "the way is blocked" : null,
+      blockTile,
+      blockedBy: blocker ? blocker.id : null
     });
     if (forcedEvent.cause) forcedEvent.cause.forced = true;
   }
@@ -4041,6 +4131,90 @@ function resolveMoveUnitEffect(state, context) {
   if (!unit) return;
   const direction = effect.direction || directionBetween(context.sourceTile || unit, unit);
   resolveForcedMovement(state, context, direction, effect.distance == null ? 1 : effect.distance);
+}
+
+/**
+ * Precise displacement: exactly this far, in exactly this direction.
+ *
+ * The distinction from `push` is the whole tactical point. A shove asks for
+ * maximum knockback; this asks for a *chosen* distance, because the difference
+ * between two tiles and three is the difference between opening a firing lane
+ * and wasting the setup. Everything else is identical — the target walks the
+ * real forced-movement path, through the real traversal rules, and the event
+ * says how far it actually got and what stopped it.
+ */
+function resolveDisplaceEffect(state, context) {
+  const effect = context.effect;
+  const unit = state.units[context.targetUnitId];
+  if (!unit || !unit.alive) return;
+
+  // Heading: authored outright, or away from / toward the source.
+  let heading = effect.heading;
+  if (!heading) {
+    const from = context.sourceTile || state.units[context.sourceUnitId];
+    if (!from) return;
+    const away = effect.toward === true
+      ? headingBetween({ x: unit.x, y: unit.y }, { x: Math.sign(from.x - unit.x) + unit.x, y: Math.sign(from.y - unit.y) + unit.y })
+      : headingBetween({ x: from.x, y: from.y }, { x: from.x + Math.sign(unit.x - from.x), y: from.y + Math.sign(unit.y - from.y) });
+    heading = away ? away.id : null;
+  }
+  if (!heading) return;
+
+  const resistance = effect.ignoresResistance === true
+    ? 0
+    : calculateUnitStats(state, context.targetUnitId).displacementResistance;
+
+  const plan = planDisplacement(
+    { x: unit.x, y: unit.y },
+    heading,
+    effect.distance == null ? 1 : effect.distance,
+    trajectoryDeps(state, context.targetUnitId, {
+      movementPolicy: effect.movementPolicy || "forced",
+      ignoresElevation: effect.ignoresElevation === true
+    }),
+    { resistance }
+  );
+
+  if (!plan.actual) {
+    // Nothing moved, but the attempt is still a fact worth publishing: a shove
+    // that bounced off a wall is exactly the moment a collision reaction wants.
+    queueEvent(state, {
+      type: "displacementBlocked",
+      sourceUnitId: context.sourceUnitId,
+      unitId: unit.id,
+      abilityId: context.abilityId || null,
+      heading: plan.heading,
+      requested: plan.requested,
+      actual: 0,
+      resisted: plan.resisted,
+      blockReason: plan.blockReason,
+      blockTile: plan.blockTile,
+      blockedBy: plan.blockedBy
+    });
+    return;
+  }
+
+  const forced = queueEvent(state, {
+    type: "unitForcedMove",
+    sourceUnitId: context.sourceUnitId,
+    unitId: unit.id,
+    abilityId: context.abilityId || null,
+    from: { ...plan.origin },
+    to: { ...plan.endpoint },
+    path: [plan.origin].concat(plan.tiles),
+    tiles: plan.actual,
+    heading: plan.heading,
+    // The precise half of the contract: what was asked for, what happened, and
+    // why they differ. A reaction can respond to the shortfall as readily as
+    // to the shove.
+    requested: plan.requested,
+    resisted: plan.resisted,
+    blocked: plan.blocked,
+    blockReason: plan.blockReason,
+    blockTile: plan.blockTile,
+    blockedBy: plan.blockedBy
+  });
+  if (forced.cause) forced.cause.forced = true;
 }
 
 function resolvePushEffect(state, context) {
@@ -4438,6 +4612,7 @@ const EFFECT_HANDLERS = {
   shield: resolveShieldEffect,
   modifyStat: resolveModifyStatEffect,
   moveUnit: resolveMoveUnitEffect,
+  displace: resolveDisplaceEffect,
   push: resolvePushEffect,
   pull: resolvePullEffect,
   teleport: resolveTeleportEffect,
@@ -4713,6 +4888,7 @@ const EFFECT_METADATA = {
   shield: { applies: "unit" },
   modifyStat: { applies: "unit" },
   moveUnit: { applies: "unit" },
+  displace: { applies: "unit" },
   push: { applies: "unit" },
   pull: { applies: "unit" },
   teleport: { applies: "unit", needsTile: true },
@@ -5202,8 +5378,23 @@ const EVENT_HANDLERS = {
     logLine(
       state,
       "unitForcedMove",
-      unitLabel(state, unit.id) + " is moved to " + tileKey(unit.x, unit.y),
-      { unitId: unit.id, tiles: event.tiles, from: event.from, to: event.to, blocked: event.blocked }
+      unitLabel(state, unit.id) + " is moved to " + tileKey(unit.x, unit.y) +
+        (event.blocked ? " and stops short" : ""),
+      {
+        unitId: unit.id,
+        sourceUnitId: event.sourceUnitId || null,
+        tiles: event.tiles,
+        from: event.from,
+        to: event.to,
+        // What was asked for versus what happened, and what stopped it. A
+        // collision consequence is authorable from this without a physics model.
+        requested: event.requested == null ? event.tiles : event.requested,
+        resisted: event.resisted || 0,
+        blocked: event.blocked,
+        blockReason: event.blockReason || null,
+        blockTile: event.blockTile || null,
+        blockedBy: event.blockedBy || null
+      }
     );
   },
 
@@ -5475,7 +5666,11 @@ const EVENT_HANDLERS = {
         targetFacing: event.targetFacing || null,
         attackerDirection: event.attackerDirection || null,
         baseAmount: event.baseAmount == null ? event.amount : event.baseAmount,
-        damageMultiplier: event.damageMultiplier == null ? 1 : event.damageMultiplier
+        damageMultiplier: event.damageMultiplier == null ? 1 : event.damageMultiplier,
+        // How much of this was earned by the approach rather than the weapon.
+        // Attributed rather than folded into the total, so a player can tell
+        // whether the runway was worth it.
+        scalingBonus: event.scalingBonus || 0
       }
     );
     emitBattleTrigger(state, "damageResolved", event);
@@ -5657,6 +5852,51 @@ const EVENT_HANDLERS = {
     }
     state.activeUnitId = null;
     state.activation = null;
+  },
+
+  /** A shove that achieved nothing still happened. Logged and published so a
+   *  reaction or a mission trigger can respond to the failed displacement. */
+  displacementBlocked(state, event) {
+    logLine(
+      state,
+      "displacementBlocked",
+      unitLabel(state, event.unitId) + " does not budge" +
+        (event.resisted ? " (absorbs " + event.resisted + ")" : "") +
+        (event.blockReason ? " — " + event.blockReason : ""),
+      {
+        unitId: event.unitId,
+        sourceUnitId: event.sourceUnitId,
+        requested: event.requested,
+        resisted: event.resisted,
+        blockReason: event.blockReason,
+        blockTile: event.blockTile,
+        blockedBy: event.blockedBy
+      }
+    );
+  },
+
+  /** Bookkeeping and a log line. The route already happened, segment by
+   *  segment; this is where it is recorded as one tactical act. */
+  trajectoryCompleted(state, event) {
+    logLine(
+      state,
+      "trajectoryCompleted",
+      unitLabel(state, event.unitId) +
+        (event.interrupted ? " breaks off after " : " completes a route of ") +
+        event.distance +
+        " tiles" +
+        (event.redirects ? " with " + event.redirects + " redirect(s)" : "") +
+        (event.interrupted && event.interruptReason ? " — " + event.interruptReason : ""),
+      {
+        unitId: event.unitId,
+        abilityId: event.abilityId,
+        distance: event.distance,
+        redirects: event.redirects,
+        interrupted: event.interrupted,
+        interruptReason: event.interruptReason,
+        endpoint: event.endpoint
+      }
+    );
   },
 
   battleEnded(state, event) {
@@ -5861,6 +6101,304 @@ function projectNextActionTime(state, unitId, totalRecovery) {
   return state.currentTime + FORMULAS.timeline.recoveryDelay(stats.speed, totalRecovery);
 }
 
+/* ---------------------------------------------------------------
+ * TRAJECTORY ACTIONS
+ * -------------------------------------------------------------*/
+
+/** Route rules an ability declares, in the shape the planner wants. Absent,
+ *  the defaults describe an ordinary move: one segment, no turns. */
+function trajectoryRules(ability) {
+  const declared = (ability && ability.trajectory) || {};
+  return {
+    maxSegments: declared.maxSegments == null ? 1 : declared.maxSegments,
+    maxDistance: declared.maxDistance,
+    allowedRedirects: declared.allowedRedirects || null,
+    movementPolicy: declared.movementPolicy || "normal",
+    ignoresElevation: declared.ignoresElevation === true,
+    redirectCosts: declared.redirectCosts || null,
+    resourceId: declared.resourceId || null,
+    /** Whether the route stops at its first contact or carries on. */
+    continueAfterContact: declared.continueAfterContact !== false
+  };
+}
+
+/**
+ * What a route costs its mover, and whether they can pay.
+ *
+ * The engine multiplies and compares; the numbers and the resource are both
+ * authored. Nothing here knows what is being spent.
+ */
+function trajectoryResourceCost(state, unitId, ability, plan) {
+  const rules = trajectoryRules(ability);
+  if (!rules.resourceId || !rules.redirectCosts) {
+    return { ok: true, amount: 0, breakdown: [], resourceId: null };
+  }
+  const raw = REACTION_INDEX.resourceById[rules.resourceId];
+  if (!raw) {
+    return { ok: false, reason: 'This action spends "' + rules.resourceId + '", which is not a resource.' };
+  }
+  const definition = normalizeResourceDefinition({ id: rules.resourceId, ...raw });
+  const cost = redirectCost(plan, rules.redirectCosts);
+  if (!cost.total) return { ok: true, amount: 0, breakdown: [], resourceId: rules.resourceId };
+
+  const unit = state.units[unitId];
+  const owner = definition.scope === "faction" ? { teamId: unit.teamId } : { unitId };
+  const check = canSpendResource(state, definition, owner, cost.total);
+  return {
+    ok: check.ok,
+    reason: check.ok ? null : "That route needs " + cost.total + " " + (definition.name || definition.id) + " — " + check.reason + ".",
+    amount: cost.total,
+    breakdown: cost.breakdown,
+    resourceId: rules.resourceId,
+    definition,
+    owner
+  };
+}
+
+/**
+ * Re-walks a planned segment against the battlefield as it is right now.
+ *
+ * A route is planned once and then resolves over several events, and those
+ * events move things: a contact displaces someone into the lane, a reaction
+ * advances an ally across it, the mover itself gets shoved. Replaying the
+ * planned tiles blindly would drive the frame through whoever arrived after
+ * the plan was made, so each segment asks the same authority the same question
+ * again, later. `planUnitTrajectory` stays the only model of legality — this
+ * re-runs it per step rather than reimplementing it.
+ */
+function revalidateSegment(state, unitId, segment, rules) {
+  const deps = trajectoryDeps(state, unitId, rules);
+  const unit = state.units[unitId];
+  const live = {
+    tiles: [],
+    distance: 0,
+    from: { x: unit.x, y: unit.y },
+    to: { x: unit.x, y: unit.y },
+    blocked: false,
+    blockReason: null,
+    blockTile: null,
+    blockedBy: null
+  };
+  let cursor = live.from;
+  for (const tile of segment.tiles) {
+    const step = deps.canEnter(cursor, tile);
+    if (!step.ok) {
+      live.blocked = true;
+      live.blockReason = step.reason || "the way is blocked";
+      live.blockTile = { x: tile.x, y: tile.y };
+      live.blockedBy = deps.unitAt(tile);
+      break;
+    }
+    cursor = { x: tile.x, y: tile.y };
+    live.tiles.push({ x: tile.x, y: tile.y });
+    live.distance += 1;
+  }
+  live.to = cursor;
+  return live;
+}
+
+/**
+ * Runs a planned route.
+ *
+ * Each segment is applied as an ordinary movement event, and the contact for
+ * that segment resolves between segments. That ordering is what makes a
+ * mid-route strike honest: the mover really is standing where the strike says
+ * it is, every reaction that would fire on the movement has already fired, and
+ * the remaining segments are re-checked against a battlefield the strike may
+ * have changed.
+ */
+function executeTrajectory(state, command) {
+  const unitId = command.unitId;
+  const ability = command.abilityId ? CONTENT.abilities[command.abilityId] : null;
+  const rules = trajectoryRules(ability);
+  const plan = planUnitTrajectory(state, unitId, command.segments, rules);
+  const context = createTrajectoryContext(plan, unitId, { abilityId: command.abilityId || null });
+  state.trajectory = context;
+
+  // An illegal route costs nothing and moves nobody. The command validator
+  // normally catches this first; the check lives here too so that no caller can
+  // half-run a route the planner already refused.
+  if (!plan.legal) {
+    context.interrupted = true;
+    context.interruptReason = plan.reason || "this route is not legal";
+    queueTrajectoryCompleted(state, command, context, plan);
+    return context;
+  }
+
+  // Priced from the plan, before the first tile: the mover is buying the
+  // attempt, not the outcome. A route the world interrupts halfway is still
+  // paid for, the same way a missed shot is.
+  const cost = trajectoryResourceCost(state, unitId, ability, plan);
+  if (cost.amount) spendCombatResource(state, cost.definition, cost.owner, cost.amount);
+
+  if (ability) {
+    state.activation.acted = true;
+    state.activation.actionRecovery += abilityRecovery(command.abilityId);
+  }
+
+  for (const segment of plan.segments) {
+    // A route is abandoned rather than forced through if the mover stopped
+    // being able to travel it — killed by a reaction to its own movement, for
+    // instance, which is a real thing that can happen now.
+    const mover = state.units[unitId];
+    if (!mover || !mover.alive || mover.dormant) {
+      context.interrupted = true;
+      context.interruptReason = "the mover can no longer travel";
+      break;
+    }
+    if (mover.x !== segment.from.x || mover.y !== segment.from.y) {
+      context.interrupted = true;
+      context.interruptReason = "the frame is no longer where this segment starts";
+      break;
+    }
+
+    const live = revalidateSegment(state, unitId, segment, rules);
+    if (live.distance > 0) {
+      const startFacing = normalizeFacing(mover.facing);
+      queueEvent(state, {
+        type: "unitMoved",
+        unitId,
+        from: { ...live.from },
+        to: { ...live.to },
+        path: [live.from].concat(live.tiles).map((tile) => ({ x: tile.x, y: tile.y })),
+        tiles: live.distance,
+        startFacing,
+        stepFacings: live.tiles.map(() => startFacing),
+        // Trajectory segments are voluntary movement and do spend the move,
+        // but only once for the whole route — charged after the last segment.
+        scripted: true,
+        trajectory: {
+          segmentIndex: segment.index,
+          heading: segment.heading,
+          redirect: segment.redirect,
+          distance: live.distance,
+          plannedDistance: segment.distance,
+          totalDistance: context.distanceTravelled + live.distance
+        }
+      });
+      processAllEvents(state);
+      advanceContext(context, { ...segment, distance: live.distance, to: live.to });
+    }
+
+    // The contact still resolves when the segment is cut short: being stopped
+    // by the very thing you were charging at is a hit, not a miss. Reach is
+    // what decides, and `resolveTrajectoryContact` measures it from where the
+    // frame actually ended up.
+    if (segment.contact) {
+      const resolved = resolveTrajectoryContact(state, unitId, ability, segment, context);
+      context.contacts.push(resolved);
+      processAllEvents(state);
+      if (!rules.continueAfterContact) {
+        context.interrupted = true;
+        context.interruptReason = "the action ends on contact";
+        break;
+      }
+    }
+
+    if (live.blocked) {
+      context.interrupted = true;
+      context.interruptReason = live.blockReason;
+      context.blockTile = live.blockTile;
+      context.blockedBy = live.blockedBy;
+      break;
+    }
+  }
+
+  context.completed = !context.interrupted;
+  if (context.distanceTravelled && state.activation && state.activation.unitId === unitId) {
+    state.activation.moved = true;
+    state.activation.movementRecovery += movementRecoveryFor(context.distanceTravelled);
+  }
+  queueTrajectoryCompleted(state, command, context, plan);
+  return context;
+}
+
+/** The one event that closes a route, whether it finished or gave up. */
+function queueTrajectoryCompleted(state, command, context, plan) {
+  const unitId = command.unitId;
+  const mover = state.units[unitId];
+  queueEvent(state, {
+    type: "trajectoryCompleted",
+    unitId,
+    abilityId: command.abilityId || null,
+    distance: context.distanceTravelled,
+    segments: context.distanceTravelled || context.contacts.length ? context.segmentIndex + 1 : 0,
+    redirects: context.redirectCount,
+    endpoint: mover ? { x: mover.x, y: mover.y } : { ...plan.endpoint },
+    plannedEndpoint: { ...plan.endpoint },
+    interrupted: context.interrupted,
+    interruptReason: context.interruptReason,
+    blockedBy: context.blockedBy || null
+  });
+}
+
+/**
+ * Resolves whatever an authored segment wanted to do at its end.
+ *
+ * The contact names a target and the ability supplies the effects, so this is
+ * a dispatcher rather than a behaviour: `machStrikePunch()` would be the exact
+ * mistake this phase exists to avoid.
+ */
+function resolveTrajectoryContact(state, unitId, ability, segment, context) {
+  const contact = segment.contact;
+  const targetId =
+    contact.targetUnitId ||
+    (contact.targetRef
+      ? state.unitOrder.find((id) => state.units[id].ref === contact.targetRef)
+      : null);
+  const record = {
+    segment: segment.index,
+    targetUnitId: targetId,
+    approachDistance: context.distanceTravelled,
+    resolved: false,
+    reason: null
+  };
+  if (!targetId || !state.units[targetId] || !state.units[targetId].alive) {
+    record.reason = "the target is gone";
+    return record;
+  }
+  const target = state.units[targetId];
+  const mover = state.units[unitId];
+  if (gridDistance(mover, target) > (contact.range == null ? 1 : contact.range)) {
+    record.reason = "out of reach at that point on the route";
+    return record;
+  }
+
+  const authored = (ability && ability.trajectory && ability.trajectory.contactEffects) || [];
+  if (!authored.length) {
+    record.reason = "this action does nothing on contact";
+    return record;
+  }
+
+  // The precise half of the contract. The ability authors a *maximum*
+  // displacement; the player picks the actual distance and heading, because
+  // the exact tile is the point of the whole manoeuvre. Clamped to what the
+  // ability allows, so choosing is not the same as being unlimited.
+  const effects = authored.map((effect) => {
+    if (effect.type !== "displace" || !contact.displace) return effect;
+    const maximum = effect.distance == null ? 1 : effect.distance;
+    const wanted = contact.displace.distance == null ? maximum : Number(contact.displace.distance);
+    return {
+      ...effect,
+      distance: Math.max(0, Math.min(maximum, wanted)),
+      heading: contact.displace.heading || effect.heading
+    };
+  });
+  record.displacement = contact.displace
+    ? { requested: contact.displace.distance, heading: contact.displace.heading || null }
+    : null;
+
+  resolveEffects(state, {
+    sourceUnitId: unitId,
+    targetUnitIds: [targetId],
+    abilityId: ability ? ability.id : null,
+    effects,
+    targetTile: { x: target.x, y: target.y }
+  });
+  record.resolved = true;
+  return record;
+}
+
 const COMMAND_VALIDATORS = {
   activateUnit(state, command) {
     const errors = [];
@@ -5873,6 +6411,47 @@ const COMMAND_VALIDATORS = {
       errors.push("This unit is not next on the timeline.");
     }
     return { errors, preview: { time: unit.nextActionTime } };
+  },
+
+  /**
+   * A high-speed route: segments, redirects, and optional contacts along the
+   * way. Validated by the same planner that executes it, so the preview the
+   * player confirmed is the route that runs.
+   */
+  trajectory(state, command) {
+    const errors = [];
+    const unit = state.units[command.unitId];
+    if (!unit) return { errors: ["Unknown unit."], preview: {} };
+    if (state.activeUnitId !== command.unitId) errors.push("Unit is not the active unit.");
+    if (state.activation && state.activation.moved) errors.push("Unit has already moved.");
+    if (!unit.alive) errors.push("Defeated units cannot act.");
+
+    const ability = command.abilityId ? CONTENT.abilities[command.abilityId] : null;
+    if (command.abilityId && !ability) errors.push("Unknown ability.");
+    if (ability && state.activation && state.activation.acted) {
+      errors.push("Unit has already acted.");
+    }
+
+    const rules = trajectoryRules(ability);
+    const plan = planUnitTrajectory(state, command.unitId, command.segments, rules);
+    if (!plan.legal) errors.push(plan.reason || "That route is not legal.");
+
+    // Resource costs are content's, charged through the generic layer. The
+    // command refuses rather than half-running: a route the mover cannot pay
+    // for must not leave them stranded halfway.
+    const cost = trajectoryResourceCost(state, command.unitId, ability, plan);
+    if (!cost.ok) errors.push(cost.reason);
+
+    return {
+      errors,
+      preview: {
+        plan,
+        cost: cost.breakdown,
+        endpoint: plan.endpoint,
+        distance: plan.totalDistance,
+        redirects: redirectTally(plan)
+      }
+    };
   },
 
   move(state, command) {
@@ -6171,6 +6750,7 @@ const EFFECT_FORECASTERS = {
     ];
   },
 
+  displace: (state, options) => forcedMoveForecast(state, options, "SHIFT"),
   push: (state, options) => forcedMoveForecast(state, options, "PUSH"),
   pull: (state, options) => forcedMoveForecast(state, options, "PULL"),
   moveUnit: (state, options) => forcedMoveForecast(state, options, "MOVE"),
@@ -6622,6 +7202,10 @@ const COMMAND_HANDLERS = {
       pendingEnd: null
     };
     queueEvent(state, { type: "unitActivated", unitId: unit.id });
+  },
+
+  trajectory(state, command) {
+    executeTrajectory(state, command);
   },
 
   move(state, command) {
@@ -7888,6 +8472,278 @@ function seedSearchAnchors(state) {
  * one in the log, in a save, and in a replay.
  * -------------------------------------------------------------*/
 
+/* ===============================================================
+ * TRAJECTORY
+ *
+ * A route is planned and executed entirely through machinery that already
+ * existed: `evaluateTraversalStep` decides every tile, and each segment is
+ * applied as an ordinary `unitMoved` event. Normal movement is untouched — a
+ * one-segment trajectory with no contacts is byte-identical to a plain move,
+ * which is the property that lets this be additive rather than a rewrite.
+ * =============================================================*/
+
+/**
+ * Whether a route ability has anywhere to start.
+ *
+ * One legal tile in any heading is enough — the planner decides the rest when
+ * the player draws it. A frame boxed in on all sides genuinely cannot use a
+ * route ability, which is the counterplay stated as a rule rather than a nerf.
+ */
+function trajectoryHasRunway(state, unitId, ability) {
+  const rules = trajectoryRules(ability);
+  return HEADING_IDS.some((heading) => {
+    const plan = planUnitTrajectory(state, unitId, [{ heading, distance: 1 }], rules);
+    return plan.legal && plan.totalDistance > 0;
+  });
+}
+
+/** The engine adapter the planner asks about tiles. One legality model. */
+function trajectoryDeps(state, unitId, options) {
+  const opts = options || {};
+  return {
+    canEnter(from, to) {
+      const step = evaluateTraversalStep(state, unitId, from, to, {
+        movementPolicy: opts.movementPolicy || "normal",
+        ignoresElevation: opts.ignoresElevation === true,
+        ignoreOccupancy: opts.ignoreOccupancy === true
+      });
+      return { ok: step.valid, reason: step.errors[0] || null };
+    },
+    unitAt(tile) {
+      const occupant = unitAt(state, tile.x, tile.y, unitId);
+      return occupant ? occupant.id : null;
+    }
+  };
+}
+
+/**
+ * Plans a route for a unit, through the engine's own rules.
+ *
+ * The single authority: execution, the player's preview and the tests all call
+ * this. A preview that computed legality separately would eventually promise a
+ * tile the engine then refuses, which is the worst kind of lie a tactics game
+ * can tell.
+ */
+function planUnitTrajectory(state, unitId, segments, options) {
+  const opts = options || {};
+  const unit = state.units[unitId];
+  if (!unit) return { legal: false, reason: "no such unit", segments: [], tiles: [], redirects: [] };
+  const stats = calculateUnitStats(state, unitId);
+  return planTrajectory(
+    { x: unit.x, y: unit.y },
+    segments,
+    trajectoryDeps(state, unitId, opts),
+    {
+      maxSegments: opts.maxSegments,
+      // A route is bounded by the mover's own movement unless the action says
+      // otherwise. Acceleration is content's business, not the planner's.
+      maxDistance: opts.maxDistance == null ? stats.movement : opts.maxDistance,
+      allowedRedirects: opts.allowedRedirects,
+      initialHeading: opts.initialHeading
+    }
+  );
+}
+
+/**
+ * Everything an authored condition may read about a route in progress.
+ *
+ * Exposed as plain values rather than a formula language: content asks "was
+ * the approach at least four tiles?", it does not write arithmetic.
+ */
+function trajectoryContextOf(state, unitId) {
+  const context = state.trajectory;
+  if (!context || context.unitId !== unitId) return null;
+  return context;
+}
+
+/* ---------------------------------------------------------------
+ * ROUTE PLANNING (the player's side)
+ *
+ * The preview is not a second implementation of anything. It calls
+ * `planUnitTrajectory` for the route, `planDisplacement` for the shove and
+ * `trajectoryResourceCost` for the price — the same three functions execution
+ * calls, in the same order, with the same arguments. What it adds is names,
+ * tile lists to draw, and the reason a segment is refused.
+ * -------------------------------------------------------------*/
+
+/** The ability, if it is one that flies a route. Content decides; nothing here
+ *  keeps a list of which abilities are trajectories. */
+function trajectoryAbility(abilityId) {
+  const ability = abilityId ? CONTENT.abilities[abilityId] : null;
+  return ability && ability.trajectory ? ability : null;
+}
+
+/**
+ * The segment that reaches a clicked tile in a straight line, or null.
+ *
+ * A route is drawn one leg at a time: the player clicks where this leg ends,
+ * and only tiles that lie on one heading from the current end qualify. That is
+ * the whole input model — no dragging, no waypoint solver, no second
+ * pathfinder to disagree with the first.
+ */
+function straightSegmentTo(from, tile) {
+  if (!from || !tile) return null;
+  const dx = tile.x - from.x;
+  const dy = tile.y - from.y;
+  if (!dx && !dy) return null;
+  if (dx && dy && Math.abs(dx) !== Math.abs(dy)) return null;
+  const step = headingBetween(from, {
+    x: from.x + Math.sign(dx),
+    y: from.y + Math.sign(dy)
+  });
+  if (!step) return null;
+  return { heading: step.id, distance: Math.max(Math.abs(dx), Math.abs(dy)) };
+}
+
+/** Where a route currently ends, which is where the next leg starts. */
+function routeEndpoint(state, unitId, segments) {
+  const unit = state.units[unitId];
+  if (!unit) return null;
+  if (!segments || !segments.length) return { x: unit.x, y: unit.y };
+  const plan = planUnitTrajectory(state, unitId, segments, {});
+  const last = plan.segments[plan.segments.length - 1];
+  return last ? { ...last.to } : { x: unit.x, y: unit.y };
+}
+
+/**
+ * Everything the route preview needs, from the authorities that will run it.
+ *
+ * `candidate` is the leg the pointer is currently over. It is appended to the
+ * committed segments before planning, so the player sees the route they would
+ * get rather than the route they have.
+ */
+function createRoutePlanModel(state, input, candidate) {
+  const unitId = input.selectedUnitId || state.activeUnitId;
+  const ability = trajectoryAbility(input.selectedAbilityId);
+  if (!unitId || !ability || !state.units[unitId]) return null;
+
+  const rules = trajectoryRules(ability);
+  const committed = input.routeSegments || [];
+  const segments = candidate ? committed.concat([candidate]) : committed;
+  const plan = planUnitTrajectory(state, unitId, segments, rules);
+  const cost = trajectoryResourceCost(state, unitId, ability, plan);
+
+  const resource = cost.definition
+    ? resourceEntry(state, cost.definition, cost.owner)
+    : null;
+  const contacts = [];
+  const displacementTiles = [];
+  for (const segment of plan.segments) {
+    if (!segment.contact) continue;
+    contacts.push(describeRouteContact(state, unitId, ability, segment, displacementTiles));
+  }
+
+  return {
+    unitId,
+    abilityId: input.selectedAbilityId,
+    abilityName: ability.name,
+    empty: !segments.length,
+    candidate: candidate || null,
+    committedCount: committed.length,
+    maxSegments: rules.maxSegments,
+    maxDistance: rules.maxDistance == null ? calculateUnitStats(state, unitId).movement : rules.maxDistance,
+    legal: plan.legal,
+    reason: plan.reason,
+    distance: plan.totalDistance,
+    origin: plan.origin,
+    endpoint: plan.endpoint,
+    tiles: plan.tiles,
+    segments: plan.segments.map((segment) => ({
+      index: segment.index,
+      heading: segment.heading,
+      distance: segment.distance,
+      requestedDistance: segment.requestedDistance,
+      redirect: segment.redirect,
+      from: segment.from,
+      to: segment.to,
+      blocked: segment.blocked,
+      blockReason: segment.blockReason,
+      blockTile: segment.blockTile,
+      contact: segment.contact || null
+    })),
+    redirectTiles: (plan.redirects || [])
+      .filter((redirect) => redirect.category !== "straight")
+      .map((redirect) => ({ ...redirect.tile, category: redirect.category })),
+    redirects: redirectTally(plan),
+    contacts,
+    displacementTiles,
+    blockTile: (plan.segments.find((segment) => segment.blocked) || {}).blockTile || null,
+    cost: {
+      resourceId: cost.resourceId || null,
+      resourceName: cost.definition ? cost.definition.name || cost.definition.id : null,
+      amount: cost.amount || 0,
+      breakdown: cost.breakdown || [],
+      affordable: cost.ok !== false,
+      reason: cost.ok === false ? cost.reason : null,
+      available: resource ? resource.current : null,
+      remaining: resource ? resource.current - (cost.amount || 0) : null
+    }
+  };
+}
+
+/** One contact on the route: who is hit, and exactly where they end up. */
+function describeRouteContact(state, unitId, ability, segment, displacementTiles) {
+  const contact = segment.contact;
+  const targetId =
+    contact.targetUnitId ||
+    (contact.targetRef
+      ? state.unitOrder.find((id) => state.units[id].ref === contact.targetRef)
+      : null);
+  const target = targetId ? state.units[targetId] : null;
+  const effects = (ability.trajectory && ability.trajectory.contactEffects) || [];
+  const displaceEffect = effects.find((effect) => effect.type === "displace") || null;
+  const maximum = displaceEffect ? (displaceEffect.distance == null ? 1 : displaceEffect.distance) : 0;
+
+  const record = {
+    segment: segment.index,
+    targetUnitId: targetId || null,
+    targetName: target ? CONTENT.units[target.definitionId].name : "—",
+    tile: target ? { x: target.x, y: target.y } : null,
+    inReach: false,
+    reachReason: null,
+    maxDisplacement: maximum,
+    displacement: null
+  };
+  if (!target || !target.alive) {
+    record.reachReason = "no target";
+    return record;
+  }
+  // Reach is measured from where the frame ends the segment, which is the
+  // same tile the executing code measures from.
+  const reach = contact.range == null ? 1 : contact.range;
+  record.inReach = gridDistance(segment.to, target) <= reach;
+  if (!record.inReach) record.reachReason = "out of reach at that point on the route";
+  if (!displaceEffect || !contact.displace) return record;
+
+  const wanted = contact.displace.distance == null ? maximum : Number(contact.displace.distance);
+  const distance = Math.max(0, Math.min(maximum, wanted));
+  const shove = planDisplacement(
+    { x: target.x, y: target.y },
+    contact.displace.heading || displaceEffect.heading,
+    distance,
+    trajectoryDeps(state, targetId, {
+      movementPolicy: displaceEffect.movementPolicy || "forced",
+      ignoresElevation: displaceEffect.ignoresElevation === true
+    }),
+    {
+      resistance: displaceEffect.ignoresResistance === true
+        ? 0
+        : calculateUnitStats(state, targetId).displacementResistance
+    }
+  );
+  record.displacement = {
+    heading: shove.heading,
+    requested: shove.requested,
+    actual: shove.actual,
+    resisted: shove.resisted,
+    blocked: shove.blocked,
+    blockReason: shove.blockReason,
+    endpoint: shove.endpoint
+  };
+  if (shove.actual) displacementTiles.push({ ...shove.endpoint });
+  return record;
+}
+
 const REACTION_ENGINE = {
   logLine(state, type, text, data) {
     logLine(state, type, text, data);
@@ -8493,6 +9349,7 @@ const EFFECT_AI_SCORERS = {
     return (wanted ? 1 : -1) * GAME_CONFIG.ai.statusValue * (magnitude / 30);
   },
 
+  displace: (state, context) => forcedMovementScore(state, context),
   push: (state, context) => forcedMovementScore(state, context),
   pull: (state, context) => forcedMovementScore(state, context),
   moveUnit: (state, context) => forcedMovementScore(state, context),
@@ -9015,6 +9872,13 @@ const EFFECT_VALIDATORS = {
     return errors;
   },
   moveUnit: (registry, effect, label) => requireDistance(effect, label),
+  displace: (registry, effect, label) => {
+    const errors = requireDistance(effect, label);
+    if (effect.heading && !HEADING_IDS.includes(effect.heading)) {
+      errors.push(label + ' uses unknown heading "' + effect.heading + '".');
+    }
+    return errors;
+  },
   push: (registry, effect, label) => requireDistance(effect, label),
   pull: (registry, effect, label) => requireDistance(effect, label),
   teleport: () => [],
@@ -9323,7 +10187,25 @@ const ENGINE_FUNCTIONS = {
   runAiTurn,
   runActivation,
   runBattle,
-  validateBattleState
+  validateBattleState,
+  // The route surface. Listed explicitly so the "no concrete content ids"
+  // audit reads it: a charge is exactly the kind of mechanic that grows an
+  // `if (abilityId === …)` if nothing is watching.
+  trajectoryDeps,
+  planUnitTrajectory,
+  trajectoryRules,
+  trajectoryResourceCost,
+  trajectoryHasRunway,
+  revalidateSegment,
+  executeTrajectory,
+  queueTrajectoryCompleted,
+  resolveTrajectoryContact,
+  resolveDisplaceEffect,
+  scalingBonus,
+  straightSegmentTo,
+  routeEndpoint,
+  createRoutePlanModel,
+  describeRouteContact
 };
 
 function engineSourceEntries() {
@@ -10663,7 +11545,16 @@ function createAbilityViewModel(state, unitId, abilityId, options) {
   if (cooldownRemaining > 0) {
     reasons.push("Cooldown: " + cooldownRemaining + " activation" + (cooldownRemaining === 1 ? "" : "s"));
   }
-  if (!targets.length) reasons.push("No valid targets in range");
+  if (!targets.length) {
+    // A route ability reaches by travelling. Judging it on who is standing next
+    // to the frame right now would grey out the charge in exactly the situation
+    // a charge is for, so what it needs instead is somewhere to run.
+    if (ability.trajectory) {
+      if (!trajectoryHasRunway(state, unitId, ability)) reasons.push("No room to run");
+    } else {
+      reasons.push("No valid targets in range");
+    }
+  }
   if (state.activeUnitId !== unitId) reasons.push("Not this unit's activation");
   if (state.activation && state.activation.unitId === unitId && state.activation.acted) {
     reasons.push("Already acted this activation.");
@@ -11019,6 +11910,24 @@ function createBattleViewModel(state, view) {
     pathTiles.set(tileKey(tile.x, tile.y), index);
   });
 
+  // Route marks. A trajectory is drawn as an ordinary planned path plus the
+  // three things a path cannot say: where it turns, where it lands someone,
+  // and where it stops short.
+  const redirectTiles = new Map();
+  const displacementTiles = new Set();
+  let blockedTileKey = null;
+  if (options.route) {
+    for (const redirect of options.route.redirectTiles || []) {
+      redirectTiles.set(tileKey(redirect.x, redirect.y), redirect.category);
+    }
+    for (const tile of options.route.displacementTiles || []) {
+      displacementTiles.add(tileKey(tile.x, tile.y));
+    }
+    if (options.route.blockTile) {
+      blockedTileKey = tileKey(options.route.blockTile.x, options.route.blockTile.y);
+    }
+  }
+
   const selectedElevation =
     selectedUnitId && state.units[selectedUnitId]
       ? elevationAt(map, state.units[selectedUnitId].x, state.units[selectedUnitId].y) || 0
@@ -11059,6 +11968,9 @@ function createBattleViewModel(state, view) {
         threatPotential: threatPotential.has(key),
         inArea: areaTiles.has(key),
         pathIndex: pathTiles.has(key) ? pathTiles.get(key) : null,
+        routeRedirect: redirectTiles.has(key) ? redirectTiles.get(key) : null,
+        routeDisplacement: displacementTiles.has(key),
+        routeBlocked: blockedTileKey === key,
         isDestination:
           !!options.plannedDestination &&
           options.plannedDestination.x === x &&
@@ -12117,6 +13029,7 @@ const INPUT_MODES = [
   "unitReady",
   "planningMove",
   "planningTarget",
+  "planningRoute",
   "confirmingAction",
   "presentingEvents",
   "battleFinished"
@@ -12135,6 +13048,10 @@ function createInputState(overrides) {
     plannedSequence: null,
     selectedAbilityId: null,
     selectedTarget: null,
+    /** Committed legs of a trajectory, in the same shape the command takes.
+     *  Null when no route is being drawn; an empty array means "drawing, but
+     *  nothing chosen yet", which is a different thing the panel must say. */
+    routeSegments: null,
     forecast: null,
     contextOptions: null,
     contextTargetUnitId: null,
@@ -12170,6 +13087,7 @@ function clearPlan(input, overrides) {
     plannedSequence: null,
     selectedAbilityId: null,
     selectedTarget: null,
+    routeSegments: null,
     forecast: null,
     contextOptions: null,
     contextTargetUnitId: null,
@@ -12244,6 +13162,16 @@ function applyContextOption(input, option, targetUnit) {
 
 /** Commands produced by confirming whatever is currently planned. */
 function commandsForPlan(input) {
+  if (input.mode === "planningRoute" && input.routeSegments && input.routeSegments.length) {
+    return [
+      {
+        type: "trajectory",
+        unitId: input.selectedUnitId,
+        abilityId: input.selectedAbilityId,
+        segments: input.routeSegments
+      }
+    ];
+  }
   if (input.plannedSequence) {
     const sequence = [];
     if (input.plannedSequence.path && input.plannedSequence.path.length > 1) {
@@ -12400,13 +13328,17 @@ function inputReducer(input, action, state) {
       }
       const model = createAbilityViewModel(state, activeId, action.abilityId);
       if (!model.usable) return fail(input, model.unusableReason || "Ability unavailable.");
+      // A route is drawn, not aimed. Which one an ability is comes from its
+      // content, so a new trajectory ability needs no UI change at all.
+      const route = !!trajectoryAbility(action.abilityId);
       return result({
         ...input,
-        mode: "planningTarget",
+        mode: route ? "planningRoute" : "planningTarget",
         threatUnitId: null,
         threatPinned: false,
         selectedAbilityId: action.abilityId,
         selectedTarget: null,
+        routeSegments: route ? [] : null,
         plannedSequence: null,
         plannedPath: null,
         plannedMoveDestination: null,
@@ -12414,6 +13346,39 @@ function inputReducer(input, action, state) {
         commandMenuOpen: false,
         errorMessage: ""
       });
+    }
+
+    /* ---- route planning ---- */
+
+    case "undoRouteSegment": {
+      if (input.mode !== "planningRoute" || !input.routeSegments) return result(input);
+      if (!input.routeSegments.length) return result(clearPlan(input));
+      return result({
+        ...input,
+        routeSegments: input.routeSegments.slice(0, -1),
+        errorMessage: ""
+      });
+    }
+
+    /**
+     * The chosen displacement for a contact. This is the precise half of the
+     * mechanic: the distance is the player's, bounded by what the ability
+     * authorised, and the engine clamps it again on the way through.
+     */
+    case "setRouteDisplacement": {
+      if (input.mode !== "planningRoute" || !input.routeSegments) return result(input);
+      const index = action.segment == null ? input.routeSegments.length - 1 : action.segment;
+      const segment = input.routeSegments[index];
+      if (!segment || !segment.contact) return fail(input, "That leg has no contact.");
+      const displace = { ...(segment.contact.displace || {}) };
+      if (action.heading !== undefined) displace.heading = action.heading;
+      if (action.distance !== undefined) displace.distance = Math.max(0, Number(action.distance) || 0);
+      const segments = input.routeSegments.slice();
+      segments[index] = {
+        ...segment,
+        contact: { ...segment.contact, displace }
+      };
+      return result({ ...input, routeSegments: segments, errorMessage: "" });
     }
 
     case "setFacing":
@@ -12483,6 +13448,17 @@ function inputReducer(input, action, state) {
 
     case "rightClickTile": {
       const occupant = action.tile ? unitAt(state, action.tile.x, action.tile.y) : null;
+      // While drawing a route, right-click removes the last leg rather than
+      // throwing the whole thing away — a five-leg route is too much work to
+      // lose to one misclick.
+      if (input.mode === "planningRoute" && input.routeSegments) {
+        if (!input.routeSegments.length) return result(clearPlan(input));
+        return result({
+          ...input,
+          routeSegments: input.routeSegments.slice(0, -1),
+          errorMessage: ""
+        });
+      }
       if (occupant && occupant.id === activeId) {
         return result({ ...input, commandMenuOpen: true, errorMessage: "" });
       }
@@ -12520,6 +13496,54 @@ function inputReducer(input, action, state) {
       }
 
       const resources = createActivationResources(state, activeId);
+
+      /* ---- drawing a route ----
+       *
+       * Three things a click can mean, in the order a player expects them:
+       * confirm the route by clicking its end again, hit something the route
+       * already reaches, or add a leg. Every one of them is checked by the
+       * planner before it is accepted, so an illegal route can never be drawn
+       * in the first place — the reason is shown instead. */
+      if (input.mode === "planningRoute" && input.routeSegments) {
+        const segments = input.routeSegments;
+        const end = routeEndpoint(state, activeId, segments);
+        if (segments.length && sameTile(end, tile)) {
+          const validation = validateCommand(state, commandsForPlan(input)[0]);
+          if (!validation.valid) return fail(input, validation.errors[0]);
+          return result(
+            { ...input, mode: "presentingEvents", resumeMode: "idle" },
+            commandsForPlan(input)
+          );
+        }
+        if (occupant && segments.length && isHostile(state, activeId, occupant.id)) {
+          if (gridDistance(end, occupant) > 1) {
+            return fail(
+              { ...input, inspectedUnitId: occupant.id },
+              "The route does not pass within reach of that unit."
+            );
+          }
+          const last = segments.length - 1;
+          const next = segments.slice();
+          next[last] = {
+            ...segments[last],
+            contact: { targetUnitId: occupant.id, displace: { heading: null, distance: null } }
+          };
+          return result({ ...input, routeSegments: next, inspectedUnitId: occupant.id, errorMessage: "" });
+        }
+        const leg = straightSegmentTo(end, tile);
+        if (!leg) {
+          return fail(input, "A leg has to run straight from where the last one ended.");
+        }
+        const candidate = segments.concat([leg]);
+        const plan = planUnitTrajectory(
+          state,
+          activeId,
+          candidate,
+          trajectoryRules(CONTENT.abilities[input.selectedAbilityId])
+        );
+        if (!plan.legal) return fail(input, plan.reason || "That leg is not legal.");
+        return result({ ...input, routeSegments: candidate, errorMessage: "" });
+      }
 
       // Targeting an ability that is already selected.
       if (
@@ -13460,6 +14484,50 @@ function createContextCommandModel(state, input, options) {
       })),
       actions: [action("cancel", "Cancel", "Esc")]
     };
+  }
+
+  // A route being drawn. Everything shown here comes from the planner that
+  // will run it, so the panel cannot promise a route the engine then refuses.
+  if (input.mode === "planningRoute") {
+    const route = createRoutePlanModel(state, input, opts.routeCandidate);
+    if (route) {
+      const lines = [
+        { label: "Legs", value: route.segments.length + " / " + route.maxSegments },
+        { label: "Distance", value: route.distance + " / " + route.maxDistance }
+      ];
+      if (route.cost.resourceId) {
+        lines.push({
+          label: route.cost.resourceName,
+          value:
+            route.cost.amount +
+            (route.cost.available == null ? "" : " of " + route.cost.available)
+        });
+      }
+      const actions = [
+        action(
+          "confirm",
+          "Run the route",
+          "Enter",
+          !route.empty && route.legal && route.cost.affordable,
+          route.empty
+            ? "Click a tile to lay the first leg."
+            : !route.legal
+            ? route.reason
+            : route.cost.reason
+        ),
+        action("undoRouteSegment", "Undo leg", "Backspace", route.committedCount > 0),
+        action("cancel", "Cancel", "Esc")
+      ];
+      return {
+        ...base,
+        kind: "route",
+        anchorTile: { ...route.endpoint },
+        title: route.abilityName,
+        route,
+        lines,
+        actions
+      };
+    }
   }
 
   // Ability list.
@@ -20857,6 +21925,67 @@ test("Gameplay data", "The shipped data validates, and broken references do not"
   );
 });
 
+/**
+ * A route action is authored the same way anything else is, which means it can
+ * be authored wrong the same way. Every rule the planner relies on has to be
+ * something the Studio refuses before an export rather than something the
+ * player discovers mid-charge.
+ */
+test("Gameplay data", "A route action is editable content, and a broken one is refused", () => {
+  const schema = REGISTRY_SCHEMAS.abilities;
+  const section = schema.sections.find((entry) => entry.id === "trajectory");
+  assert(section, "the Studio has a trajectory section");
+  const keys = section.fields.map((field) => field.key);
+  for (const key of [
+    "trajectory.maxSegments",
+    "trajectory.allowedRedirects",
+    "trajectory.resourceId",
+    "trajectory.redirectCosts",
+    "trajectory.contactEffects"
+  ]) {
+    assert(keys.includes(key), key + " is not editable");
+  }
+  // Precise displacement is a stat, so it has to be a stat an author can set.
+  assert(
+    BASE_STAT_FIELDS.some((field) => field.key === "displacementResistance"),
+    "displacement resistance is invisible in the Studio"
+  );
+
+  const unknownResource = gameplayDraftFixture();
+  unknownResource.abilities.machStrike.trajectory.resourceId = "notARealPool";
+  assert(
+    validateGameplayData(unknownResource).errors.some((message) => /notARealPool/.test(message)),
+    "a route priced in a pool that does not exist must fail"
+  );
+
+  const unknownTurn = gameplayDraftFixture();
+  unknownTurn.abilities.machStrike.trajectory.allowedRedirects = ["quarter", "pirouette"];
+  assert(
+    validateGameplayData(unknownTurn).errors.some((message) => /pirouette/.test(message)),
+    "a turn category the planner has never heard of must fail"
+  );
+
+  const unpaid = gameplayDraftFixture();
+  delete unpaid.abilities.machStrike.trajectory.resourceId;
+  assertEqual(validateGameplayData(unpaid).ok, false, "prices with nothing to pay them in must fail");
+
+  const deadPrice = gameplayDraftFixture();
+  deadPrice.abilities.machStrike.trajectory.redirectCosts = { reverse: 3 };
+  assert(
+    validateGameplayData(deadPrice).warnings.some((message) => /reverse/.test(message)),
+    "pricing a turn the action forbids is worth saying out loud"
+  );
+
+  const badContact = gameplayDraftFixture();
+  badContact.abilities.machStrike.trajectory.contactEffects = [
+    { type: "applyStatus", statusId: "noSuchStatus", chance: 1 }
+  ];
+  assert(
+    validateGameplayData(badContact).errors.some((message) => /noSuchStatus/.test(message)),
+    "a contact effect's references are checked like any other effect's"
+  );
+});
+
 test("Gameplay data", "Deleting something other data depends on is refused", () => {
   const references = referencesTo(CANONICAL_GAMEPLAY, "abilities", "scatterShot", {});
   assert(references.length > 0, "scatterShot is used by a unit but nothing reported it");
@@ -21837,6 +22966,1160 @@ test("Orchestration", "Reaction and resource state survive a save mid-chain", ()
     "and so does a unit balance"
   );
   assert(restored.causality, "the causal clock survives too");
+});
+
+
+/* =========================================================================
+ * TRAJECTORY
+ *
+ * Routes, redirects, precise displacement and the interactions they enable.
+ *
+ * The operator these were written for is content. Nothing below asserts that
+ * he is good; several deliberately use throwaway authored data to prove the
+ * engine never needed to know whose route it was.
+ * =======================================================================*/
+
+const TRAJECTORY_ENCOUNTER = "file:fixture-trajectory-arena";
+
+function trajectoryBattle(seed, options) {
+  return createBattle(TRAJECTORY_ENCOUNTER, seed == null ? 7 : seed, {
+    autoResolveScenes: true,
+    autoResolveReactions: false,
+    ...options
+  });
+}
+
+function unitResource(state, unitId, resourceId) {
+  const unit = state.units[unitId];
+  return unit && unit.resources ? unit.resources[resourceId] : null;
+}
+
+/* ---------------------------------------------------------------
+ * REPRESENTATION
+ * -------------------------------------------------------------*/
+
+test("Trajectory", "Headings and redirects are a categorised turn, not a special case", () => {
+  assertEqual(headingBetween({ x: 0, y: 0 }, { x: 1, y: 0 }).id, "e");
+  assertEqual(headingBetween({ x: 0, y: 0 }, { x: 1, y: -1 }).id, "ne");
+  assertEqual(headingBetween({ x: 0, y: 0 }, { x: 0, y: 0 }), null, "a tile is not a heading");
+  assertEqual(headingBetween({ x: 0, y: 0 }, { x: 3, y: 0 }), null, "headings are between neighbours");
+
+  const east = headingById("e");
+  assertEqual(redirectCategory(east, headingById("e")), "straight");
+  assertEqual(redirectCategory(east, headingById("ne")), "slight");
+  assertEqual(redirectCategory(east, headingById("n")), "quarter");
+  assertEqual(redirectCategory(east, headingById("nw")), "sharp");
+  assertEqual(redirectCategory(east, headingById("w")), "reverse");
+
+  // Symmetric, and never more than half a turn — a route that turns 270° left
+  // has turned 90° right, and pricing it as the larger number would be wrong.
+  assertEqual(redirectCategory(headingById("w"), east), "reverse");
+  assertEqual(redirectCategory(headingById("n"), headingById("w")), "quarter");
+});
+
+test("Trajectory", "A one-segment route is exactly an ordinary move", () => {
+  const state = trajectoryBattle(7);
+  const veteran = unitByRef(state, "veteran");
+  const plan = planUnitTrajectory(state, veteran.id, [{ heading: "e", distance: 3 }], {});
+  assert(plan.legal, plan.reason || "");
+  assertEqual(plan.segments.length, 1);
+  assertEqual(plan.totalDistance, 3);
+  assertEqual(plan.redirects.length, 0, "one segment cannot turn");
+  assertEqual(plan.endpoint.x, veteran.x + 3);
+  assertEqual(plan.endpoint.y, veteran.y);
+  assertEqual(redirectCost(plan, { quarter: 1 }).total, 0, "and costs nothing");
+});
+
+test("Trajectory", "Tile form and heading form describe the same route", () => {
+  const state = trajectoryBattle(8);
+  const veteran = unitByRef(state, "veteran");
+  const byHeading = planUnitTrajectory(state, veteran.id, [{ heading: "e", distance: 3 }], {});
+  const byTiles = planUnitTrajectory(
+    state,
+    veteran.id,
+    [{ tiles: [{ x: 3, y: 8 }, { x: 4, y: 8 }, { x: 5, y: 8 }] }],
+    {}
+  );
+  assertEqual(JSON.stringify(byTiles.tiles), JSON.stringify(byHeading.tiles));
+  assertEqual(byTiles.endpoint.x, byHeading.endpoint.x);
+});
+
+test("Trajectory", "A segment travels in one heading; turning needs another segment", () => {
+  const state = trajectoryBattle(9);
+  const veteran = unitByRef(state, "veteran");
+  const bent = planUnitTrajectory(
+    state,
+    veteran.id,
+    [{ tiles: [{ x: 3, y: 8 }, { x: 3, y: 7 }] }],
+    { maxSegments: 2 }
+  );
+  assertEqual(bent.legal, false);
+  assert(/one heading/.test(bent.reason), bent.reason);
+});
+
+/* ---------------------------------------------------------------
+ * VALIDATION
+ * -------------------------------------------------------------*/
+
+test("Trajectory", "The planner is the engine's own rules, not a second opinion", () => {
+  const state = trajectoryBattle(10);
+  const veteran = unitByRef(state, "veteran");
+
+  // Straight into the wall block at row 11.
+  veteran.x = 6;
+  veteran.y = 14;
+  const intoWall = planUnitTrajectory(state, veteran.id, [{ heading: "n", distance: 5 }], {
+    maxDistance: 12
+  });
+  assertEqual(intoWall.legal, false, "impassable terrain stops a route");
+  assert(intoWall.reason, "and says why");
+  assertEqual(intoWall.segments[0].blockTile.y, 11, "naming the tile it could not enter");
+
+  // Off the map.
+  veteran.x = 1;
+  veteran.y = 8;
+  const offMap = planUnitTrajectory(state, veteran.id, [{ heading: "w", distance: 4 }], {
+    maxDistance: 12
+  });
+  assertEqual(offMap.legal, false);
+
+  // Into a unit.
+  veteran.x = 13;
+  veteran.y = 8;
+  const intoUnit = planUnitTrajectory(state, veteran.id, [{ heading: "e", distance: 3 }], {
+    maxDistance: 12
+  });
+  assertEqual(intoUnit.legal, false, "an occupied tile stops a route");
+  assertEqual(intoUnit.segments[0].blockedBy, unitByRef(state, "clusterA").id, "and names who is in the way");
+});
+
+test("Trajectory", "A route is bounded by the mover's own movement unless the action says otherwise", () => {
+  const state = trajectoryBattle(11);
+  const veteran = unitByRef(state, "veteran");
+  const movement = calculateUnitStats(state, veteran.id).movement;
+
+  const tooFar = planUnitTrajectory(state, veteran.id, [{ heading: "e", distance: movement + 3 }], {});
+  assertEqual(tooFar.legal, false);
+  assertEqual(tooFar.totalDistance, movement, "it travels exactly its budget and stops");
+  assert(/movement/.test(tooFar.reason), tooFar.reason);
+
+  const granted = planUnitTrajectory(state, veteran.id, [{ heading: "e", distance: movement + 3 }], {
+    maxDistance: movement + 5
+  });
+  assert(granted.legal, "an action may grant more");
+});
+
+test("Trajectory", "An illegal route is refused before anything happens", () => {
+  const state = trajectoryBattle(12);
+  const veteran = unitByRef(state, "veteran");
+  activateForTest(state, veteran.id);
+  const before = { x: veteran.x, y: veteran.y };
+
+  const result = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "vectorRoute",
+    segments: [{ heading: "w", distance: 6 }]
+  });
+  assertEqual(result.ok, false, "off the map is not a route");
+  assertEqual(veteran.x, before.x, "and the mover has not moved");
+  assertEqual(veteran.y, before.y);
+  assert(!state.trajectory, "nor is there a route in progress");
+});
+
+/* ---------------------------------------------------------------
+ * REDIRECTS AND RESOURCES
+ * -------------------------------------------------------------*/
+
+test("Trajectory", "A turn is categorised and priced from authored numbers", () => {
+  const state = trajectoryBattle(13);
+  const veteran = unitByRef(state, "veteran");
+  const plan = planUnitTrajectory(
+    state,
+    veteran.id,
+    [{ heading: "e", distance: 3 }, { heading: "n", distance: 2 }],
+    { maxSegments: 3, maxDistance: 12 }
+  );
+  assert(plan.legal, plan.reason || "");
+  assertEqual(plan.segments.length, 2);
+  const turns = plan.redirects.filter((entry) => entry.category !== "straight");
+  assertEqual(turns.length, 1);
+  assertEqual(turns[0].category, "quarter");
+  assertEqual(redirectTally(plan).quarter, 1);
+
+  // The engine multiplies; content supplies both the price and the currency.
+  assertEqual(redirectCost(plan, { quarter: 1, sharp: 2 }).total, 1);
+  assertEqual(redirectCost(plan, { quarter: 3 }).total, 3);
+  assertEqual(redirectCost(plan, {}).total, 0, "an unpriced turn is free");
+});
+
+test("Trajectory", "An action can refuse turns it does not permit", () => {
+  const state = trajectoryBattle(14);
+  const veteran = unitByRef(state, "veteran");
+  const reversed = planUnitTrajectory(
+    state,
+    veteran.id,
+    [{ heading: "e", distance: 3 }, { heading: "w", distance: 2 }],
+    { maxSegments: 3, maxDistance: 12, allowedRedirects: ["slight", "quarter"] }
+  );
+  assertEqual(reversed.legal, false);
+  assert(/reverse/.test(reversed.reason), reversed.reason);
+});
+
+test("Trajectory", "Executing a route spends the authored resource for its turns", () => {
+  const state = trajectoryBattle(15);
+  const veteran = unitByRef(state, "veteran");
+  activateForTest(state, veteran.id);
+  // Measured after activation: Burst regenerates when its owner acts, which is
+  // the whole reason a quiet turn buys a loud one.
+  const before = unitResource(state, veteran.id, "burst").current;
+  assert(before >= 1, "the frame has some banked");
+  const result = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "vectorRoute",
+    segments: [{ heading: "e", distance: 3 }, { heading: "n", distance: 2 }]
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+  assertEqual(unitResource(state, veteran.id, "burst").current, before - 1, "one quarter turn, one Burst");
+  assertEqual(veteran.x, 5);
+  assertEqual(veteran.y, 6);
+  assertEqual(state.trajectory.redirectCount, 1);
+  assert(state.trajectory.completed, "and the route finished");
+});
+
+test("Trajectory", "A route the mover cannot pay for is refused, not half-run", () => {
+  const state = trajectoryBattle(16);
+  const veteran = unitByRef(state, "veteran");
+  activateForTest(state, veteran.id);
+  unitResource(state, veteran.id, "burst").current = 0;
+  const before = { x: veteran.x, y: veteran.y };
+
+  const result = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "vectorRoute",
+    segments: [{ heading: "e", distance: 3 }, { heading: "n", distance: 2 }]
+  });
+  assertEqual(result.ok, false, "no Burst, no turn");
+  assert(result.errors.some((message) => /Burst/i.test(message)), result.errors.join(" | "));
+  assertEqual(veteran.x, before.x, "and nothing moved");
+  assertEqual(unitResource(state, veteran.id, "burst").current, 0, "and nothing was spent");
+
+  // The straight version of the same route is still available, which is the
+  // shape of the constraint: no Burst means no turns, not no movement.
+  const straight = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "vectorRoute",
+    segments: [{ heading: "e", distance: 3 }]
+  });
+  assert(straight.ok, (straight.errors || []).join(" | "));
+});
+
+/* ---------------------------------------------------------------
+ * MID-ROUTE INTERACTION
+ * -------------------------------------------------------------*/
+
+test("Trajectory", "A route can strike something on the way and keep going", () => {
+  const state = trajectoryBattle(17);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "clusterA");
+  veteran.x = 8;
+  veteran.y = 8;
+  const hpBefore = target.currentHp;
+
+  activateForTest(state, veteran.id);
+  const result = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "vectorRoute",
+    segments: [
+      { heading: "e", distance: 5, contact: { targetRef: "clusterA" } },
+      { heading: "s", distance: 2 }
+    ]
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+  assert(target.currentHp < hpBefore || !target.alive, "the contact resolved");
+  assertEqual(state.trajectory.contacts.length, 1);
+  assert(state.trajectory.contacts[0].resolved, state.trajectory.contacts[0].reason || "");
+  assert(state.trajectory.distanceTravelled > 5, "and the route continued past it");
+  assert(state.trajectory.completed);
+});
+
+test("Trajectory", "Contact is checked against where the mover actually is", () => {
+  const state = trajectoryBattle(18);
+  const veteran = unitByRef(state, "veteran");
+  activateForTest(state, veteran.id);
+
+  // A contact named at the end of a segment that never gets near it must not
+  // resolve. Reach is measured from the mover's real tile, not from intent.
+  const result = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "vectorRoute",
+    segments: [{ heading: "e", distance: 2, contact: { targetRef: "clusterA" } }]
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+  assertEqual(state.trajectory.contacts[0].resolved, false);
+  assert(/reach/.test(state.trajectory.contacts[0].reason || ""), state.trajectory.contacts[0].reason);
+});
+
+test("Trajectory", "Approach distance is earned power, and standing still earns none", () => {
+  const long = trajectoryBattle(19);
+  const runUp = unitByRef(long, "veteran");
+  const farTarget = unitByRef(long, "clusterA");
+  runUp.x = 8;
+  runUp.y = 8;
+  farTarget.currentHp = 999;
+  farTarget.maxHpOverride = 999;
+  activateForTest(long, runUp.id);
+  executeCommand(long, {
+    type: "trajectory",
+    unitId: runUp.id,
+    abilityId: "machStrike",
+    segments: [{ heading: "e", distance: 5, contact: { targetRef: "clusterA" } }]
+  });
+  const longDamage = long.battleLog
+    .filter((entry) => entry.type === "damageResolved")
+    .reduce((total, entry) => total + (entry.data.amount || 0), 0);
+
+  const short = trajectoryBattle(19);
+  const adjacent = unitByRef(short, "veteran");
+  const nearTarget = unitByRef(short, "clusterA");
+  adjacent.x = 12;
+  adjacent.y = 8;
+  nearTarget.currentHp = 999;
+  activateForTest(short, adjacent.id);
+  executeCommand(short, {
+    type: "trajectory",
+    unitId: adjacent.id,
+    abilityId: "machStrike",
+    segments: [{ heading: "e", distance: 1, contact: { targetRef: "clusterA" } }]
+  });
+  const shortDamage = short.battleLog
+    .filter((entry) => entry.type === "damageResolved")
+    .reduce((total, entry) => total + (entry.data.amount || 0), 0);
+
+  assert(
+    longDamage > shortDamage,
+    "a long approach must hit harder than a step: " + longDamage + " vs " + shortDamage
+  );
+  const scaled = long.battleLog.find((entry) => entry.type === "damageResolved");
+  assert(scaled.data.scalingBonus > 0, "and the bonus is attributed, not baked into the number");
+});
+
+/* ---------------------------------------------------------------
+ * PRECISE DISPLACEMENT
+ * -------------------------------------------------------------*/
+
+test("Trajectory", "Displacement travels exactly the distance the player chose", () => {
+  for (const chosen of [1, 2, 3, 4]) {
+    const state = trajectoryBattle(20);
+    const veteran = unitByRef(state, "veteran");
+    const target = unitByRef(state, "clusterA");
+    veteran.x = 8;
+    veteran.y = 8;
+    target.currentHp = 999;
+    activateForTest(state, veteran.id);
+
+    const startX = target.x;
+    executeCommand(state, {
+      type: "trajectory",
+      unitId: veteran.id,
+      abilityId: "machStrike",
+      segments: [
+        {
+          heading: "e",
+          distance: 5,
+          contact: { targetRef: "clusterA", displace: { heading: "n", distance: chosen } }
+        }
+      ]
+    });
+    assertEqual(target.x, startX, "the chosen heading is respected");
+    assertEqual(target.y, 8 - chosen, "and so is the chosen distance: asked " + chosen);
+  }
+});
+
+test("Trajectory", "A chosen distance is clamped to what the ability allows", () => {
+  const state = trajectoryBattle(21);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "clusterA");
+  veteran.x = 8;
+  veteran.y = 8;
+  target.currentHp = 999;
+  activateForTest(state, veteran.id);
+
+  executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "e",
+        distance: 5,
+        contact: { targetRef: "clusterA", displace: { heading: "n", distance: 99 } }
+      }
+    ]
+  });
+  assertEqual(target.y, 8 - 4, "the ability's maximum of 4 stands; choosing is not unlimited");
+});
+
+test("Trajectory", "A blocked displacement reports how far it got and what stopped it", () => {
+  const state = trajectoryBattle(22);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "clusterA");
+  const wall = unitByRef(state, "clusterB");
+  // Put the blocker two tiles east of the target, then shove east.
+  target.x = 14;
+  target.y = 8;
+  wall.x = 16;
+  wall.y = 8;
+  target.currentHp = 999;
+  veteran.x = 11;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+
+  // Approach stops one short of the target — the route may not enter it.
+  executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "e",
+        distance: 2,
+        contact: { targetRef: "clusterA", displace: { heading: "e", distance: 4 } }
+      }
+    ]
+  });
+
+  assertEqual(target.x, 15, "it travels as far as it legally can and stops");
+  const forced = state.battleLog.find((entry) => entry.type === "unitForcedMove");
+  assert(forced, "and the event is on the record");
+  assertEqual(forced.data.blocked, true);
+  assertEqual(forced.data.blockedBy, wall.id, "naming what it hit");
+  assertEqual(forced.data.blockTile.x, 16);
+});
+
+test("Trajectory", "A displacement-resistant target absorbs part of the shove", () => {
+  const state = trajectoryBattle(23);
+  const veteran = unitByRef(state, "veteran");
+  const anchor = unitByRef(state, "anchor");
+  const resistance = calculateUnitStats(state, anchor.id).displacementResistance;
+  assert(resistance > 0, "the fixture's anchored unit resists by its own stats");
+  anchor.currentHp = 999;
+  veteran.x = anchor.x - 1;
+  veteran.y = anchor.y;
+  activateForTest(state, veteran.id);
+
+  const startY = anchor.y;
+  veteran.x = anchor.x - 3;
+  veteran.y = anchor.y;
+  executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "e",
+        distance: 2,
+        contact: { targetRef: "anchor", displace: { heading: "n", distance: 4 } }
+      }
+    ]
+  });
+  const moved = startY - anchor.y;
+  assert(
+    moved < 4 && moved >= 0,
+    "resistance shortens the shove rather than cancelling it: moved " + moved + " of 4"
+  );
+});
+
+/* ---------------------------------------------------------------
+ * GROUPING — the future chain-lightning use case
+ * -------------------------------------------------------------*/
+
+test("Trajectory", "Two enemies can be deliberately arranged, not merely blasted apart", () => {
+  const state = trajectoryBattle(24);
+  const veteran = unitByRef(state, "veteran");
+  const a = unitByRef(state, "clusterA");
+  const b = unitByRef(state, "clusterB");
+  a.currentHp = 999;
+  b.currentHp = 999;
+  assertEqual(gridDistance(a, b), 4, "they start four apart");
+
+  // Two strikes, two *different* chosen distances, chosen so they end adjacent.
+  veteran.x = 11;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+  executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      { heading: "e", distance: 2, contact: { targetRef: "clusterA", displace: { heading: "e", distance: 2 } } }
+    ]
+  });
+  assertEqual(a.x, 16, "the first was moved exactly two");
+
+  // The first strike spent the activation, so the second needs a real one.
+  veteran.x = 20;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+  const second = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      { heading: "w", distance: 1, contact: { targetRef: "clusterB", displace: { heading: "w", distance: 1 } } }
+    ]
+  });
+  assert(second.ok, (second.errors || []).join(" | "));
+  assertEqual(b.x, 17, "and the second exactly one, from the other side");
+  assertEqual(gridDistance(a, b), 1, "leaving them adjacent — a cluster, on purpose");
+});
+
+
+/* ---------------------------------------------------------------
+ * THE CHAIN
+ * -------------------------------------------------------------*/
+
+/**
+ * The acceptance the whole phase is for.
+ *
+ * A route reaches something a prepared shooter cannot see, moves it to a
+ * chosen tile, and that tile — not the maximum shove, the chosen one — is what
+ * opens the lane. Every step is a primitive the engine already had; nothing
+ * here is a combo the engine understands.
+ */
+test("Trajectory", "A chosen displacement opens a lane, and the chain resolves", () => {
+  const state = trajectoryBattle(30, { autoResolveReactions: true });
+  const veteran = unitByRef(state, "veteran");
+  const kell = unitByRef(state, "kell");
+  const covered = unitByRef(state, "covered");
+
+  applyStatusForTest(state, kell.id, "overwatching");
+  refreshReactionLinks(state);
+
+  assertEqual(
+    REACTION_ENGINE.canSeeTile(state, kell.id, { x: covered.x, y: covered.y }),
+    false,
+    "the target starts behind the wall from the shooter"
+  );
+
+  veteran.x = 11;
+  veteran.y = 7;
+  covered.currentHp = 999;
+  activateForTest(state, veteran.id);
+  // Measured after the activation: Command Points regenerate when their owner
+  // acts, so a baseline taken earlier would be counting the wrong turn.
+  const cpBefore = factionResource(state, "commandPoints", "sectionSeven").current;
+
+  const result = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "n",
+        distance: 2,
+        // Two tiles, not four. One is not enough to clear the wall and four
+        // would overshoot the lane — choosing is the tactical act.
+        contact: { targetRef: "covered", displace: { heading: "n", distance: 2 } }
+      }
+    ]
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+
+  assertEqual(covered.y, 2, "the target landed on the chosen tile");
+  assert(
+    REACTION_ENGINE.canSeeTile(state, kell.id, { x: covered.x, y: covered.y }),
+    "which is a tile the shooter can see"
+  );
+
+  autoResolveReactionWindows(state, reactionDeps());
+  processAllEvents(state);
+
+  const fired = state.reactions.log.filter((entry) => entry.ok).map((entry) => entry.reactionId);
+  assert(fired.includes("heldFiringLane"), "the prepared reaction fired: " + fired.join(","));
+  assertEqual(
+    factionResource(state, "commandPoints", "sectionSeven").current,
+    cpBefore - 1,
+    "and the squad paid for it"
+  );
+  assert(covered.currentHp < 999, "the shooter actually fired");
+
+  const next = battleContinuation(state);
+  assert(next.kind !== "stalled", next.reason || "");
+
+  // Every step of it is one chain, and the displacement is marked forced.
+  const trace = state.causalTrace;
+  assert(
+    trace.some((entry) => entry.type === "unitForcedMove" && entry.cause && entry.cause.forced),
+    "the displacement is attributed as forced"
+  );
+  assert(
+    trace.some((entry) => entry.cause && entry.cause.viaReactionId === "heldFiringLane"),
+    "and the shot is attributed to the reaction that made it"
+  );
+});
+
+/**
+ * A route is planned once and resolves over several events, and one of those
+ * events is the route's own shove. If the plan were replayed blindly the frame
+ * would drive straight through whoever it had just put in the way, so the plan
+ * is re-asked of the live battlefield at every segment.
+ *
+ * This is the case that makes the difference visible: the displacement the
+ * player chose lands the target on the next segment's first tile.
+ */
+test("Trajectory", "A route interrupted by its own consequences ends cleanly", () => {
+  const state = trajectoryBattle(31);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "clusterA");
+  veteran.x = 5;
+  veteran.y = 8;
+  target.x = 8;
+  target.y = 8;
+  target.currentHp = 999;
+  activateForTest(state, veteran.id);
+
+  // Every tile of this route is clear at the moment it is planned. (8,7) only
+  // becomes a wall because the route itself puts the target there.
+  const route = [
+    { heading: "e", distance: 2, contact: { targetRef: "clusterA", displace: { heading: "n", distance: 1 } } },
+    { heading: "n", distance: 1 },
+    { heading: "e", distance: 2 }
+  ];
+  const planned = planUnitTrajectory(state, veteran.id, route, trajectoryRules(CONTENT.abilities.vectorRoute));
+  assert(planned.legal, planned.reason || "the plan was clean when it was made");
+
+  const context = executeTrajectory(state, {
+    unitId: veteran.id,
+    abilityId: "vectorRoute",
+    segments: route
+  });
+  processAllEvents(state);
+
+  assertEqual(target.x, 8, "the target held its column");
+  assertEqual(target.y, 7, "and moved to the chosen tile, which is now the lane");
+
+  assertEqual(veteran.x, 7, "the frame took the segment that was still clear");
+  assertEqual(veteran.y, 7);
+  assertEqual(context.distanceTravelled, 3, "and only the tiles it actually crossed count");
+  assert(context.interrupted, "then gave up rather than driving through its own work");
+  assert(/occupied/i.test(context.interruptReason || ""), context.interruptReason || "no reason");
+  assertEqual(context.blockedBy, target.id, "naming what stopped it");
+
+  // The invariant that matters more than any of the above.
+  assert(
+    !(veteran.x === target.x && veteran.y === target.y),
+    "two frames never end on one tile"
+  );
+  assertEqual(battleContinuation(state).kind !== "stalled", true);
+});
+
+/**
+ * The trajectory module knows eight headings; the grid decides how many of them
+ * a frame may actually travel. It asks rather than assuming, so switching
+ * diagonals on later is a config change and not a second movement model.
+ */
+test("Trajectory", "A heading the grid does not allow is refused by the same authority as any wall", () => {
+  const state = trajectoryBattle(34);
+  const veteran = unitByRef(state, "veteran");
+  veteran.x = 5;
+  veteran.y = 8;
+  const plan = planUnitTrajectory(state, veteran.id, [{ heading: "ne", distance: 2 }], {});
+  assertEqual(
+    plan.segments[0].blocked,
+    !GAME_CONFIG.grid.allowDiagonalMovement,
+    "a diagonal route is exactly as legal as diagonal movement is"
+  );
+  if (!GAME_CONFIG.grid.allowDiagonalMovement) {
+    assertEqual(plan.segments[0].distance, 0, "and it stops before the first tile");
+    assertEqual(plan.legal, false);
+  }
+});
+
+/**
+ * The other way a route ends early: the mover stops existing. Nothing here
+ * knows what killed it — a reaction to its own movement is the case this is
+ * for, and the guard is written so that any of them work.
+ */
+test("Trajectory", "A route whose mover cannot travel does not move a corpse", () => {
+  const state = trajectoryBattle(32);
+  const mover = unitByRef(state, "veteran");
+  mover.x = 8;
+  mover.y = 8;
+  activateForTest(state, mover.id);
+  mover.alive = false;
+
+  const context = executeTrajectory(state, {
+    unitId: mover.id,
+    abilityId: "vectorRoute",
+    segments: [
+      { heading: "e", distance: 2 },
+      { heading: "s", distance: 2 }
+    ]
+  });
+  assert(context.interrupted, "the route gave up");
+  assert(/no longer travel/.test(context.interruptReason || ""), context.interruptReason);
+  assertEqual(context.distanceTravelled, 0, "and it never took a step");
+  assertEqual(mover.x, 8, "the body is where it fell");
+  assertEqual(mover.y, 8);
+});
+
+test("Trajectory", "A route the planner refuses costs nothing and moves nobody", () => {
+  const state = trajectoryBattle(33);
+  const veteran = unitByRef(state, "veteran");
+  veteran.x = 5;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+  const burstBefore = unitResource(state, veteran.id, "burst").current;
+
+  // Mach Strike allows two segments. Three is not a route it can plan, and a
+  // caller reaching past the validator must still not get a partial run.
+  const context = executeTrajectory(state, {
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      { heading: "e", distance: 1 },
+      { heading: "ne", distance: 1 },
+      { heading: "e", distance: 1 }
+    ]
+  });
+  assert(context.interrupted, "the route never started");
+  assert(/segments/.test(context.interruptReason || ""), context.interruptReason);
+  assertEqual(veteran.x, 5, "nobody moved");
+  assertEqual(veteran.y, 8);
+  assertEqual(unitResource(state, veteran.id, "burst").current, burstBefore, "and nothing was spent");
+});
+
+/* ---------------------------------------------------------------
+ * COUNTERPLAY
+ * -------------------------------------------------------------*/
+
+test("Trajectory", "Banking Burst costs an activation and leaves the frame exposed", () => {
+  const state = trajectoryBattle(33);
+  const veteran = unitByRef(state, "veteran");
+  activateForTest(state, veteran.id);
+  const before = unitResource(state, veteran.id, "burst").current;
+
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: veteran.id,
+    abilityId: "spoolDrive",
+    target: { unitId: veteran.id, tile: { x: veteran.x, y: veteran.y } }
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+
+  const after = unitResource(state, veteran.id, "burst").current;
+  assert(after > before, "it banks manoeuvring power: " + before + " -> " + after);
+  assert(after <= unitResource(state, veteran.id, "burst").max, "never past the bank's maximum");
+  assert(unitHasStatus(state, veteran.id, "spooling"), "and pays for it with a defensive window");
+
+  const spooled = calculateUnitStats(state, veteran.id);
+  veteran.statuses = [];
+  const clean = calculateUnitStats(state, veteran.id);
+  assert(spooled.evasion < clean.evasion, "which is a real stat penalty, not a label");
+});
+
+test("Trajectory", "The bank respects its maximum however much is spooled", () => {
+  const state = trajectoryBattle(34);
+  const veteran = unitByRef(state, "veteran");
+  const bank = unitResource(state, veteran.id, "burst");
+  bank.current = bank.max;
+  activateForTest(state, veteran.id);
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: veteran.id,
+    abilityId: "spoolDrive",
+    target: { unitId: veteran.id, tile: { x: veteran.x, y: veteran.y } }
+  });
+  assertEqual(unitResource(state, veteran.id, "burst").current, bank.max, "a full bank stays full");
+});
+
+test("Trajectory", "Pinned with no runway, the frame is an ordinary fighter", () => {
+  // The counterplay, stated as a measurement rather than a nerf: the same
+  // strike from a standing start is worth a fraction of the same strike after
+  // a run-up, because the power was earned by the ground covered.
+  const runUp = trajectoryBattle(35);
+  const mover = unitByRef(runUp, "veteran");
+  const farTarget = unitByRef(runUp, "clusterA");
+  mover.x = 8;
+  mover.y = 8;
+  farTarget.currentHp = 9999;
+  activateForTest(runUp, mover.id);
+  executeCommand(runUp, {
+    type: "trajectory",
+    unitId: mover.id,
+    abilityId: "machStrike",
+    segments: [{ heading: "e", distance: 5, contact: { targetRef: "clusterA" } }]
+  });
+  const withRunway = 9999 - unitByRef(runUp, "clusterA").currentHp;
+
+  const pinned = trajectoryBattle(35);
+  const stuck = unitByRef(pinned, "veteran");
+  const nearTarget = unitByRef(pinned, "clusterA");
+  stuck.x = 13;
+  stuck.y = 8;
+  nearTarget.currentHp = 9999;
+  activateForTest(pinned, stuck.id);
+  executeCommand(pinned, {
+    type: "trajectory",
+    unitId: stuck.id,
+    abilityId: "machStrike",
+    segments: [{ heading: "e", distance: 1, contact: { targetRef: "clusterA" } }]
+  });
+  const withoutRunway = 9999 - unitByRef(pinned, "clusterA").currentHp;
+
+  assert(
+    withoutRunway * 2 < withRunway,
+    "a standing strike must be markedly weaker: " + withoutRunway + " vs " + withRunway
+  );
+});
+
+test("Trajectory", "Burst spent on the frame is Burst not spent on the ground", () => {
+  const state = trajectoryBattle(36);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "clusterA");
+  veteran.x = 13;
+  veteran.y = 8;
+  target.currentHp = 999;
+  activateForTest(state, veteran.id);
+  const before = unitResource(state, veteran.id, "burst").current;
+  assert(before >= 2, "the combo needs two banked");
+
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: veteran.id,
+    abilityId: "impactChain",
+    target: { unitId: target.id, tile: { x: target.x, y: target.y } }
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+  assertEqual(unitResource(state, veteran.id, "burst").current, before - 2, "the same bank pays for it");
+  assert(target.currentHp < 999, "and it is a real close-range sequence");
+  assert(target.x !== 14 || target.y !== 8, "whose last impact moves them");
+});
+
+test("Trajectory", "Nothing in the trajectory engine knows whose route it is", () => {
+  const engineParts = [
+    planTrajectory,
+    planDisplacement,
+    redirectCost,
+    executeTrajectory,
+    revalidateSegment,
+    resolveTrajectoryContact,
+    resolveDisplaceEffect,
+    trajectoryRules,
+    trajectoryResourceCost,
+    trajectoryHasRunway,
+    planUnitTrajectory,
+    straightSegmentTo,
+    routeEndpoint,
+    createRoutePlanModel,
+    describeRouteContact
+  ];
+  const source = engineParts.map((fn) => fn.toString()).join("\n");
+  for (const name of ["burst", "machStrike", "vectorRoute", "interdictorFrame", "veteran"]) {
+    assert(!new RegExp("\\b" + name + "\\b", "i").test(source), "the engine names " + name);
+  }
+
+  // And the standing audit reads them, so this stays true without this test.
+  const audited = new Set(Object.values(ENGINE_FUNCTIONS));
+  for (const fn of engineParts) {
+    if (fn === planTrajectory || fn === planDisplacement || fn === redirectCost) continue;
+    assert(audited.has(fn), fn.name + " is outside the architecture audit");
+  }
+  // And the abilities really are ordinary content built from registered parts.
+  for (const abilityId of ["machStrike", "vectorRoute", "impactChain", "spoolDrive"]) {
+    const ability = CONTENT.abilities[abilityId];
+    assert(ability, abilityId + " is content");
+    const effects = (ability.effects || []).concat(
+      (ability.trajectory && ability.trajectory.contactEffects) || []
+    );
+    for (const effect of effects) {
+      assert(EFFECT_HANDLERS[effect.type], abilityId + " uses registered effect " + effect.type);
+    }
+  }
+});
+
+/* ---------------------------------------------------------------
+ * PLANNING A ROUTE
+ *
+ * The preview is the promise. Every test here checks that what the panel says
+ * and what the engine then does are the same thing, because a route the player
+ * confirmed and a route the engine ran that differ by one tile is the failure
+ * mode this whole layer exists to prevent.
+ * -------------------------------------------------------------*/
+
+function routeInput(state, unitId, abilityId) {
+  const started = inputReducer(
+    createInputState({ mode: "unitReady", selectedUnitId: unitId, inspectedUnitId: unitId }),
+    { type: "chooseAbility", abilityId },
+    state
+  );
+  return started.input;
+}
+
+function clickRoute(state, input, tiles) {
+  let current = input;
+  for (const tile of tiles) {
+    current = inputReducer(current, { type: "clickTile", tile }, state).input;
+  }
+  return current;
+}
+
+test("Trajectory", "Choosing a route ability starts a route, not a target", () => {
+  const state = trajectoryBattle(40);
+  const veteran = unitByRef(state, "veteran");
+  activateForTest(state, veteran.id);
+
+  const route = routeInput(state, veteran.id, "machStrike");
+  assertEqual(route.mode, "planningRoute");
+  assertEqual(JSON.stringify(route.routeSegments), "[]", "drawing, with nothing laid yet");
+
+  // An ordinary ability is untouched: this is additive, not a replacement.
+  const aimed = routeInput(state, veteran.id, "spoolDrive");
+  assertEqual(aimed.mode, "planningTarget");
+  assertEqual(aimed.routeSegments, null);
+
+  // And a route ability with nowhere to run is honestly unavailable — the
+  // counterplay as a rule rather than a special case.
+  assert(trajectoryHasRunway(state, veteran.id, CONTENT.abilities.machStrike), "open ground runs");
+  const boxed = trajectoryBattle(40);
+  const pinned = unitByRef(boxed, "veteran");
+  const walls = ["kell", "vale", "reyes", "clusterA"];
+  const around = [
+    { x: 0, y: -1 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 1, y: 0 }
+  ];
+  walls.forEach((ref, index) => {
+    const blocker = unitByRef(boxed, ref);
+    blocker.x = pinned.x + around[index].x;
+    blocker.y = pinned.y + around[index].y;
+  });
+  assertEqual(
+    trajectoryHasRunway(boxed, pinned.id, CONTENT.abilities.machStrike),
+    false,
+    "a frame with no space is not a fast frame"
+  );
+});
+
+test("Trajectory", "A leg is laid by clicking in line, and refused otherwise", () => {
+  const state = trajectoryBattle(41);
+  const veteran = unitByRef(state, "veteran");
+  veteran.x = 5;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+
+  let input = routeInput(state, veteran.id, "vectorRoute");
+  input = clickRoute(state, input, [{ x: 8, y: 8 }]);
+  assertEqual(input.routeSegments.length, 1);
+  assertEqual(input.routeSegments[0].heading, "e");
+  assertEqual(input.routeSegments[0].distance, 3);
+
+  // A tile that is not on one heading from the end of the route is not a leg.
+  const crooked = inputReducer(input, { type: "clickTile", tile: { x: 10, y: 5 } }, state);
+  assertEqual(crooked.input.routeSegments.length, 1, "the route is unchanged");
+  assert(/straight/.test(crooked.input.errorMessage), crooked.input.errorMessage);
+
+  // Vector Route is authored to permit a reversal, and charges for it, so the
+  // same click on it is a legal leg with a price.
+  const reversed = inputReducer(input, { type: "clickTile", tile: { x: 6, y: 8 } }, state);
+  assertEqual(reversed.input.routeSegments.length, 2, "the authored turn is allowed");
+  assertEqual(createRoutePlanModel(state, reversed.input, null).cost.amount, 3, "at its authored price");
+
+  // Mach Strike is authored not to, and the refusal is the planner's own words.
+  let strike = routeInput(state, veteran.id, "machStrike");
+  strike = clickRoute(state, strike, [{ x: 8, y: 8 }]);
+  assertEqual(strike.routeSegments.length, 1);
+  const refused = inputReducer(strike, { type: "clickTile", tile: { x: 6, y: 8 } }, state);
+  assertEqual(refused.input.routeSegments.length, 1, "the turn is refused");
+  assert(/reverse/.test(refused.input.errorMessage), refused.input.errorMessage);
+});
+
+test("Trajectory", "The preview is the planner, so it cannot promise a tile the engine refuses", () => {
+  const state = trajectoryBattle(42);
+  const veteran = unitByRef(state, "veteran");
+  veteran.x = 5;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+
+  let input = routeInput(state, veteran.id, "vectorRoute");
+  input = clickRoute(state, input, [{ x: 8, y: 8 }, { x: 8, y: 5 }]);
+  const model = createRoutePlanModel(state, input, null);
+
+  assertEqual(model.segments.length, 2);
+  assertEqual(model.distance, 6);
+  assert(model.legal, model.reason || "");
+  assertEqual(model.redirects.quarter, 1, "the turn is categorised, and therefore priceable");
+  assertEqual(model.cost.resourceId, "burst");
+  assertEqual(model.cost.amount, 1, "one quarter turn at the authored price");
+  assertEqual(model.cost.remaining, model.cost.available - 1);
+
+  // Run exactly what was previewed and land exactly where it said.
+  const result = executeCommand(state, commandsForPlan(input)[0]);
+  assert(result.ok, (result.errors || []).join(" | "));
+  assertEqual(veteran.x, model.endpoint.x, "the frame is where the preview promised");
+  assertEqual(veteran.y, model.endpoint.y);
+});
+
+test("Trajectory", "The preview prices the route in the authored resource and knows when it cannot pay", () => {
+  const state = trajectoryBattle(43);
+  const veteran = unitByRef(state, "veteran");
+  veteran.x = 5;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+  unitResource(state, veteran.id, "burst").current = 0;
+
+  let input = routeInput(state, veteran.id, "vectorRoute");
+  input = clickRoute(state, input, [{ x: 8, y: 8 }, { x: 8, y: 5 }]);
+  const model = createRoutePlanModel(state, input, null);
+  assertEqual(model.cost.amount, 1);
+  assertEqual(model.cost.affordable, false, "an empty bank cannot turn");
+  assert(model.cost.reason, "and the panel is told why");
+
+  // The command refuses on the same grounds, from the same numbers.
+  const validation = validateCommand(state, commandsForPlan(input)[0]);
+  assertEqual(validation.valid, false);
+});
+
+test("Trajectory", "A contact is chosen on the board and its displacement is the player's", () => {
+  const state = trajectoryBattle(44);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "clusterA");
+  veteran.x = 8;
+  veteran.y = 8;
+  target.x = 14;
+  target.y = 8;
+  target.currentHp = 999;
+  activateForTest(state, veteran.id);
+
+  let input = routeInput(state, veteran.id, "machStrike");
+  input = clickRoute(state, input, [{ x: 13, y: 8 }, { x: 14, y: 8 }]);
+  assertEqual(input.routeSegments.length, 1, "clicking the enemy attaches a contact, not a leg");
+  assert(input.routeSegments[0].contact, "the leg now has something to hit");
+  assertEqual(input.routeSegments[0].contact.targetUnitId, target.id);
+
+  // Nothing is chosen yet, so nothing is promised.
+  let model = createRoutePlanModel(state, input, null);
+  assertEqual(model.contacts.length, 1);
+  assertEqual(model.contacts[0].targetName, CONTENT.units[target.definitionId].name);
+  assertEqual(model.contacts[0].inReach, true);
+  assertEqual(model.contacts[0].maxDisplacement, 4, "the ability's ceiling, from its own data");
+
+  input = inputReducer(input, { type: "setRouteDisplacement", heading: "n" }, state).input;
+  input = inputReducer(input, { type: "setRouteDisplacement", distance: 2 }, state).input;
+  model = createRoutePlanModel(state, input, null);
+  assertEqual(model.contacts[0].displacement.heading, "n");
+  assertEqual(model.contacts[0].displacement.actual, 2);
+  assertEqual(model.contacts[0].displacement.endpoint.y, 6, "two tiles, not the maximum four");
+
+  const promised = { ...model.contacts[0].displacement.endpoint };
+  const result = executeCommand(state, commandsForPlan(input)[0]);
+  assert(result.ok, (result.errors || []).join(" | "));
+  assertEqual(target.x, promised.x, "and the target is exactly where the preview said");
+  assertEqual(target.y, promised.y);
+});
+
+test("Trajectory", "The preview shows a shove falling short before it is committed", () => {
+  const state = trajectoryBattle(45);
+  const veteran = unitByRef(state, "veteran");
+  const anchor = unitByRef(state, "anchor");
+  veteran.x = anchor.x - 3;
+  veteran.y = anchor.y;
+  anchor.currentHp = 999;
+  activateForTest(state, veteran.id);
+
+  let input = routeInput(state, veteran.id, "machStrike");
+  input = clickRoute(state, input, [
+    { x: anchor.x - 1, y: anchor.y },
+    { x: anchor.x, y: anchor.y }
+  ]);
+  input = inputReducer(input, { type: "setRouteDisplacement", heading: "n", distance: 4 }, state).input;
+
+  const model = createRoutePlanModel(state, input, null);
+  const shove = model.contacts[0].displacement;
+  assertEqual(shove.requested, 4);
+  assert(shove.resisted > 0, "the panel shows the bracing before the player commits");
+  assert(shove.actual < shove.requested, "and therefore a shorter push than asked for");
+
+  const before = { x: anchor.x, y: anchor.y };
+  executeCommand(state, commandsForPlan(input)[0]);
+  assertEqual(anchor.y, before.y - shove.actual, "which is exactly what happens");
+});
+
+test("Trajectory", "Undo removes one leg; cancel leaves nothing behind", () => {
+  const state = trajectoryBattle(46);
+  const veteran = unitByRef(state, "veteran");
+  veteran.x = 5;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+
+  let input = routeInput(state, veteran.id, "vectorRoute");
+  input = clickRoute(state, input, [{ x: 8, y: 8 }, { x: 8, y: 5 }]);
+  assertEqual(input.routeSegments.length, 2);
+
+  input = inputReducer(input, { type: "undoRouteSegment" }, state).input;
+  assertEqual(input.routeSegments.length, 1, "one leg at a time");
+  assertEqual(createRoutePlanModel(state, input, null).distance, 3);
+
+  // Right-click is the same undo, and empties into a clean cancel.
+  input = inputReducer(input, { type: "rightClickTile", tile: { x: 8, y: 8 } }, state).input;
+  assertEqual(input.routeSegments.length, 0);
+  input = inputReducer(input, { type: "rightClickTile", tile: { x: 8, y: 8 } }, state).input;
+  assertEqual(input.mode, "unitReady");
+  assertEqual(input.routeSegments, null);
+  assertEqual(veteran.x, 5, "and nothing moved while all of that happened");
+});
+
+test("Trajectory", "Clicking the end of the route runs it", () => {
+  const state = trajectoryBattle(47);
+  const veteran = unitByRef(state, "veteran");
+  veteran.x = 5;
+  veteran.y = 8;
+  activateForTest(state, veteran.id);
+
+  let input = routeInput(state, veteran.id, "vectorRoute");
+  input = clickRoute(state, input, [{ x: 8, y: 8 }]);
+  const outcome = inputReducer(input, { type: "clickTile", tile: { x: 8, y: 8 } }, state);
+  assertEqual(outcome.commands.length, 1);
+  assertEqual(outcome.commands[0].type, "trajectory");
+  assertEqual(outcome.commands[0].abilityId, "vectorRoute");
+  assertEqual(outcome.input.mode, "presentingEvents");
+});
+
+test("Trajectory", "The board draws the route the planner produced and nothing else", () => {
+  const state = trajectoryBattle(48);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "clusterA");
+  veteran.x = 8;
+  veteran.y = 8;
+  target.x = 14;
+  target.y = 8;
+  activateForTest(state, veteran.id);
+
+  let input = routeInput(state, veteran.id, "vectorRoute");
+  input = clickRoute(state, input, [{ x: 11, y: 8 }, { x: 11, y: 5 }, { x: 13, y: 5 }]);
+  const model = createRoutePlanModel(state, input, null);
+  const view = createBattleViewModel(state, {
+    mode: input.mode,
+    selectedUnitId: veteran.id,
+    abilityId: input.selectedAbilityId,
+    plannedPath: model.tiles,
+    plannedDestination: model.endpoint,
+    route: model
+  });
+  const tileAt = (x, y) => view.tiles.find((tile) => tile.x === x && tile.y === y);
+
+  assertEqual(tileAt(9, 8).pathIndex != null, true, "the route is drawn");
+  assertEqual(tileAt(9, 4).pathIndex, null, "and only the route is drawn");
+  assertEqual(tileAt(11, 8).routeRedirect, "quarter", "the turns are marked as turns");
+  assertEqual(tileAt(11, 5).routeRedirect, "quarter");
+  assertEqual(tileAt(13, 5).isDestination, true, "and the frame stops where the panel says");
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
@@ -24745,8 +27028,13 @@ function defaultRoster() {
 
 test("Deployment", "Exactly three unique mechs may be deployed", () => {
   const chassis = deployableChassis();
-  assertEqual(chassis.length, 4, chassis.join(","));
+  // The rule is "exactly three of whatever is deployable", not "three of four".
+  // Pinning the roster size here would make every new operator a test failure.
   assertEqual(GAME_CONFIG.deployment.teamSize, 3);
+  assert(
+    chassis.length > GAME_CONFIG.deployment.teamSize,
+    "there must be more chassis than slots, or there is no choice to make: " + chassis.join(",")
+  );
 
   let deployment = createDeploymentState();
   assertEqual(validateDeployment(deployment).valid, false, "Nothing selected is not deployable");
@@ -29640,6 +31928,11 @@ function terrainSurface(tile) {
 }
 
 function overlayColor(tile) {
+  // Route marks read before the generic path colour: a turn, a landing tile and
+  // a stop are the three things the player is actually deciding between.
+  if (tile.routeBlocked) return "rgba(244, 63, 94, 0.55)";
+  if (tile.routeDisplacement) return "rgba(251, 191, 36, 0.6)";
+  if (tile.routeRedirect) return "rgba(129, 140, 248, 0.6)";
   if (tile.isDestination) return "rgba(125, 211, 252, 0.65)";
   if (tile.pathIndex != null) return "rgba(56, 189, 248, 0.45)";
   if (tile.inArea) return "rgba(245, 158, 11, 0.5)";
@@ -31239,7 +33532,134 @@ function HoverBadge({ badge, position }) {
   );
 }
 
-function FloatingPanel({ model, position, abilities, onAction, onAbility, onContextOption, width }) {
+/**
+ * The route breakdown: every leg, what each turn cost, who gets hit, and where
+ * exactly they end up. The numbers are the planner's, not the panel's.
+ */
+function RouteSummary({ route, onDisplace }) {
+  return (
+    <div className="px-2 py-1 space-y-1 border-b border-slate-800">
+      {route.empty ? (
+        <p className="text-[10px] text-slate-500">
+          Click a tile in line with the frame to lay the first leg.
+        </p>
+      ) : null}
+
+      {route.segments.map((segment) => (
+        <p key={segment.index} className="flex items-center gap-1 text-[10px]">
+          <span className="text-slate-600 tabular-nums">{segment.index + 1}</span>
+          <span className="uppercase tracking-wider text-slate-300">{segment.heading}</span>
+          <span className="tabular-nums text-slate-400">{segment.distance}</span>
+          {segment.redirect ? (
+            <span className="px-1 rounded-sm bg-sky-500/15 text-sky-200">{segment.redirect}</span>
+          ) : null}
+          {segment.blocked ? (
+            <span className="ml-auto text-rose-300 truncate" title={segment.blockReason}>
+              {segment.blockReason}
+            </span>
+          ) : null}
+        </p>
+      ))}
+
+      {route.cost.breakdown.map((entry) => (
+        <p key={entry.category} className="flex justify-between text-[10px] text-slate-500">
+          <span>
+            {entry.count}× {entry.category}
+          </span>
+          <span className="tabular-nums">
+            {entry.amount} {route.cost.resourceName}
+          </span>
+        </p>
+      ))}
+      {route.cost.resourceId && route.cost.remaining != null ? (
+        <p
+          className={
+            "flex justify-between text-[10px] " +
+            (route.cost.affordable ? "text-slate-400" : "text-rose-300")
+          }
+        >
+          <span>After the route</span>
+          <span className="tabular-nums">
+            {Math.max(0, route.cost.remaining)} {route.cost.resourceName}
+          </span>
+        </p>
+      ) : null}
+
+      {route.contacts.map((contact) => (
+        <div key={contact.segment} className="pt-1 border-t border-slate-900">
+          <p className="flex items-center gap-1 text-[10px]">
+            <span className="text-amber-200 truncate">{contact.targetName}</span>
+            {contact.inReach ? null : (
+              <span className="ml-auto text-rose-300">{contact.reachReason}</span>
+            )}
+          </p>
+          {contact.maxDisplacement > 0 ? (
+            <div className="mt-0.5 space-y-0.5">
+              <div className="flex items-center gap-1">
+                {["n", "e", "s", "w"].map((heading) => (
+                  <button
+                    key={heading}
+                    onClick={() => onDisplace(contact.segment, { heading })}
+                    className={
+                      "px-1 rounded-sm text-[9px] uppercase " +
+                      (contact.displacement && contact.displacement.heading === heading
+                        ? "bg-amber-400/25 text-amber-100"
+                        : "bg-slate-800 text-slate-400 hover:bg-slate-700")
+                    }
+                  >
+                    {heading}
+                  </button>
+                ))}
+                <span className="ml-auto text-[9px] text-slate-600">push</span>
+              </div>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: contact.maxDisplacement + 1 }, (_, distance) => (
+                  <button
+                    key={distance}
+                    onClick={() => onDisplace(contact.segment, { distance })}
+                    className={
+                      "px-1 rounded-sm text-[9px] tabular-nums " +
+                      (contact.displacement && contact.displacement.requested === distance
+                        ? "bg-amber-400/25 text-amber-100"
+                        : "bg-slate-800 text-slate-400 hover:bg-slate-700")
+                    }
+                  >
+                    {distance}
+                  </button>
+                ))}
+                <span className="ml-auto text-[9px] text-slate-600">
+                  max {contact.maxDisplacement}
+                </span>
+              </div>
+              {contact.displacement ? (
+                <p className="flex justify-between text-[10px] text-slate-400">
+                  <span>
+                    {contact.displacement.actual} of {contact.displacement.requested}
+                    {contact.displacement.resisted
+                      ? " (−" + contact.displacement.resisted + " braced)"
+                      : ""}
+                  </span>
+                  <span className="tabular-nums text-slate-200">
+                    {contact.displacement.endpoint.x},{contact.displacement.endpoint.y}
+                  </span>
+                </p>
+              ) : null}
+              {contact.displacement && contact.displacement.blocked ? (
+                <p className="text-[10px] text-rose-300">{contact.displacement.blockReason}</p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ))}
+
+      {!route.legal && !route.empty ? (
+        <p className="text-[10px] text-rose-300">{route.reason}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function FloatingPanel({ model, position, abilities, onAction, onAbility, onContextOption, onRouteDisplace, width }) {
   if (!model.visible) return null;
   const forecast = model.forecast;
   return (
@@ -31275,7 +33695,7 @@ function FloatingPanel({ model, position, abilities, onAction, onAbility, onCont
         </div>
       ) : null}
 
-      {model.kind === "movePlan" ? (
+      {model.kind === "movePlan" || model.kind === "route" ? (
         <div className="px-2 py-1 space-y-0.5">
           {model.lines.map((line) => (
             <p key={line.label} className="flex justify-between text-[11px] text-slate-400">
@@ -31284,6 +33704,10 @@ function FloatingPanel({ model, position, abilities, onAction, onAbility, onCont
             </p>
           ))}
         </div>
+      ) : null}
+
+      {model.kind === "route" && model.route ? (
+        <RouteSummary route={model.route} onDisplace={onRouteDisplace} />
       ) : null}
 
       {forecast ? (
@@ -33399,6 +35823,29 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     [state]
   );
 
+  /**
+   * The leg the pointer is currently proposing, if the tile under it lies in a
+   * straight line from where the route ends.
+   */
+  const routeCandidate = React.useMemo(() => {
+    if (input.mode !== "planningRoute" || !input.routeSegments || !input.hoveredTile) return null;
+    const unitId = input.selectedUnitId || state.activeUnitId;
+    if (!unitId) return null;
+    return straightSegmentTo(routeEndpoint(state, unitId, input.routeSegments), input.hoveredTile);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, input.mode, input.routeSegments, input.hoveredTile, input.selectedUnitId, version]);
+
+  /**
+   * One planner call, shared by the board overlay and the panel. Drawing the
+   * route twice is how a preview starts telling a different story from the
+   * numbers beside it.
+   */
+  const routePreview = React.useMemo(
+    () => (input.mode === "planningRoute" ? createRoutePlanModel(state, input, routeCandidate) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state, input, routeCandidate, version]
+  );
+
   const view = React.useMemo(
     () =>
       createBattleViewModel(state, {
@@ -33407,12 +35854,15 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
         abilityId: input.selectedAbilityId,
         hoveredTile: input.hoveredTile,
         selectedTargetTile: input.selectedTarget,
-        plannedPath: input.plannedPath || input.hoverPath,
-        plannedDestination: input.plannedMoveDestination,
+        plannedPath: routePreview ? routePreview.tiles : input.plannedPath || input.hoverPath,
+        plannedDestination: routePreview
+          ? routePreview.endpoint
+          : input.plannedMoveDestination,
+        route: routePreview,
         threatZone
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, input, presentation, positions, version, threatZone]
+    [state, input, presentation, positions, version, threatZone, routePreview]
   );
 
   React.useEffect(() => {
@@ -33875,11 +36325,20 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
       if (busy) return;
       const key = event.key;
       if (key === "Enter") {
-        if (input.mode === "confirmingAction" || input.mode === "planningMove") {
+        if (
+          input.mode === "confirmingAction" ||
+          input.mode === "planningMove" ||
+          (input.mode === "planningRoute" && input.routeSegments && input.routeSegments.length)
+        ) {
           dispatch({ type: "confirm" });
         } else {
           dispatch({ type: "clickTile", tile: cursor });
         }
+        return;
+      }
+      if (key === "Backspace" && input.mode === "planningRoute") {
+        event.preventDefault();
+        dispatch({ type: "undoRouteSegment" });
         return;
       }
       const moves = {
@@ -34034,6 +36493,7 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     () =>
       createContextCommandModel(state, input, {
         abilityMenuOpen,
+        routeCandidate,
         targetUnitId:
           input.forecast && input.forecast.target
             ? input.forecast.target.unitId
@@ -34042,13 +36502,23 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
         movementTiles: input.plannedPath ? input.plannedPath.length - 1 : undefined
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, input, abilityMenuOpen, hoveredUnitId, presentation, version]
+    [state, input, abilityMenuOpen, hoveredUnitId, presentation, version, routeCandidate]
   );
 
   const panelVisible = contextModel.visible && !busy;
   const panelHeight = React.useMemo(() => {
     if (!contextModel.visible) return 0;
     if (contextModel.kind === "abilities") return 60 + contextModel.abilities.length * 46;
+    if (contextModel.kind === "route") {
+      const route = contextModel.route;
+      return (
+        90 +
+        contextModel.actions.length * 26 +
+        route.segments.length * 16 +
+        route.cost.breakdown.length * 14 +
+        route.contacts.length * 74
+      );
+    }
     if (contextModel.forecast) return 250;
     return 56 + contextModel.actions.length * 26 + contextModel.lines.length * 4;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -34138,6 +36608,9 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
       case "confirm":
         setAbilityMenuOpen(false);
         dispatch({ type: "confirm" });
+        return;
+      case "undoRouteSegment":
+        dispatch({ type: "undoRouteSegment" });
         return;
       case "cancel":
         setAbilityMenuOpen(false);
@@ -34579,6 +37052,9 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
           width={PANEL_WIDTH}
           onAction={onPanelAction}
           onAbility={onPanelAbility}
+          onRouteDisplace={(segment, change) =>
+            dispatch({ type: "setRouteDisplacement", segment, ...change })
+          }
           onContextOption={(option) =>
             dispatch({ type: "chooseContextOption", abilityId: option.abilityId })
           }
@@ -35373,6 +37849,32 @@ if (typeof window !== "undefined") {
     },
     modifyTurnDelay: (state, unitId, delta) => REACTION_ENGINE.modifyTurnDelay(state, unitId, delta),
     canSeeTile: (state, unitId, tile) => REACTION_ENGINE.canSeeTile(state, unitId, tile),
+    // The route surface. `plan` is the authority the preview, the executor and
+    // a harness all share — asking it here asks the same question the player's
+    // panel does, which is the point of there being only one.
+    trajectory: {
+      plan: (state, unitId, segments, abilityId) =>
+        planUnitTrajectory(
+          state,
+          unitId,
+          segments,
+          trajectoryRules(abilityId ? CONTENT.abilities[abilityId] : null)
+        ),
+      preview: (state, input, candidate) => createRoutePlanModel(state, input, candidate),
+      hasRunway: (state, unitId, abilityId) =>
+        trajectoryHasRunway(state, unitId, CONTENT.abilities[abilityId]),
+      input: (state, unitId, abilityId) =>
+        inputReducer(
+          createInputState({ mode: "unitReady", selectedUnitId: unitId, inspectedUnitId: unitId }),
+          { type: "chooseAbility", abilityId },
+          state
+        ).input,
+      click: (state, input, tile) => inputReducer(input, { type: "clickTile", tile }, state),
+      displace: (state, input, change) =>
+        inputReducer(input, { type: "setRouteDisplacement", ...change }, state).input,
+      commands: (input) => commandsForPlan(input),
+      context: (state) => state.trajectory || null
+    },
     forcePush: (state, sourceUnitId, targetUnitId, distance) => {
       const source = state.units[sourceUnitId];
       EFFECT_HANDLERS.push(state, {

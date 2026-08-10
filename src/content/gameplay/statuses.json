@@ -4,6 +4,25 @@
   "registry": "statuses",
   "description": "Timed conditions. The parameters are authored; several flags select engine behaviour rather than defining it.",
   "entries": {
+    "anchored": {
+      "name": "Anchored",
+      "category": "positive",
+      "glyph": "=",
+      "description": "Braced against being moved. Absorbs displacement rather than resisting it after the fact.",
+      "tags": [
+        "stance",
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 2,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "displacementResistanceFlat": 3,
+        "evasionFlat": -10
+      },
+      "removedOnMovement": true
+    },
     "braced": {
       "name": "Braced",
       "category": "positive",
@@ -153,6 +172,23 @@
       },
       "modifiers": {
         "speedMultiplier": 0.7
+      }
+    },
+    "spooling": {
+      "name": "Spooling",
+      "category": "negative",
+      "glyph": "^",
+      "description": "Drives are winding up. Nothing is being watched.",
+      "tags": [
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 1,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "defenseFlat": -10,
+        "evasionFlat": -20
       }
     },
     "stun": {

@@ -31,7 +31,30 @@ import { setTimeout as sleep } from "node:timers/promises";
  * name inside a string literal still counts, because that is code.
  * -------------------------------------------------------------*/
 const GENERIC_DIRS = ["src/combat", "src/reactions", "src/mission", "src/perception", "src/scene"];
-const FORBIDDEN_NAMES = ["vale", "kell", "nyx", "aegis"];
+
+/* Operator names, and the ids that belong to one operator's kit.
+ *
+ * The second group is the newer half of the rule. `burst` and `machStrike` are
+ * not people, but an engine that mentions either has grown the same special
+ * case a name would: the next operator with a stored-power resource will need
+ * a second one. Content is where these live. The interdictor's canonical name
+ * is deliberately not here — engine code must not learn it either, and the way
+ * to guarantee that is for the engine never to see a name at all. */
+const FORBIDDEN_NAMES = [
+  "vale",
+  "kell",
+  "nyx",
+  "aegis",
+  "burst",
+  "machStrike",
+  "mach-strike",
+  "vectorRoute",
+  "impactChain",
+  "spoolDrive",
+  "interdictor",
+  "interdictorFrame",
+  "commandPoints"
+];
 
 function sourceFiles(dir) {
   const out = [];

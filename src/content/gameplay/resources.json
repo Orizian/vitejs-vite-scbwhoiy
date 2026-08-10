@@ -4,6 +4,21 @@
   "registry": "resources",
   "description": "Every pool of points a battle tracks. `unit` scope gives each frame its own balance; `faction` scope gives a whole side one shared balance, which is what Command Points are. Availability is separate from balance, so a link-gated pool keeps its points while the link is down.",
   "entries": {
+    "burst": {
+      "name": "Burst",
+      "scope": "unit",
+      "description": "Stored manoeuvring power. Spent on hard turns during a route, or on extending a close-range impact sequence. Banked between activations, so a quiet turn buys a loud one.",
+      "tags": [
+        "operator",
+        "movement"
+      ],
+      "max": 5,
+      "startsAt": 2,
+      "regen": {
+        "amount": 1,
+        "on": "selfActivation"
+      }
+    },
     "commandPoints": {
       "name": "Command Points",
       "scope": "faction",

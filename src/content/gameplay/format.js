@@ -78,6 +78,7 @@ export const REGISTRY_KINDS = {
       "costs",
       "conditions",
       "requirementText",
+      "trajectory",
       "effects",
       "tags",
       "ui"
