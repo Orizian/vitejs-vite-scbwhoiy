@@ -66,6 +66,14 @@ import {
   planDisplacement
 } from "./combat/trajectory.js";
 import {
+  SELECTION_POLICY_IDS,
+  MAX_PROPAGATION_HOPS,
+  planPropagation,
+  createPropagationContext,
+  advancePropagation,
+  describeTermination
+} from "./combat/propagation.js";
+import {
   createCausalityState,
   beginChain,
   childCause,
@@ -2141,6 +2149,10 @@ const DEFAULT_BASE_STATS = {
   // An ordinary stat on purpose, so equipment, statuses and perks can move it
   // through the pipeline that already exists rather than a bespoke one.
   displacementResistance: 0,
+  // Extra tiles a chain may reach when arcing to or from this frame. Also an
+  // ordinary stat, so a conductive status is a modifier rather than a
+  // conductivity subsystem.
+  propagationRadiusBonus: 0,
   maxHp: 1,
   attack: 0,
   magic: 0,
@@ -3867,6 +3879,34 @@ const EFFECT_SCALING_SOURCES = {
       if (!trajectory || trajectory.unitId !== context.sourceUnitId) return 0;
       return trajectory.redirectCount;
     }
+  },
+  hopIndex: {
+    label: "Arc number",
+    summary:
+      "How far along a chain this node is. Zero on the initial target, one on " +
+      "the first arc. Pair it with a negative `perUnit` to author decay.",
+    read: (state, context) => {
+      const chain = propagationContextOf(state, context.sourceUnitId);
+      return chain ? chain.hop : 0;
+    }
+  },
+  hopDistance: {
+    label: "Arc length",
+    summary: "Tiles the current arc crossed to reach this node.",
+    read: (state, context) => {
+      const chain = propagationContextOf(state, context.sourceUnitId);
+      return chain ? chain.hopDistance : 0;
+    }
+  },
+  propagationKills: {
+    label: "Kills so far this chain",
+    summary:
+      "Units this chain has already destroyed. Counted, never re-triggered, so " +
+      "rewarding a kill cannot feed itself.",
+    read: (state, context) => {
+      const chain = propagationContextOf(state, context.sourceUnitId);
+      return chain ? chain.kills : 0;
+    }
   }
 };
 
@@ -3878,6 +3918,12 @@ export const EFFECT_SCALING_IDS = Object.keys(EFFECT_SCALING_SOURCES);
  * Zero when the source is unknown or the context does not apply — a strike
  * made standing still scales from nothing, which is exactly the counterplay
  * the operator is supposed to have.
+ *
+ * `perUnit` may be negative, which is how decay is authored: an arc that is
+ * worth less the further it travels is the same mechanism as a charge that is
+ * worth more the further it ran, with the sign flipped. `min` bounds the
+ * downside and defaults to zero, so an author who does not think about decay
+ * gets exactly the old behaviour.
  */
 function scalingBonus(state, context, scaling) {
   if (!scaling || !scaling.from) return 0;
@@ -3887,7 +3933,8 @@ function scalingBonus(state, context, scaling) {
   const per = Number(scaling.perUnit || 0);
   const raw = value * per;
   const cap = scaling.max == null ? Infinity : Number(scaling.max);
-  return Math.max(0, Math.min(cap, raw));
+  const floor = scaling.min == null ? 0 : Number(scaling.min);
+  return Math.max(floor, Math.min(cap, raw));
 }
 
 function resolveDamageEffect(state, context) {
@@ -4603,6 +4650,96 @@ function resolveRepeatEffect(state, context) {
   }
 }
 
+/**
+ * Resolves an effect list along a chain of targets.
+ *
+ * The chain is planned once, from live positions, and then each node's effects
+ * go through `resolveEffects` exactly as they would if the node had been
+ * targeted directly. That is the entire trick: there is no chain-damage
+ * routine, so an authored chain of statuses, heals or shields needs no new
+ * targeting architecture — only a different effect list inside this one.
+ *
+ * Ordering is the plan's ordering, and the plan is deterministic, so a replay
+ * arcs through the same units in the same sequence.
+ */
+function resolvePropagateEffect(state, context) {
+  const effect = context.effect;
+  const sourceUnitId = context.sourceUnitId;
+  const plan = planUnitPropagation(state, sourceUnitId, context.abilityId, context.targetUnitId);
+
+  const chain = createPropagationContext(plan, { abilityId: context.abilityId || null });
+  const previous = state.propagation;
+  state.propagation = chain;
+
+  queueEvent(state, {
+    type: "propagationPlanned",
+    sourceUnitId,
+    abilityId: context.abilityId || null,
+    initialTargetId: plan.initialTargetId,
+    order: plan.order.slice(),
+    hops: plan.hops,
+    maxHops: plan.maxHops,
+    terminationReason: plan.terminationReason,
+    legal: plan.legal
+  });
+
+  for (const node of plan.nodes) {
+    const unit = state.units[node.id];
+    if (!unit) continue;
+    // The world changes as the chain resolves — an earlier arc may have killed
+    // this node, or a reaction may have moved it. A node that stopped being a
+    // legal target is skipped rather than forced through.
+    if (!unit.alive && !effect.allowsDefeated) {
+      chain.resolved.push(node.id);
+      continue;
+    }
+
+    advancePropagation(chain, node);
+    const before = unit.currentHp;
+
+    resolveEffects(state, {
+      sourceUnitId,
+      targetUnitIds: [node.id],
+      targetTile: { x: unit.x, y: unit.y },
+      affectedTiles: context.affectedTiles,
+      abilityId: context.abilityId,
+      statusId: context.statusId,
+      effects: effect.effects || [],
+      chainDepth: context.chainDepth + 1
+    });
+    processAllEvents(state);
+
+    queueEvent(state, {
+      type: "propagationHop",
+      sourceUnitId,
+      targetUnitId: node.id,
+      abilityId: context.abilityId || null,
+      hop: node.hop,
+      fromUnitId: node.fromId,
+      distance: node.distance,
+      radius: node.radius
+    });
+    processAllEvents(state);
+
+    // Counted, never re-triggered. A kill can make the *next* arc hit harder
+    // because content asked it to; it cannot cause another arc, which is what
+    // would turn a cascade into a loop.
+    const after = state.units[node.id];
+    if (before > 0 && (!after || !after.alive || after.currentHp <= 0)) chain.kills += 1;
+  }
+
+  queueEvent(state, {
+    type: "propagationCompleted",
+    sourceUnitId,
+    abilityId: context.abilityId || null,
+    resolved: chain.resolved.slice(),
+    hops: chain.hop,
+    kills: chain.kills,
+    terminationReason: plan.terminationReason
+  });
+  state.propagation = previous || null;
+}
+
 const EFFECT_HANDLERS = {
   damage: resolveDamageEffect,
   heal: resolveHealEffect,
@@ -4632,6 +4769,7 @@ const EFFECT_HANDLERS = {
   delayedEffect: resolveDelayedEffect,
   conditionalEffect: resolveConditionalEffect,
   repeatEffect: resolveRepeatEffect,
+  propagate: resolvePropagateEffect,
   refreshActivationResource: resolveRefreshActivationResource
 };
 
@@ -4908,6 +5046,7 @@ const EFFECT_METADATA = {
   delayedEffect: { applies: "unit" },
   conditionalEffect: { applies: "unit" },
   repeatEffect: { applies: "unit" },
+  propagate: { applies: "unit" },
   refreshActivationResource: { applies: "unit", allowsDefeated: true }
 };
 
@@ -5895,6 +6034,73 @@ const EVENT_HANDLERS = {
         interrupted: event.interrupted,
         interruptReason: event.interruptReason,
         endpoint: event.endpoint
+      }
+    );
+  },
+
+  propagationPlanned(state, event) {
+    logLine(
+      state,
+      "propagationPlanned",
+      unitLabel(state, event.sourceUnitId) +
+        " arcs through " +
+        event.order.length +
+        (event.order.length === 1 ? " target" : " targets") +
+        " — " +
+        event.order.map((id) => unitLabel(state, id)).join(" → "),
+      {
+        sourceUnitId: event.sourceUnitId,
+        abilityId: event.abilityId,
+        initialTargetId: event.initialTargetId,
+        order: event.order,
+        hops: event.hops,
+        maxHops: event.maxHops,
+        terminationReason: event.terminationReason,
+        legal: event.legal
+      }
+    );
+  },
+
+  propagationHop(state, event) {
+    // Hop zero is the target the player aimed at; it is not an arc and reads
+    // as noise in the log beside the damage line that follows it.
+    if (!event.hop) return;
+    logLine(
+      state,
+      "propagationHop",
+      "The arc jumps " +
+        event.distance +
+        " to " +
+        unitLabel(state, event.targetUnitId) +
+        " from " +
+        unitLabel(state, event.fromUnitId),
+      {
+        sourceUnitId: event.sourceUnitId,
+        targetUnitId: event.targetUnitId,
+        fromUnitId: event.fromUnitId,
+        abilityId: event.abilityId,
+        hop: event.hop,
+        distance: event.distance,
+        radius: event.radius
+      }
+    );
+  },
+
+  propagationCompleted(state, event) {
+    logLine(
+      state,
+      "propagationCompleted",
+      "The chain ends after " +
+        event.hops +
+        (event.hops === 1 ? " arc" : " arcs") +
+        (event.kills ? ", leaving " + event.kills + " destroyed" : ""),
+      {
+        sourceUnitId: event.sourceUnitId,
+        abilityId: event.abilityId,
+        resolved: event.resolved,
+        hops: event.hops,
+        kills: event.kills,
+        terminationReason: event.terminationReason
       }
     );
   },
@@ -7019,6 +7225,45 @@ const EFFECT_FORECASTERS = {
       chainDepth: (options.chainDepth || 0) + 1
     });
     return inner.map((entry) => ({ ...entry, hits: count, repeated: true }));
+  },
+
+  /**
+   * Forecasts every node the chain will reach, not just the one aimed at.
+   *
+   * Uses the same planner execution uses, so the numbers beside the cursor are
+   * the numbers the chain will produce — including the fact that it stops one
+   * enemy short.
+   */
+  propagate(state, options) {
+    const effect = options.effect;
+    const plan = planUnitPropagation(
+      state,
+      options.sourceUnitId,
+      options.abilityId,
+      options.targetUnitId
+    );
+    const out = [];
+    for (const node of plan.nodes) {
+      const unit = state.units[node.id];
+      if (!unit) continue;
+      const inner = forecastEffectList(state, {
+        ...options,
+        targetUnitId: node.id,
+        targetTile: { x: unit.x, y: unit.y },
+        effects: effect.effects || [],
+        chainDepth: (options.chainDepth || 0) + 1
+      });
+      for (const entry of inner) {
+        out.push({
+          ...entry,
+          targetUnitId: node.id,
+          hop: node.hop,
+          hopDistance: node.distance,
+          arcedFrom: node.fromId
+        });
+      }
+    }
+    return out;
   }
 };
 
@@ -8744,6 +8989,242 @@ function describeRouteContact(state, unitId, ability, segment, displacementTiles
   return record;
 }
 
+/* ===============================================================
+ * PROPAGATION
+ *
+ * A chain is planned through the engine's own distance, sight and targeting
+ * rules and resolved through the ordinary effect pipeline. Nothing here knows
+ * what is arcing or why; the search lives in `src/combat/propagation.js` and
+ * this half only answers its questions.
+ * =============================================================*/
+
+/** The authored rules for an ability's chain, with the engine's defaults. */
+function propagationRules(ability) {
+  const declared = (ability && ability.propagation) || {};
+  return {
+    maxHops: declared.maxHops == null ? 1 : declared.maxHops,
+    hopRadius: declared.hopRadius == null ? 2 : declared.hopRadius,
+    allowRepeat: declared.allowRepeat === true,
+    includeSource: declared.includeSource === true,
+    // Sight between nodes is its own question: an arc that needs a clear line
+    // is a different mechanic from one that does not, and the ability that
+    // aimed at the first target already had its own line-of-sight rule.
+    requiresLineOfSight: declared.requiresLineOfSight === true,
+    allowsDefeated: declared.allowsDefeated === true,
+    relationship: declared.relationship || "enemy",
+    selection: declared.selection || "nearest",
+    filters: declared.filters || null
+  };
+}
+
+/**
+ * The engine adapter the chain planner asks about the battlefield.
+ *
+ * Every answer comes from something that already existed — `gridDistance`,
+ * `hasLineOfSight`, `TARGET_FILTERS`, `passesTargetFilters`. There is no
+ * second metric and no second sight model, which is what makes a planned arc
+ * a claim the engine will honour rather than one the preview invented.
+ *
+ * Positions are read at call time, never captured. That is the property the
+ * whole mechanic rests on: move an enemy two tiles and the next question about
+ * that enemy has a different answer.
+ */
+function propagationDeps(state, sourceUnitId, abilityId, rules) {
+  const map = getMap(state);
+  const relationship = TARGET_FILTERS[rules.relationship];
+  const tileOf = (unitId) => {
+    const unit = state.units[unitId];
+    return unit ? { x: unit.x, y: unit.y } : null;
+  };
+  return {
+    nodes() {
+      const out = [];
+      for (const id of state.unitOrder) {
+        const unit = state.units[id];
+        if (!unit) continue;
+        out.push({
+          id,
+          x: unit.x,
+          y: unit.y,
+          // The tie-break weight for policies that want the weakest target.
+          weight: unit.currentHp
+        });
+      }
+      return out;
+    },
+
+    distance(fromId, toId) {
+      const from = tileOf(fromId);
+      const to = tileOf(toId);
+      if (!from || !to) return Infinity;
+      return gridDistance(from, to);
+    },
+
+    connected(fromId, toId) {
+      if (!rules.requiresLineOfSight) return true;
+      const from = tileOf(fromId);
+      const to = tileOf(toId);
+      if (!from || !to) return false;
+      return hasLineOfSight(map, from, to, state);
+    },
+
+    /**
+     * How far this particular arc may reach.
+     *
+     * The authored radius plus whatever either end contributes. Because the
+     * contribution is an ordinary stat, a status, a piece of equipment and a
+     * perk all reach it through the pipeline that already composes them.
+     */
+    hopRadius(fromId, toId) {
+      const from = calculateUnitStats(state, fromId);
+      const to = calculateUnitStats(state, toId);
+      return (
+        rules.hopRadius +
+        (from ? from.propagationRadiusBonus || 0 : 0) +
+        (to ? to.propagationRadiusBonus || 0 : 0)
+      );
+    },
+
+    eligible(unitId) {
+      const unit = state.units[unitId];
+      if (!unit) return { ok: false, reason: "no such unit" };
+      if (!unit.alive && !rules.allowsDefeated) return { ok: false, reason: "already destroyed" };
+      if (!relationship) return { ok: false, reason: 'unknown relationship "' + rules.relationship + '"' };
+      if (!relationship(state, sourceUnitId, unit)) {
+        return { ok: false, reason: "not a legal target for this action" };
+      }
+      if (isHostile(state, sourceUnitId, unitId) && isUnitConcealed(state, unitId)) {
+        return { ok: false, reason: "cannot be detected" };
+      }
+      if (
+        rules.filters &&
+        !passesTargetFilters(state, rules.filters, { unit, sourceUnitId, abilityId })
+      ) {
+        return { ok: false, reason: "does not match this action's filters" };
+      }
+      return { ok: true, reason: null };
+    }
+  };
+}
+
+/**
+ * Plans a chain for an ability, from live state.
+ *
+ * The single authority: execution, the player's preview, the forecast and the
+ * tests all call this. A preview that computed the chain separately would
+ * eventually promise an arc the engine then refuses, which is the same class
+ * of lie the route planner exists to prevent.
+ */
+function planUnitPropagation(state, sourceUnitId, abilityId, initialTargetId) {
+  const ability = abilityId ? CONTENT.abilities[abilityId] : null;
+  const rules = propagationRules(ability);
+  return planPropagation(
+    sourceUnitId,
+    initialTargetId,
+    propagationDeps(state, sourceUnitId, abilityId, rules),
+    rules
+  );
+}
+
+/** Whether an ability chains at all. Content decides; the engine keeps no list. */
+function propagatingAbility(abilityId) {
+  const ability = abilityId ? CONTENT.abilities[abilityId] : null;
+  return ability && ability.propagation ? ability : null;
+}
+
+/**
+ * Everything the chain preview needs, from the authorities that will run it.
+ *
+ * The order comes from `planUnitPropagation` and the numbers from the ordinary
+ * forecast pipeline — the same two calls execution makes. Because the plan is
+ * read from live positions every time this is called, moving an enemy and
+ * re-hovering shows a different chain without anything having to invalidate a
+ * cache.
+ */
+function createChainPreviewModel(state, sourceUnitId, abilityId, targetUnitId) {
+  const ability = propagatingAbility(abilityId);
+  const source = sourceUnitId ? state.units[sourceUnitId] : null;
+  const target = targetUnitId ? state.units[targetUnitId] : null;
+  if (!ability || !source || !target) return null;
+
+  const plan = planUnitPropagation(state, sourceUnitId, abilityId, targetUnitId);
+  const forecast = forecastEffectList(state, {
+    sourceUnitId,
+    targetUnitId,
+    abilityId,
+    sourceTile: { x: source.x, y: source.y },
+    targetTile: { x: target.x, y: target.y },
+    effects: ability.effects
+  });
+
+  const damage = {};
+  for (const entry of forecast) {
+    if (entry.effectType !== "damage" || entry.targetUnitId == null) continue;
+    const bucket = damage[entry.targetUnitId] || (damage[entry.targetUnitId] = { amount: 0, lethal: false });
+    bucket.amount += entry.totalAmount == null ? entry.amount : entry.totalAmount;
+    bucket.lethal = bucket.lethal || !!entry.lethal;
+  }
+
+  const nodes = plan.nodes.map((node) => {
+    const unit = state.units[node.id];
+    const hit = damage[node.id];
+    return {
+      unitId: node.id,
+      name: unit ? CONTENT.units[unit.definitionId].name : "—",
+      hop: node.hop,
+      distance: node.distance,
+      fromUnitId: node.fromId,
+      tile: unit ? { x: unit.x, y: unit.y } : null,
+      amount: hit ? hit.amount : null,
+      lethal: hit ? hit.lethal : false
+    };
+  });
+
+  const costs = Object.keys(ability.costs || {}).map((resourceId) => {
+    const definition = REACTION_INDEX.resourceById[resourceId];
+    const pool = source.resources ? source.resources[resourceId] : null;
+    const price = ability.costs[resourceId];
+    return {
+      resourceId,
+      name: (definition && definition.name) || resourceId,
+      amount: price,
+      available: pool ? pool.current : null,
+      remaining: pool ? pool.current - price : null,
+      affordable: !!pool && pool.current >= price
+    };
+  });
+
+  return {
+    sourceUnitId,
+    abilityId,
+    abilityName: ability.name,
+    legal: plan.legal,
+    initialLegal: plan.initialLegal,
+    initialReason: plan.initialReason,
+    nodes,
+    reached: nodes.length,
+    hops: plan.hops,
+    maxHops: plan.maxHops,
+    termination: describeTermination(plan),
+    terminationReason: plan.terminationReason,
+    costs,
+    affordable: costs.every((cost) => cost.affordable),
+    totalDamage: nodes.reduce((total, node) => total + (node.amount || 0), 0),
+    lethalCount: nodes.filter((node) => node.lethal).length
+  };
+}
+
+/**
+ * Everything an authored scaling source or condition may read about a chain in
+ * progress. Plain values on battle state, so a save mid-chain resumes with the
+ * same answers.
+ */
+function propagationContextOf(state, sourceUnitId) {
+  const context = state.propagation;
+  if (!context || context.sourceUnitId !== sourceUnitId) return null;
+  return context;
+}
+
 const REACTION_ENGINE = {
   logLine(state, type, text, data) {
     logLine(state, type, text, data);
@@ -9429,6 +9910,17 @@ const EFFECT_AI_SCORERS = {
       GAME_CONFIG.limits.maxRepeatedEffects
     );
     return scoreEffectList(state, context, context.effect.effects || []) * count;
+  },
+
+  /**
+   * Worth what it reaches. The AI does not plan chains — it cannot choose a
+   * target *because* of who stands behind them — but it can at least tell that
+   * an action hitting four units is worth more than one hitting one.
+   */
+  propagate(state, context) {
+    const plan = planUnitPropagation(state, context.unitId, context.abilityId, context.target.id);
+    const per = scoreEffectList(state, context, context.effect.effects || []);
+    return per * Math.max(1, plan.nodes.length);
   }
 };
 
@@ -9933,6 +10425,14 @@ const EFFECT_VALIDATORS = {
     if (!(effect.count > 0)) errors.push(label + " needs a positive repeat count.");
     errors.push(...validateEffectList(registry, effect.effects || [], label + " (repeat)"));
     return errors;
+  },
+  propagate: (registry, effect, label) => {
+    const errors = [];
+    if (!(effect.effects || []).length) {
+      errors.push(label + " propagates but applies nothing to what it reaches.");
+    }
+    errors.push(...validateEffectList(registry, effect.effects || [], label + " (arc)"));
+    return errors;
   }
 };
 
@@ -10205,7 +10705,16 @@ const ENGINE_FUNCTIONS = {
   straightSegmentTo,
   routeEndpoint,
   createRoutePlanModel,
-  describeRouteContact
+  describeRouteContact,
+  // The chain surface, for the same reason: a search over live positions is
+  // exactly where a content id would hide.
+  propagationRules,
+  propagationDeps,
+  planUnitPropagation,
+  propagatingAbility,
+  propagationContextOf,
+  resolvePropagateEffect,
+  createChainPreviewModel
 };
 
 function engineSourceEntries() {
@@ -11545,6 +12054,19 @@ function createAbilityViewModel(state, unitId, abilityId, options) {
   if (cooldownRemaining > 0) {
     reasons.push("Cooldown: " + cooldownRemaining + " activation" + (cooldownRemaining === 1 ? "" : "s"));
   }
+  // What it costs is part of whether it can be used. The command validator has
+  // always refused an unaffordable action; without this the model that draws
+  // the button disagreed with it, and the player found out by clicking.
+  for (const resourceId of Object.keys(ability.costs || {})) {
+    const pool = unit.resources[resourceId];
+    const price = ability.costs[resourceId];
+    const definition = REACTION_INDEX.resourceById[resourceId];
+    const name = (definition && definition.name) || resourceId;
+    if (!pool) reasons.push("This frame carries no " + name + ".");
+    else if (pool.current < price) {
+      reasons.push("Needs " + price + " " + name + " (" + pool.current + " banked)");
+    }
+  }
   if (!targets.length) {
     // A route ability reaches by travelling. Judging it on who is standing next
     // to the frame right now would grey out the charge in exactly the situation
@@ -11928,6 +12450,15 @@ function createBattleViewModel(state, view) {
     }
   }
 
+  // Chain marks. The board numbers each node with the arc that reaches it, so
+  // the order the player is about to commit to is legible without a legend.
+  const chainTiles = new Map();
+  if (options.chain) {
+    for (const node of options.chain.nodes || []) {
+      if (node.tile) chainTiles.set(tileKey(node.tile.x, node.tile.y), node);
+    }
+  }
+
   const selectedElevation =
     selectedUnitId && state.units[selectedUnitId]
       ? elevationAt(map, state.units[selectedUnitId].x, state.units[selectedUnitId].y) || 0
@@ -11971,6 +12502,8 @@ function createBattleViewModel(state, view) {
         routeRedirect: redirectTiles.has(key) ? redirectTiles.get(key) : null,
         routeDisplacement: displacementTiles.has(key),
         routeBlocked: blockedTileKey === key,
+        chainHop: chainTiles.has(key) ? chainTiles.get(key).hop : null,
+        chainLethal: chainTiles.has(key) ? chainTiles.get(key).lethal : false,
         isDestination:
           !!options.plannedDestination &&
           options.plannedDestination.x === x &&
@@ -14433,6 +14966,9 @@ function createContextCommandModel(state, input, options) {
       anchorTile: input.selectedTarget ? { ...input.selectedTarget } : base.anchorTile,
       title: input.forecast.abilityName,
       forecast: input.forecast,
+      // A chaining ability shows what it reaches beyond the unit aimed at,
+      // because that is the part of the decision the reticle cannot express.
+      chain: opts.chain || null,
       actions: [
         action("confirm", "Confirm attack", "Enter"),
         action("changeAbility", "Choose different ability", "1-9"),
@@ -24122,6 +24658,931 @@ test("Trajectory", "The board draws the route the planner produced and nothing e
   assertEqual(tileAt(13, 5).isDestination, true, "and the frame stops where the panel says");
 });
 
+/* =========================================================================
+ * PROPAGATION
+ *
+ * A chain of targets, each chosen from where the last one is standing right
+ * now. The whole mechanic is that dependency on live positions: it is what
+ * makes a clustered formation a mistake, and what lets one operator create
+ * another operator's payoff by moving a single enemy two tiles.
+ * =======================================================================*/
+
+const CASCADE_ENCOUNTER = "file:fixture-cascade-arena";
+
+function cascadeBattle(seed, options) {
+  return createBattle(CASCADE_ENCOUNTER, seed == null ? 3 : seed, {
+    autoResolveScenes: true,
+    autoResolveReactions: false,
+    ...options
+  });
+}
+
+/** The chain a given caster would make against a given first target. */
+function chainOrder(state, casterRef, abilityId, targetRef) {
+  const caster = unitByRef(state, casterRef);
+  const target = unitByRef(state, targetRef);
+  const plan = planUnitPropagation(state, caster.id, abilityId, target.id);
+  return {
+    plan,
+    refs: plan.order.map((id) => state.units[id].ref)
+  };
+}
+
+/* ---------------------------------------------------------------
+ * THE SEARCH
+ * -------------------------------------------------------------*/
+
+test("Propagation", "A chain walks from target to target, not from a shape", () => {
+  const state = cascadeBattle(60);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+
+  // Laid out so no fixed shape centred anywhere could produce this set: the
+  // three are strung out over eight tiles, and each is only reachable from the
+  // one before it.
+  bravo.x = 11;
+  bravo.y = 8;
+  const { plan, refs } = chainOrder(state, "arc", "chainDischarge", "alpha");
+
+  assertEqual(refs.join(" → "), "alpha → bravo → charlie", "the chain is ordered");
+  assertEqual(plan.legal, true);
+  assertEqual(plan.initialLegal, true);
+  assertEqual(plan.hops, 2, "two arcs after the target the player aimed at");
+  assertEqual(plan.nodes[0].hop, 0);
+  assertEqual(plan.nodes[1].fromId, alpha.id, "the second node arcs from the first");
+  assertEqual(plan.nodes[2].fromId, bravo.id, "and the third from the second");
+  assertEqual(plan.nodes[1].distance, 3, "each hop records the distance it crossed");
+  assertEqual(plan.nodes[2].distance, 3);
+  assertEqual(plan.terminationReason, "noEligibleTarget", "it stopped because it ran out");
+  assert(gridDistance(alpha, charlie) > 3, "and the last node was never reachable from the first");
+});
+
+test("Propagation", "A chain with nothing to reach stops on its first target, cleanly", () => {
+  const state = cascadeBattle(61);
+  const { plan, refs } = chainOrder(state, "arc", "chainDischarge", "alpha");
+
+  assertEqual(refs.join(" → "), "alpha", "nothing is within arc range of the target");
+  assertEqual(plan.legal, true, "which is not the same as an illegal chain");
+  assertEqual(plan.hops, 0);
+  assertEqual(plan.terminationReason, "noEligibleTarget");
+  assert(describeTermination(plan), "and it can say so in words: " + describeTermination(plan));
+
+  // The rejections are recorded, which is what lets a preview explain itself.
+  const named = plan.rejected.map((entry) => state.units[entry.id].ref);
+  assert(named.includes("bravo"), "the near miss is named: " + named.join(","));
+  const bravoMiss = plan.rejected.find((entry) => state.units[entry.id].ref === "bravo");
+  assert(/out of arc range/.test(bravoMiss.reason), bravoMiss.reason);
+});
+
+test("Propagation", "An illegal first target is refused before any arc is considered", () => {
+  const state = cascadeBattle(62);
+  const arc = unitByRef(state, "arc");
+  const ally = unitByRef(state, "kell");
+
+  const plan = planUnitPropagation(state, arc.id, "chainDischarge", ally.id);
+  assertEqual(plan.initialLegal, false, "an ally is not a legal node for a hostile chain");
+  assertEqual(plan.legal, false);
+  assertEqual(plan.nodes.length, 0, "and nothing was planned from it");
+  assertEqual(plan.terminationReason, "noInitialTarget");
+
+  const dead = planUnitPropagation(state, arc.id, "chainDischarge", null);
+  assertEqual(dead.legal, false, "neither is no target at all");
+});
+
+test("Propagation", "Two equally near targets resolve the same way every time", () => {
+  const run = () => {
+    const state = cascadeBattle(63);
+    const alpha = unitByRef(state, "alpha");
+    const bravo = unitByRef(state, "bravo");
+    const charlie = unitByRef(state, "charlie");
+    // Mirror images of each other about the initial target.
+    bravo.x = alpha.x + 2;
+    bravo.y = alpha.y;
+    charlie.x = alpha.x - 2;
+    charlie.y = alpha.y;
+    const { plan } = chainOrder(state, "arc", "chainDischarge", "alpha");
+    return plan.order.join(",");
+  };
+
+  const first = run();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assertEqual(run(), first, "a tie must not depend on iteration order");
+  }
+  // And the tie is broken by something stable rather than by luck.
+  const state = cascadeBattle(63);
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  bravo.x = alpha.x + 2;
+  bravo.y = alpha.y;
+  charlie.x = alpha.x - 2;
+  charlie.y = alpha.y;
+  const { plan } = chainOrder(state, "arc", "chainDischarge", "alpha");
+  const tied = [bravo.id, charlie.id].sort();
+  assertEqual(plan.order[1], tied[0], "the lower id wins, and would in a replay too");
+});
+
+test("Propagation", "A chain does not double back onto something it already hit", () => {
+  const state = cascadeBattle(64);
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  // Two nodes standing on top of each other: without the guard, the arc would
+  // bounce between them until it ran out of hops.
+  bravo.x = alpha.x + 1;
+  bravo.y = alpha.y;
+  charlie.x = alpha.x + 2;
+  charlie.y = alpha.y;
+
+  const { plan, refs } = chainOrder(state, "arc", "chainDischarge", "alpha");
+  assertEqual(new Set(plan.order).size, plan.order.length, "no unit appears twice: " + refs.join(","));
+  assertEqual(refs.join(" → "), "alpha → bravo → charlie");
+});
+
+test("Propagation", "A chain stops at the arc count its content authored", () => {
+  const state = cascadeBattle(65);
+  const alpha = unitByRef(state, "alpha");
+  // Five in a row, each one tile from the last: more than the ability allows.
+  const line = ["bravo", "charlie", "packA", "packB", "packC", "packD"];
+  line.forEach((ref, index) => {
+    const unit = unitByRef(state, ref);
+    unit.x = alpha.x + index + 1;
+    unit.y = alpha.y;
+  });
+
+  const authored = CONTENT.abilities.chainDischarge.propagation.maxHops;
+  const { plan } = chainOrder(state, "arc", "chainDischarge", "alpha");
+  assertEqual(plan.hops, authored, "the cap is the authored one");
+  assertEqual(plan.nodes.length, authored + 1, "arcs plus the target aimed at");
+  assertEqual(plan.terminationReason, "hopLimit", "and it says why it stopped");
+
+  // A different ability, with different authored numbers, reaches further
+  // through exactly the same engine.
+  const surge = chainOrder(state, "arc", "surgeDischarge", "alpha");
+  assertEqual(surge.plan.hops, CONTENT.abilities.surgeDischarge.propagation.maxHops);
+  assert(surge.plan.hops > authored, "content decides reach, not the engine");
+});
+
+test("Propagation", "The chain never exceeds the engine's own ceiling however it is authored", () => {
+  const state = cascadeBattle(66);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const plan = planPropagation(
+    arc.id,
+    alpha.id,
+    propagationDeps(state, arc.id, null, propagationRules(null)),
+    { maxHops: 10 ** 6, hopRadius: 99 }
+  );
+  assertEqual(plan.maxHops, MAX_PROPAGATION_HOPS, "authored data cannot ask for an unbounded walk");
+});
+
+/* ---------------------------------------------------------------
+ * LIVE POSITIONS
+ * -------------------------------------------------------------*/
+
+test("Propagation", "The chain is computed from where units are now, not where they started", () => {
+  const state = cascadeBattle(67);
+  const bravo = unitByRef(state, "bravo");
+
+  assertEqual(chainOrder(state, "arc", "chainDischarge", "alpha").refs.join(","), "alpha");
+
+  // Nothing but a position changed.
+  bravo.x = 11;
+  assertEqual(
+    chainOrder(state, "arc", "chainDischarge", "alpha").refs.join(" → "),
+    "alpha → bravo → charlie",
+    "moving one enemy two tiles created a chain that did not exist"
+  );
+
+  bravo.x = 13;
+  assertEqual(
+    chainOrder(state, "arc", "chainDischarge", "alpha").refs.join(","),
+    "alpha",
+    "and moving it back removes it again"
+  );
+});
+
+test("Propagation", "Conductivity reaches further, through the ordinary stat pipeline", () => {
+  const state = cascadeBattle(68);
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  // One tile beyond the authored arc range.
+  bravo.x = alpha.x + 4;
+  bravo.y = alpha.y;
+
+  assertEqual(chainOrder(state, "arc", "chainDischarge", "alpha").refs.join(","), "alpha");
+
+  applyStatusForTest(state, alpha.id, "conductive");
+  assertEqual(
+    calculateUnitStats(state, alpha.id).propagationRadiusBonus,
+    1,
+    "the status is an ordinary stat modifier"
+  );
+  const after = chainOrder(state, "arc", "chainDischarge", "alpha");
+  assertEqual(after.refs[1], "bravo", "and the arc now reaches: " + after.refs.join(" → "));
+  assertEqual(
+    after.plan.nodes[1].radius,
+    CONTENT.abilities.chainDischarge.propagation.hopRadius + 1,
+    "the plan records the widened radius it was allowed"
+  );
+});
+
+/* ---------------------------------------------------------------
+ * EXECUTION
+ * -------------------------------------------------------------*/
+
+test("Propagation", "Every node is struck through the ordinary effect pipeline", () => {
+  const state = cascadeBattle(69);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  bravo.x = 11;
+  for (const unit of [alpha, bravo, charlie]) unit.currentHp = 9999;
+  activateForTest(state, arc.id);
+
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+
+  for (const unit of [alpha, bravo, charlie]) {
+    assert(unit.currentHp < 9999, unit.ref + " was struck");
+  }
+  // Ordinary damage events, indistinguishable from any other attack.
+  const struck = state.battleLog
+    .filter((entry) => entry.type === "damageResolved")
+    .map((entry) => state.units[entry.data.unitId].ref);
+  assertEqual(struck.join(" → "), "alpha → bravo → charlie", "in plan order");
+
+  const hops = state.battleLog.filter((entry) => entry.type === "propagationHop");
+  assertEqual(hops.length, 2, "one logged arc per jump, and none for the target aimed at");
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+test("Propagation", "Damage follows the authored per-arc rule", () => {
+  const state = cascadeBattle(70);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  bravo.x = 11;
+  for (const unit of [alpha, bravo, charlie]) unit.currentHp = 9999;
+  activateForTest(state, arc.id);
+
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  });
+
+  const damage = state.battleLog
+    .filter((entry) => entry.type === "damageResolved")
+    .map((entry) => entry.data.amount);
+  assertEqual(damage.length, 3);
+  assert(damage[0] > damage[1], "the arc is worth less each jump: " + damage.join(" > "));
+  assert(damage[1] > damage[2], damage.join(" > "));
+  // Decay is authored as a negative per-unit scaling, so the numbers are the
+  // content's, not a hidden falloff curve.
+  const scaling = CONTENT.abilities.chainDischarge.effects[0].effects[0].scaling;
+  assertEqual(scaling.from, "hopIndex");
+  assert(scaling.perUnit < 0, "and it is the sign of the authored number that makes it decay");
+});
+
+test("Propagation", "A chain that kills feeds the rest of itself, when content says so", () => {
+  const state = cascadeBattle(71);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  unitResource(state, arc.id, "capacitor").current = 8;
+
+  // Four frames in a tight block, each one arc from the next.
+  const pack = ["bravo", "charlie", "packA", "packB"];
+  pack.forEach((ref, index) => {
+    const unit = unitByRef(state, ref);
+    unit.x = alpha.x + index + 1;
+    unit.y = alpha.y;
+  });
+  activateForTest(state, arc.id);
+
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "surgeDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  });
+
+  const damage = state.battleLog
+    .filter((entry) => entry.type === "damageResolved")
+    .map((entry) => entry.data.amount);
+  assert(damage.length >= 3, "the chain reached several: " + damage.join(","));
+  assert(
+    damage[damage.length - 1] > damage[0],
+    "and every kill made the rest worse: " + damage.join(" → ")
+  );
+
+  const completed = state.battleLog.find((entry) => entry.type === "propagationCompleted");
+  assert(completed, "the chain reported itself");
+  assert(completed.data.kills > 0, "having destroyed " + completed.data.kills);
+
+  // The reward is a counted fact, never a new arc — which is what stops a
+  // cascade becoming a loop.
+  assertEqual(
+    state.battleLog.filter((entry) => entry.type === "propagationPlanned").length,
+    1,
+    "one chain was planned, and the kills did not start another"
+  );
+});
+
+test("Propagation", "A node that dies before the arc reaches it is skipped, not forced", () => {
+  const state = cascadeBattle(72);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  bravo.x = 11;
+  alpha.currentHp = 9999;
+  charlie.currentHp = 9999;
+  // Bravo will not survive the arc that reaches it.
+  bravo.currentHp = 1;
+  activateForTest(state, arc.id);
+
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  });
+
+  assertEqual(bravo.alive, false, "the middle node is gone");
+  assert(charlie.currentHp < 9999, "and the chain still reached past it");
+  assertEqual(battleContinuation(state).kind !== "stalled", true);
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+/* ---------------------------------------------------------------
+ * COST
+ * -------------------------------------------------------------*/
+
+test("Propagation", "A chain is paid for through the generic resource system", () => {
+  const state = cascadeBattle(73);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  activateForTest(state, arc.id);
+
+  const before = unitResource(state, arc.id, "capacitor").current;
+  const cost = CONTENT.abilities.chainDischarge.costs.capacitor;
+  assert(before >= cost, "the frame starts able to fire once");
+
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  });
+  assertEqual(
+    unitResource(state, arc.id, "capacitor").current,
+    before - cost,
+    "and the bank is down by the authored cost"
+  );
+
+  const spent = state.battleLog.find((entry) => entry.type === "resourceSpent");
+  assert(spent, "through the ordinary resource event, not a bespoke deduction");
+});
+
+test("Propagation", "An empty bank refuses the chain rather than half-firing it", () => {
+  const state = cascadeBattle(74);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  activateForTest(state, arc.id);
+  unitResource(state, arc.id, "capacitor").current = 1;
+  alpha.currentHp = 9999;
+
+  const command = {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  };
+  const validation = validateCommand(state, command);
+  assertEqual(validation.valid, false, "the command is refused");
+  assert(/capacitor/i.test(validation.errors.join(" ")), validation.errors.join(" | "));
+
+  const result = executeCommand(state, command);
+  assertEqual(result.ok, false, "and running it anyway does nothing");
+  assertEqual(alpha.currentHp, 9999, "nobody was struck");
+  assertEqual(unitResource(state, arc.id, "capacitor").current, 1, "nothing was spent");
+
+  // The view model says so too, so the button is honestly unavailable.
+  const model = createAbilityViewModel(state, arc.id, "chainDischarge");
+  assertEqual(model.usable, false, model.unusableReason || "");
+});
+
+test("Propagation", "Charge is banked by acting, and the bank has a ceiling", () => {
+  const state = cascadeBattle(75);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  activateForTest(state, arc.id);
+  const before = unitResource(state, arc.id, "capacitor").current;
+
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "groundingCycle",
+    target: { unitId: arc.id, tile: { x: arc.x, y: arc.y } }
+  });
+  const after = unitResource(state, arc.id, "capacitor").current;
+  assert(after > before, "a cycle banks charge: " + before + " → " + after);
+  assert(unitHasStatus(state, arc.id, "grounding"), "and pays for it with an exposed activation");
+
+  const grounded = calculateUnitStats(state, arc.id);
+  arc.statuses = [];
+  assert(grounded.evasion < calculateUnitStats(state, arc.id).evasion, "a real penalty, not a label");
+
+  const full = cascadeBattle(75);
+  const other = unitByRef(full, "arc");
+  const bank = unitResource(full, other.id, "capacitor");
+  bank.current = bank.max;
+  activateForTest(full, other.id);
+  executeCommand(full, {
+    type: "useAbility",
+    unitId: other.id,
+    abilityId: "groundingCycle",
+    target: { unitId: other.id, tile: { x: other.x, y: other.y } }
+  });
+  assertEqual(unitResource(full, other.id, "capacitor").current, bank.max, "a full bank stays full");
+
+  // And the ordinary weapon is a trickle, so a spread-out fight still builds.
+  const lancing = cascadeBattle(76);
+  const shooter = unitByRef(lancing, "arc");
+  const victim = unitByRef(lancing, "alpha");
+  victim.currentHp = 9999;
+  activateForTest(lancing, shooter.id);
+  const trickleBefore = unitResource(lancing, shooter.id, "capacitor").current;
+  executeCommand(lancing, {
+    type: "useAbility",
+    unitId: shooter.id,
+    abilityId: "arcLance",
+    target: { unitId: victim.id, tile: { x: victim.x, y: victim.y } }
+  });
+  assert(
+    unitResource(lancing, shooter.id, "capacitor").current > trickleBefore,
+    "ordinary fire puts a little back"
+  );
+});
+
+/* ---------------------------------------------------------------
+ * CAUSALITY
+ * -------------------------------------------------------------*/
+
+test("Propagation", "Every arc belongs to one inspectable chain", () => {
+  const state = cascadeBattle(77);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  bravo.x = 11;
+  for (const unit of [alpha, bravo, charlie]) unit.currentHp = 9999;
+  activateForTest(state, arc.id);
+
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  });
+
+  const trace = state.causalTrace;
+  const damage = trace.filter((entry) => entry.type === "damageResolved");
+  assertEqual(damage.length, 3, "three strikes are on the causal record");
+  const roots = new Set(damage.map((entry) => entry.cause && entry.cause.rootSeq));
+  assertEqual(roots.size, 1, "all of them belong to one chain");
+
+  const hops = trace.filter((entry) => entry.type === "propagationHop");
+  assert(hops.length >= 2, "and each arc is itself an event");
+  for (const hop of hops) {
+    assert(hop.cause, "with a cause");
+    assert(describeCause(hop.cause), describeCause(hop.cause));
+  }
+  // Nothing here is a reaction, and the record says so rather than leaving it
+  // ambiguous.
+  assert(
+    damage.every((entry) => !entry.cause || !entry.cause.viaReaction),
+    "a chain is the caster's own doing"
+  );
+});
+
+test("Propagation", "A chain cannot outrun the engine's recursion ceiling", () => {
+  const state = cascadeBattle(78);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+
+  // Every enemy packed into one line, with an ability authored to revisit
+  // targets: the pathological shape, run for real.
+  const line = ["bravo", "charlie", "packA", "packB", "packC", "packD", "bystander"];
+  line.forEach((ref, index) => {
+    const unit = unitByRef(state, ref);
+    unit.x = alpha.x + index + 1;
+    unit.y = alpha.y;
+    unit.currentHp = 99999;
+  });
+  alpha.currentHp = 99999;
+
+  const deps = propagationDeps(state, arc.id, null, {
+    ...propagationRules(null),
+    hopRadius: 40,
+    maxHops: MAX_PROPAGATION_HOPS
+  });
+  const plan = planPropagation(arc.id, alpha.id, deps, {
+    maxHops: MAX_PROPAGATION_HOPS,
+    allowRepeat: true,
+    includeSource: false
+  });
+  assert(plan.nodes.length <= MAX_PROPAGATION_HOPS + 1, "bounded even when repeats are allowed");
+  assertEqual(plan.terminationReason, "hopLimit");
+
+  // And the ordinary effect pipeline still refuses to nest without limit.
+  assert(GAME_CONFIG.limits.maxEffectChainDepth > 0, "the effect ceiling is a real number");
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+/* ---------------------------------------------------------------
+ * PREVIEW PARITY
+ * -------------------------------------------------------------*/
+
+test("Propagation", "What the preview promises is what the chain does", () => {
+  const state = cascadeBattle(79);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  bravo.x = 11;
+  for (const unit of [alpha, bravo, charlie]) unit.currentHp = 9999;
+  activateForTest(state, arc.id);
+
+  const command = {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  };
+  const validation = validateCommand(state, command);
+  assert(validation.valid, validation.errors.join(" | "));
+
+  // The forecast walks the whole chain, not just the unit under the cursor.
+  const forecast = validation.preview.outcomes.filter((entry) => entry.effectType === "damage");
+  assertEqual(forecast.length, 3, "every node is forecast");
+  const promised = forecast.map((entry) => state.units[entry.targetUnitId].ref);
+  assertEqual(promised.join(" → "), "alpha → bravo → charlie");
+  assertEqual(forecast.map((entry) => entry.hop).join(","), "0,1,2", "with their arc numbers");
+
+  executeCommand(state, command);
+  const struck = state.battleLog
+    .filter((entry) => entry.type === "damageResolved")
+    .map((entry) => state.units[entry.data.unitId].ref);
+  assertEqual(struck.join(" → "), promised.join(" → "), "and that is exactly what happened");
+});
+
+test("Propagation", "The chain preview shows the order, the reach and where it gives up", () => {
+  const state = cascadeBattle(84);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+
+  // Before the shove: the panel has to be able to say "this reaches one".
+  let chain = createChainPreviewModel(state, arc.id, "chainDischarge", alpha.id);
+  assertEqual(chain.reached, 1);
+  assertEqual(chain.hops, 0);
+  assert(/nothing else in range/.test(chain.termination), chain.termination);
+  assertEqual(chain.costs[0].resourceId, "capacitor");
+  assertEqual(chain.costs[0].amount, CONTENT.abilities.chainDischarge.costs.capacitor);
+  assertEqual(chain.costs[0].remaining, chain.costs[0].available - chain.costs[0].amount);
+  assertEqual(chain.affordable, true);
+
+  // After it: same call, different world, different answer.
+  bravo.x = 11;
+  chain = createChainPreviewModel(state, arc.id, "chainDischarge", alpha.id);
+  assertEqual(chain.reached, 3, "the preview follows the enemy, not a cached formation");
+  assertEqual(chain.nodes.map((node) => node.hop).join(","), "0,1,2");
+  assertEqual(chain.nodes[1].distance, 3, "with the distance each arc crosses");
+  assertEqual(chain.nodes[1].fromUnitId, alpha.id, "and what it arced from");
+  assert(chain.nodes.every((node) => node.amount > 0), "every node carries a forecast number");
+  assert(chain.totalDamage > chain.nodes[0].amount, "and the total is the whole chain's");
+
+  // An empty bank is visible before the click, not after it.
+  unitResource(state, arc.id, "capacitor").current = 0;
+  const broke = createChainPreviewModel(state, arc.id, "chainDischarge", alpha.id);
+  assertEqual(broke.affordable, false);
+  assertEqual(broke.costs[0].affordable, false);
+});
+
+test("Propagation", "The board marks every node the chain will reach, and nothing else", () => {
+  const state = cascadeBattle(85);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  bravo.x = 11;
+
+  const chain = createChainPreviewModel(state, arc.id, "chainDischarge", alpha.id);
+  const view = createBattleViewModel(state, {
+    mode: "confirmingAction",
+    selectedUnitId: arc.id,
+    abilityId: "chainDischarge",
+    chain
+  });
+  const tileAt = (x, y) => view.tiles.find((tile) => tile.x === x && tile.y === y);
+
+  assertEqual(tileAt(alpha.x, alpha.y).chainHop, 0, "the target aimed at is node one");
+  assertEqual(tileAt(bravo.x, bravo.y).chainHop, 1);
+  assertEqual(tileAt(charlie.x, charlie.y).chainHop, 2);
+  assertEqual(tileAt(arc.x, arc.y).chainHop, null, "the caster is not a node");
+  const packA = unitByRef(state, "packA");
+  assertEqual(tileAt(packA.x, packA.y).chainHop, null, "and neither is anything out of reach");
+});
+
+test("Propagation", "Preview and execution agree, before and after the battlefield moves", () => {
+  const check = (arrange) => {
+    const state = cascadeBattle(86);
+    const arc = unitByRef(state, "arc");
+    const alpha = unitByRef(state, "alpha");
+    arrange(state);
+    for (const id of state.unitOrder) state.units[id].currentHp = 99999;
+    activateForTest(state, arc.id);
+
+    const promised = createChainPreviewModel(state, arc.id, "chainDischarge", alpha.id).nodes.map(
+      (node) => state.units[node.unitId].ref
+    );
+    executeCommand(state, {
+      type: "useAbility",
+      unitId: arc.id,
+      abilityId: "chainDischarge",
+      target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+    });
+    const struck = state.battleLog
+      .filter((entry) => entry.type === "damageResolved")
+      .map((entry) => state.units[entry.data.unitId].ref);
+    return { promised: promised.join(" → "), struck: struck.join(" → ") };
+  };
+
+  const spread = check(() => {});
+  assertEqual(spread.struck, spread.promised, "spread out: " + spread.promised);
+
+  const grouped = check((state) => {
+    unitByRef(state, "bravo").x = 11;
+  });
+  assertEqual(grouped.struck, grouped.promised, "grouped: " + grouped.promised);
+  assert(grouped.promised !== spread.promised, "and the two situations really do differ");
+});
+
+/* ---------------------------------------------------------------
+ * THE ACCEPTANCE
+ * -------------------------------------------------------------*/
+
+/**
+ * The phase's central proof.
+ *
+ * One operator moves an enemy two tiles. A different operator's ability, which
+ * knows nothing about the first, becomes able to reach two more targets. No
+ * engine code connects the two: there is forced movement, there are live
+ * positions, and there is a search that reads them.
+ */
+test("Propagation", "A precise shove creates a chain that was impossible a moment earlier", () => {
+  const state = cascadeBattle(80);
+  const veteran = unitByRef(state, "veteran");
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+  const bravo = unitByRef(state, "bravo");
+  const charlie = unitByRef(state, "charlie");
+  for (const unit of [alpha, bravo, charlie]) unit.currentHp = 9999;
+
+  // 1. Before: the chain reaches nothing.
+  assertEqual(
+    chainOrder(state, "arc", "chainDischarge", "alpha").refs.join(","),
+    "alpha",
+    "the formation is too spread out to punish"
+  );
+
+  // 2. The veteran runs its own route and shoves one enemy an exact distance.
+  activateForTest(state, veteran.id);
+  const shove = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "w",
+        distance: 1,
+        contact: { targetUnitId: bravo.id, displace: { heading: "w", distance: 2 } }
+      }
+    ]
+  });
+  assert(shove.ok, (shove.errors || []).join(" | "));
+  assertEqual(bravo.x, 11, "two tiles, chosen — not the maximum shove");
+  assertEqual(bravo.y, 8);
+  assert(bravo.alive, "and the target survived to be arced through");
+
+  // 3. After: the same ability, unchanged, now reaches two further.
+  const after = chainOrder(state, "arc", "chainDischarge", "alpha");
+  assertEqual(after.refs.join(" → "), "alpha → bravo → charlie", "the chain exists now");
+
+  // 4. And it really resolves that way.
+  activateForTest(state, arc.id);
+  const logBefore = state.battleLog.length;
+  const discharge = executeCommand(state, {
+    type: "useAbility",
+    unitId: arc.id,
+    abilityId: "chainDischarge",
+    target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+  });
+  assert(discharge.ok, (discharge.errors || []).join(" | "));
+
+  const struck = state.battleLog
+    .slice(logBefore)
+    .filter((entry) => entry.type === "damageResolved")
+    .map((entry) => state.units[entry.data.unitId].ref);
+  assertEqual(struck.join(" → "), "alpha → bravo → charlie", "every one of them, in order");
+  assertEqual(new Set(struck).size, struck.length, "and none of them twice");
+
+  assertEqual(battleContinuation(state).kind !== "stalled", true);
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+
+  // The displacement and the chain are separate causal chains from separate
+  // operators. Nothing in the engine joined them; the battlefield did.
+  const forced = state.causalTrace.filter((entry) => entry.type === "unitForcedMove");
+  assert(forced.length > 0, "the shove is on the record as forced");
+});
+
+test("Propagation", "A formation standing close together is punished far harder than a spread one", () => {
+  const cast = (place) => {
+    const state = cascadeBattle(81);
+    const arc = unitByRef(state, "arc");
+    const alpha = unitByRef(state, "alpha");
+    unitResource(state, arc.id, "capacitor").current = 8;
+    place(state, alpha);
+    for (const id of state.unitOrder) state.units[id].currentHp = 99999;
+    activateForTest(state, arc.id);
+    executeCommand(state, {
+      type: "useAbility",
+      unitId: arc.id,
+      abilityId: "chainDischarge",
+      target: { unitId: alpha.id, tile: { x: alpha.x, y: alpha.y } }
+    });
+    return state.battleLog
+      .filter((entry) => entry.type === "damageResolved")
+      .reduce((total, entry) => total + entry.data.amount, 0);
+  };
+
+  const clustered = cast((state, alpha) => {
+    ["bravo", "charlie", "packA"].forEach((ref, index) => {
+      const unit = unitByRef(state, ref);
+      unit.x = alpha.x + index + 1;
+      unit.y = alpha.y;
+    });
+  });
+  const spread = cast((state, alpha) => {
+    ["bravo", "charlie", "packA"].forEach((ref, index) => {
+      const unit = unitByRef(state, ref);
+      unit.x = alpha.x + (index + 1) * 6;
+      unit.y = alpha.y;
+    });
+  });
+
+  assert(
+    clustered > spread * 2,
+    "geometry is the balance lever: " + clustered + " clustered vs " + spread + " spread"
+  );
+});
+
+test("Propagation", "The frame that does this is a glass cannon, by its own numbers", () => {
+  const state = cascadeBattle(82);
+  const arc = unitByRef(state, "arc");
+  const stats = calculateUnitStats(state, arc.id);
+
+  // Fragile relative to everything else the squad fields.
+  for (const ref of ["kell", "vale", "veteran"]) {
+    const other = calculateUnitStats(state, unitByRef(state, ref).id);
+    assert(stats.maxHp < other.maxHp, "less durable than " + ref);
+  }
+  const kell = calculateUnitStats(state, unitByRef(state, "kell").id);
+  const nyxLike = CONTENT.units.stealthMech.baseStats;
+  assert(stats.evasion < nyxLike.evasion, "and nowhere near as evasive as the stealth frame");
+
+  // And it cannot do the sniper's job: no ability outranges Kell's.
+  const kellReach = Math.max(
+    ...CONTENT.units.sniperMech.abilities.map((id) => CONTENT.abilities[id].targeting.rangeMax)
+  );
+  const arcReach = Math.max(
+    ...CONTENT.units.cascadeFrame.abilities.map((id) => CONTENT.abilities[id].targeting.rangeMax)
+  );
+  assert(arcReach < kellReach, "reach stays the sniper's: " + arcReach + " vs " + kellReach);
+  assert(kell.maxHp > stats.maxHp, "and the sniper is not the fragile one here");
+
+  // It also gets no stealth or escape tooling to compensate.
+  for (const abilityId of CONTENT.units.cascadeFrame.abilities) {
+    const ability = CONTENT.abilities[abilityId];
+    for (const effect of ability.effects || []) {
+      assert(
+        !["teleport", "shield"].includes(effect.type),
+        abilityId + " must not hand this frame an escape or a shield"
+      );
+      if (effect.type === "applyStatus") {
+        assert(effect.statusId !== "cloaked", abilityId + " must not grant concealment");
+      }
+    }
+  }
+});
+
+test("Propagation", "Nothing in the propagation engine knows what is arcing", () => {
+  const engineParts = [
+    planPropagation,
+    createPropagationContext,
+    advancePropagation,
+    describeTermination,
+    propagationRules,
+    propagationDeps,
+    planUnitPropagation,
+    propagatingAbility,
+    propagationContextOf,
+    resolvePropagateEffect,
+    createChainPreviewModel
+  ];
+  const source = engineParts.map((fn) => fn.toString()).join("\n");
+  for (const name of [
+    "capacitor",
+    "chainDischarge",
+    "surgeDischarge",
+    "cascadeFrame",
+    "arcSpecialist",
+    "conductive",
+    "veteran",
+    "machStrike"
+  ]) {
+    assert(!new RegExp("\\b" + name + "\\b", "i").test(source), "the engine names " + name);
+  }
+
+  // And the standing audit reads them, so this stays true without this test.
+  const audited = new Set(Object.values(ENGINE_FUNCTIONS));
+  for (const fn of engineParts) {
+    if ([planPropagation, createPropagationContext, advancePropagation, describeTermination].includes(fn)) {
+      continue;
+    }
+    assert(audited.has(fn), fn.name + " is outside the architecture audit");
+  }
+
+  // The chain is content built from parts the engine already registered.
+  for (const abilityId of CONTENT.units.cascadeFrame.abilities) {
+    const ability = CONTENT.abilities[abilityId];
+    assert(ability, abilityId + " is content");
+    const walk = (effects) => {
+      for (const effect of effects || []) {
+        assert(EFFECT_HANDLERS[effect.type], abilityId + " uses registered effect " + effect.type);
+        walk(effect.effects);
+      }
+    };
+    walk(ability.effects);
+  }
+});
+
+test("Propagation", "Planning a chain stays cheap on a crowded battlefield", () => {
+  const state = cascadeBattle(83);
+  const arc = unitByRef(state, "arc");
+  const alpha = unitByRef(state, "alpha");
+
+  // A late-game count, packed tightly enough that every candidate is in range
+  // and the search cannot short-circuit.
+  let placed = 0;
+  for (let y = 4; y < 14 && placed < 46; y += 1) {
+    for (let x = 8; x < 20 && placed < 46; x += 1) {
+      if (x === arc.x && y === arc.y) continue;
+      const id = "perfGrunt" + placed;
+      state.units[id] = {
+        ...JSON.parse(JSON.stringify(state.units[alpha.id])),
+        id,
+        ref: id,
+        x,
+        y
+      };
+      state.unitOrder.push(id);
+      placed += 1;
+    }
+  }
+  assert(placed >= 40, "a representative crowd: " + placed);
+
+  const started = Date.now();
+  const runs = 200;
+  for (let index = 0; index < runs; index += 1) {
+    planUnitPropagation(state, arc.id, "surgeDischarge", alpha.id);
+  }
+  const perPlan = (Date.now() - started) / runs;
+  assert(perPlan < 12, "a preview redraw must not stall: " + perPlan.toFixed(2) + "ms per plan");
+});
+
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
   const audit = auditArchitecture();
   assert(audit.pass, audit.failures.join(" | "));
@@ -31928,6 +33389,12 @@ function terrainSurface(tile) {
 }
 
 function overlayColor(tile) {
+  // A node the chain will reach reads before anything else: it is the only
+  // mark that says "this unit is about to be hit by something you aimed
+  // somewhere else".
+  if (tile.chainHop != null) {
+    return tile.chainLethal ? "rgba(244, 114, 182, 0.7)" : "rgba(56, 189, 248, 0.6)";
+  }
   // Route marks read before the generic path colour: a turn, a landing tile and
   // a stop are the three things the player is actually deciding between.
   if (tile.routeBlocked) return "rgba(244, 63, 94, 0.55)";
@@ -32043,6 +33510,23 @@ function TileBlock({ tile, projection, onHover, onClick, onRightClick, disabled,
         >
           {tile.terrainId === "wall" ? "#" : showElevation ? tile.elevation : ""}
         </span>
+        {tile.chainHop != null ? (
+          <span
+            style={{
+              position: "absolute",
+              top: 1,
+              width: "100%",
+              textAlign: "center",
+              fontSize: 10,
+              fontWeight: 700,
+              color: tile.chainLethal ? "#fdf2f8" : "#e0f2fe",
+              textShadow: "0 1px 2px rgba(0, 0, 0, 0.9)",
+              pointerEvents: "none"
+            }}
+          >
+            {tile.chainHop + 1}
+          </span>
+        ) : null}
         {tile.reachable && tile.moveCost > 0 ? (
           <span
             style={{
@@ -33659,6 +35143,65 @@ function RouteSummary({ route, onDisplace }) {
   );
 }
 
+/**
+ * The chain the player is about to commit to: who it reaches, in what order,
+ * how far each arc jumps, what it costs, and where it gives up. Every number
+ * is the planner's or the forecaster's.
+ */
+function ChainSummary({ chain }) {
+  return (
+    <div className="px-2 py-1 space-y-0.5 border-b border-slate-800">
+      <p className="flex justify-between text-[11px] text-slate-400">
+        <span>Reaches</span>
+        <span className="tabular-nums text-slate-200">
+          {chain.reached}
+          {chain.lethalCount ? " · " + chain.lethalCount + " lethal" : ""}
+        </span>
+      </p>
+
+      {chain.nodes.map((node) => (
+        <p key={node.unitId} className="flex items-center gap-1 text-[10px]">
+          <span
+            className={
+              "px-1 rounded-sm tabular-nums " +
+              (node.lethal ? "bg-pink-500/25 text-pink-100" : "bg-sky-500/20 text-sky-100")
+            }
+          >
+            {node.hop + 1}
+          </span>
+          <span className="text-slate-300 truncate">{node.name}</span>
+          {node.hop ? (
+            <span className="text-slate-600">+{node.distance}</span>
+          ) : (
+            <span className="text-slate-600">aimed</span>
+          )}
+          {node.amount != null ? (
+            <span className="ml-auto tabular-nums text-rose-300">{node.amount}</span>
+          ) : null}
+        </p>
+      ))}
+
+      {chain.costs.map((cost) => (
+        <p
+          key={cost.resourceId}
+          className={
+            "flex justify-between text-[10px] " +
+            (cost.affordable ? "text-slate-500" : "text-rose-300")
+          }
+        >
+          <span>{cost.name}</span>
+          <span className="tabular-nums">
+            −{cost.amount}
+            {cost.remaining == null ? "" : " · " + Math.max(0, cost.remaining) + " left"}
+          </span>
+        </p>
+      ))}
+
+      <p className="text-[10px] text-slate-500">Stops: {chain.termination}</p>
+    </div>
+  );
+}
+
 function FloatingPanel({ model, position, abilities, onAction, onAbility, onContextOption, onRouteDisplace, width }) {
   if (!model.visible) return null;
   const forecast = model.forecast;
@@ -33709,6 +35252,8 @@ function FloatingPanel({ model, position, abilities, onAction, onAbility, onCont
       {model.kind === "route" && model.route ? (
         <RouteSummary route={model.route} onDisplace={onRouteDisplace} />
       ) : null}
+
+      {model.chain ? <ChainSummary chain={model.chain} /> : null}
 
       {forecast ? (
         <div className="px-2 py-2 border-b border-slate-800">
@@ -35846,6 +37391,37 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     [state, input, routeCandidate, version]
   );
 
+  /**
+   * The chain under the cursor, or the one already aimed at.
+   *
+   * Recomputed from live state on every hover, which is the whole reason a
+   * player can move an enemy and immediately see a chain that did not exist a
+   * moment ago.
+   */
+  const chainPreview = React.useMemo(() => {
+    const unitId = input.selectedUnitId || state.activeUnitId;
+    if (!unitId || !propagatingAbility(input.selectedAbilityId)) return null;
+    const tile =
+      input.mode === "confirmingAction"
+        ? input.selectedTarget
+        : input.mode === "planningTarget"
+        ? input.hoveredTile
+        : null;
+    if (!tile) return null;
+    const occupant = unitAt(state, tile.x, tile.y);
+    if (!occupant) return null;
+    return createChainPreviewModel(state, unitId, input.selectedAbilityId, occupant.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    state,
+    input.mode,
+    input.selectedUnitId,
+    input.selectedAbilityId,
+    input.hoveredTile,
+    input.selectedTarget,
+    version
+  ]);
+
   const view = React.useMemo(
     () =>
       createBattleViewModel(state, {
@@ -35859,10 +37435,11 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
           ? routePreview.endpoint
           : input.plannedMoveDestination,
         route: routePreview,
+        chain: chainPreview,
         threatZone
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, input, presentation, positions, version, threatZone, routePreview]
+    [state, input, presentation, positions, version, threatZone, routePreview, chainPreview]
   );
 
   React.useEffect(() => {
@@ -36494,6 +38071,7 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
       createContextCommandModel(state, input, {
         abilityMenuOpen,
         routeCandidate,
+        chain: chainPreview,
         targetUnitId:
           input.forecast && input.forecast.target
             ? input.forecast.target.unitId
@@ -36502,7 +38080,7 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
         movementTiles: input.plannedPath ? input.plannedPath.length - 1 : undefined
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, input, abilityMenuOpen, hoveredUnitId, presentation, version, routeCandidate]
+    [state, input, abilityMenuOpen, hoveredUnitId, presentation, version, routeCandidate, chainPreview]
   );
 
   const panelVisible = contextModel.visible && !busy;
@@ -36519,7 +38097,9 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
         route.contacts.length * 74
       );
     }
-    if (contextModel.forecast) return 250;
+    if (contextModel.forecast) {
+      return 250 + (contextModel.chain ? 40 + contextModel.chain.nodes.length * 16 : 0);
+    }
     return 56 + contextModel.actions.length * 26 + contextModel.lines.length * 4;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextModel]);
@@ -37779,6 +39359,7 @@ if (typeof window !== "undefined") {
     runActivation,
     computeMovementRange,
     chooseAiCommands,
+    validateCommand,
     executeCommand,
     isHostile,
     isFriendly,
@@ -37874,6 +39455,17 @@ if (typeof window !== "undefined") {
         inputReducer(input, { type: "setRouteDisplacement", ...change }, state).input,
       commands: (input) => commandsForPlan(input),
       context: (state) => state.trajectory || null
+    },
+    // The chain surface. `plan` and `preview` are the same two calls execution
+    // makes, so a harness asking them is asking the player's question.
+    propagation: {
+      plan: (state, sourceUnitId, abilityId, targetUnitId) =>
+        planUnitPropagation(state, sourceUnitId, abilityId, targetUnitId),
+      preview: (state, sourceUnitId, abilityId, targetUnitId) =>
+        createChainPreviewModel(state, sourceUnitId, abilityId, targetUnitId),
+      context: (state) => state.propagation || null,
+      policies: SELECTION_POLICY_IDS,
+      maxHops: MAX_PROPAGATION_HOPS
     },
     forcePush: (state, sourceUnitId, targetUnitId, distance) => {
       const source = state.units[sourceUnitId];

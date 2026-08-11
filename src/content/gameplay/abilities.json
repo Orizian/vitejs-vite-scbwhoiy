@@ -4,6 +4,47 @@
   "registry": "abilities",
   "description": "What a unit can do. Targeting, timing, costs, conditions and the ordered effect list the engine resolves.",
   "entries": {
+    "arcLance": {
+      "name": "Arc Lance",
+      "description": "One continuous beam into one target. It will not clear a room, but it is the reason a spread-out formation is an inconvenience rather than a shutdown — and it puts charge back in the bank.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 5,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 500
+      },
+      "effects": [
+        {
+          "canMiss": true,
+          "formula": "magical",
+          "power": 130,
+          "type": "damage"
+        },
+        {
+          "amount": 1,
+          "applyTo": "source",
+          "resourceId": "capacitor",
+          "type": "restoreResource"
+        }
+      ],
+      "ui": {
+        "basic": true,
+        "category": "attack",
+        "glyph": "|",
+        "order": 3,
+        "tags": [
+          "electrical"
+        ]
+      }
+    },
     "arcWelder": {
       "name": "Arc Welder",
       "description": "Burns an enemy for 95 (and may cause a systems fault) or repairs an ally for 70.",
@@ -297,6 +338,67 @@
         "order": 4,
         "tags": [
           "ranged"
+        ]
+      }
+    },
+    "chainDischarge": {
+      "name": "Chain Discharge",
+      "description": "Dump the bank into one target and let it find the rest. The arc jumps to whatever is nearest, then to whatever is nearest that, losing a little on every jump. Against a formation standing shoulder to shoulder this is not an attack, it is an event.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 5,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 800
+      },
+      "costs": {
+        "capacitor": 3
+      },
+      "requirementText": "Requires 3 Capacitor.",
+      "propagation": {
+        "allowRepeat": false,
+        "allowsDefeated": false,
+        "hopRadius": 3,
+        "includeSource": false,
+        "maxHops": 3,
+        "relationship": "enemy",
+        "requiresLineOfSight": false,
+        "selection": "nearest"
+      },
+      "effects": [
+        {
+          "effects": [
+            {
+              "canMiss": false,
+              "formula": "magical",
+              "power": 155,
+              "scaling": {
+                "from": "hopIndex",
+                "max": 0,
+                "min": -66,
+                "perUnit": -22
+              },
+              "type": "damage"
+            }
+          ],
+          "type": "propagate"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "attack",
+        "glyph": "⌁",
+        "order": 1,
+        "tags": [
+          "electrical",
+          "chain"
         ]
       }
     },
@@ -655,6 +757,47 @@
         ]
       }
     },
+    "groundingCycle": {
+      "name": "Grounding Cycle",
+      "description": "Spike the bank the fast way. An activation spent doing nothing anyone can see, standing still, in front of people who are shooting.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 0,
+        "rangeMin": 0,
+        "requiresLineOfSight": false,
+        "type": "self"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 900
+      },
+      "effects": [
+        {
+          "amount": 4,
+          "applyTo": "source",
+          "resourceId": "capacitor",
+          "type": "restoreResource"
+        },
+        {
+          "applyTo": "source",
+          "chance": 1,
+          "statusId": "grounding",
+          "type": "applyStatus"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "↑",
+        "order": 4,
+        "tags": [
+          "stance"
+        ]
+      }
+    },
     "guardAura": {
       "name": "Guard Aura",
       "description": "Test ability: shields every ally around the caster.",
@@ -876,6 +1019,46 @@
         "order": 3,
         "tags": [
           "melee"
+        ]
+      }
+    },
+    "ioniseTarget": {
+      "name": "Ionise",
+      "description": "Paint one frame with charged particulate. Nothing happens immediately, which is the point: the arc that comes next reaches a tile further in every direction from whatever was marked.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 4,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 400
+      },
+      "effects": [
+        {
+          "chance": 1,
+          "statusId": "conductive",
+          "type": "applyStatus"
+        },
+        {
+          "amount": 1,
+          "applyTo": "source",
+          "resourceId": "capacitor",
+          "type": "restoreResource"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "≈",
+        "order": 5,
+        "tags": [
+          "electrical"
         ]
       }
     },
@@ -1437,6 +1620,71 @@
         "order": 3,
         "tags": [
           "selfRepair"
+        ]
+      }
+    },
+    "surgeDischarge": {
+      "name": "Surge Discharge",
+      "description": "Everything in the bank at once. Further, more jumps, and it feeds on itself — every frame that drops makes the rest of the chain worse for whoever is left. Afterwards there is nothing in the bank and the frame is still standing where it fired from.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 5,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 2,
+        "recovery": 950
+      },
+      "costs": {
+        "capacitor": 6
+      },
+      "requirementText": "Requires 6 Capacitor.",
+      "propagation": {
+        "allowRepeat": false,
+        "allowsDefeated": false,
+        "hopRadius": 4,
+        "includeSource": false,
+        "maxHops": 5,
+        "relationship": "enemy",
+        "requiresLineOfSight": false,
+        "selection": "nearest"
+      },
+      "effects": [
+        {
+          "effects": [
+            {
+              "canMiss": false,
+              "formula": "magical",
+              "power": 150,
+              "scaling": {
+                "from": "propagationKills",
+                "max": 90,
+                "perUnit": 30
+              },
+              "type": "damage"
+            },
+            {
+              "chance": 1,
+              "statusId": "conductive",
+              "type": "applyStatus"
+            }
+          ],
+          "type": "propagate"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "attack",
+        "glyph": "⚡",
+        "order": 2,
+        "tags": [
+          "electrical",
+          "chain"
         ]
       }
     },

@@ -13,6 +13,7 @@
 import { REGISTRY_IDS, REGISTRY_KINDS } from "./format.js";
 import { validateResourceDefinition } from "../../combat/resources.js";
 import { REDIRECT_IDS } from "../../combat/trajectory.js";
+import { SELECTION_POLICY_IDS, MAX_PROPAGATION_HOPS } from "../../combat/propagation.js";
 import { REACTION_EVENT_TYPE_IDS } from "../../reactions/events.js";
 import { validateReactionEffect } from "../../reactions/effects.js";
 import { validateReactionCondition } from "../../reactions/conditions.js";
@@ -116,20 +117,31 @@ export function validateGameplayData(data, context) {
   }
 
   /* ---- abilities ---- */
-  /** Every reference an effect can make, wherever the effect is authored. */
-  const checkEffectRefs = (effects, id) => {
+  /**
+   * Every reference an effect can make, wherever the effect is authored.
+   *
+   * Recursive, because effects nest: a chain, a repeat and a conditional all
+   * carry effect lists of their own, and a dangling status id is exactly as
+   * broken one level down as it is at the top.
+   */
+  const checkEffectRefs = (effects, id, depth) => {
+    if ((depth || 0) > 8) return;
     for (const effect of effects || []) {
-      if (effect && effect.statusId && !has(statuses, effect.statusId)) {
+      if (!effect || typeof effect !== "object") continue;
+      if (effect.statusId && !has(statuses, effect.statusId)) {
         errors.push(label("abilities", id) + ' applies unknown status "' + effect.statusId + '".');
       }
-      if (effect && effect.abilityId && !has(abilities, effect.abilityId)) {
+      if (effect.abilityId && !has(abilities, effect.abilityId)) {
         errors.push(label("abilities", id) + ' references unknown ability "' + effect.abilityId + '".');
       }
-      if (effect && effect.definitionId && !has(units, effect.definitionId)) {
+      if (effect.definitionId && !has(units, effect.definitionId)) {
         errors.push(label("abilities", id) + ' summons unknown unit "' + effect.definitionId + '".');
       }
-      if (effect && effect.resourceId && !has(resources, effect.resourceId)) {
+      if (effect.resourceId && !has(resources, effect.resourceId)) {
         errors.push(label("abilities", id) + ' moves unknown resource "' + effect.resourceId + '".');
+      }
+      for (const key of ["effects", "ifTrue", "ifFalse"]) {
+        if (Array.isArray(effect[key])) checkEffectRefs(effect[key], id, (depth || 0) + 1);
       }
     }
   };
@@ -188,6 +200,65 @@ export function validateGameplayData(data, context) {
         if (effect && effect.type === "displace" && effect.distance != null && effect.distance < 0) {
           errors.push(label("abilities", id) + " displaces a negative distance on contact.");
         }
+      }
+    }
+
+    /* ---- propagation ----
+     *
+     * A chain is bounded by numbers an author types. Every one of them can be
+     * typed wrong in a way that either does nothing or never stops, so both
+     * ends are checked here rather than discovered mid-battle. */
+    const propagation = ability.propagation;
+    if (propagation) {
+      if (propagation.maxHops != null && propagation.maxHops < 0) {
+        errors.push(label("abilities", id) + " chains a negative number of times.");
+      }
+      if (propagation.maxHops != null && propagation.maxHops > MAX_PROPAGATION_HOPS) {
+        warnings.push(
+          label("abilities", id) + " asks for " + propagation.maxHops +
+            " arcs; the engine caps chains at " + MAX_PROPAGATION_HOPS + "."
+        );
+      }
+      if (propagation.hopRadius != null && propagation.hopRadius < 0) {
+        errors.push(label("abilities", id) + " chains across a negative distance.");
+      }
+      if (propagation.hopRadius === 0) {
+        warnings.push(label("abilities", id) + " has an arc range of zero and can never chain.");
+      }
+      if (propagation.selection && !SELECTION_POLICY_IDS.includes(propagation.selection)) {
+        errors.push(
+          label("abilities", id) + ' chooses targets by unknown policy "' + propagation.selection + '".'
+        );
+      }
+      if (
+        propagation.relationship &&
+        !["enemy", "ally", "any", "self"].includes(propagation.relationship)
+      ) {
+        errors.push(
+          label("abilities", id) + ' arcs to unknown relationship "' + propagation.relationship + '".'
+        );
+      }
+      // Revisiting targets is legitimate for something like a bouncing heal,
+      // but combined with arcing through the caster it is a two-node loop that
+      // burns the whole hop budget on one pair. Worth saying out loud.
+      if (propagation.allowRepeat && propagation.includeSource) {
+        warnings.push(
+          label("abilities", id) +
+            " may revisit targets and arc through its own caster, which will bounce between two nodes."
+        );
+      }
+      for (const filter of propagation.filters || []) {
+        if (filter && filter.statusId && !has(statuses, filter.statusId)) {
+          errors.push(
+            label("abilities", id) + ' filters chain targets by unknown status "' + filter.statusId + '".'
+          );
+        }
+      }
+      const carries = (ability.effects || []).some((effect) => effect && effect.type === "propagate");
+      if (!carries) {
+        warnings.push(
+          label("abilities", id) + " declares propagation but has no `propagate` effect to use it."
+        );
       }
     }
 

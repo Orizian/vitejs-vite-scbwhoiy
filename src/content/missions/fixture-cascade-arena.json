@@ -1,0 +1,219 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-cascade-arena",
+  "name": "Cascade Bench",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. Open ground laid out so the electrical chain is provably impossible at the start and provably possible after exactly one enemy is moved two tiles. Alpha, Bravo and Charlie are the whole point; everything else is here so the battle has somewhere to go.",
+  "map": {
+    "name": "Bench",
+    "width": 22,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................"
+    ],
+    "elevationRows": [
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000"
+    ]
+  },
+  "teams": [
+    {
+      "id": "sectionSeven",
+      "name": "Section Seven",
+      "controller": "human",
+      "marker": "▲",
+      "accent": "emerald"
+    },
+    {
+      "id": "loyalist",
+      "name": "Loyalists",
+      "controller": "ai",
+      "marker": "■",
+      "accent": "rose"
+    }
+  ],
+  "units": [
+    {
+      "ref": "arc",
+      "definitionId": "cascadeFrame",
+      "teamId": "sectionSeven",
+      "x": 4,
+      "y": 8,
+      "facing": "southeast",
+      "note": "Four tiles from Alpha, which is inside Chain Discharge's range and nowhere near safe."
+    },
+    {
+      "ref": "veteran",
+      "definitionId": "interdictorFrame",
+      "teamId": "sectionSeven",
+      "x": 15,
+      "y": 8,
+      "facing": "southeast",
+      "note": "Starts one tile of runway east of Bravo. A short approach keeps the impact survivable, so the shove — not the strike — is what the fixture is about."
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 4,
+      "facing": "southeast",
+      "note": "Present so the Section Seven link is complete."
+    },
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 12,
+      "facing": "southeast",
+      "note": "Present for the link."
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 12,
+      "facing": "southeast",
+      "note": "Present for the link. Does nothing on its own."
+    },
+    {
+      "ref": "alpha",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 8,
+      "y": 8,
+      "facing": "northwest",
+      "note": "A. The initial target. Nothing is within arc range of it until Bravo is moved."
+    },
+    {
+      "ref": "bravo",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 13,
+      "y": 8,
+      "facing": "northwest",
+      "note": "B. Five tiles from Alpha — two more than the arc can cross. Shove it west two and the chain exists."
+    },
+    {
+      "ref": "charlie",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 12,
+      "y": 10,
+      "facing": "northwest",
+      "note": "C. Six tiles from Alpha and unreachable directly, but three from where Bravo lands."
+    },
+    {
+      "ref": "packA",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 17,
+      "y": 12,
+      "facing": "northwest",
+      "note": "Standing far too close to the rest of the pack. Deliberately."
+    },
+    {
+      "ref": "packB",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 18,
+      "y": 12,
+      "facing": "northwest",
+      "note": "See packA."
+    },
+    {
+      "ref": "packC",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 17,
+      "y": 13,
+      "facing": "northwest",
+      "note": "See packA."
+    },
+    {
+      "ref": "packD",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 18,
+      "y": 13,
+      "facing": "northwest",
+      "note": "See packA. Four frames in a two-by-two block is what this operator exists to answer."
+    },
+    {
+      "ref": "elite",
+      "definitionId": "heavyEnforcer",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 3,
+      "facing": "northwest",
+      "note": "Durable enough to survive a full chain and walk over. The counterplay, standing up."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 15,
+      "facing": "northwest",
+      "note": "Keeps the battle from ending while a fixture is mid-chain."
+    }
+  ],
+  "regions": [],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Exercise the chain",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "factions": {
+    "relationships": []
+  },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": {
+    "briefing": [],
+    "victory": [],
+    "defeat": []
+  },
+  "midBattle": []
+}

@@ -42,6 +42,53 @@
         "utilitySystem": "targetingSuite"
       }
     },
+    "cascadeFrame": {
+      "name": "Cascade Frame",
+      "classId": "cascade",
+      "role": "Close/mid-range electrical frame built to punish formations that stand too close together.",
+      "glyph": "C",
+      "description": "A capacitor bank with a cockpit attached. Almost nothing was spent on plating, because the design assumes the fight ends before anyone gets a second volley off. If several enemies are standing close enough together, they have made a catastrophic mistake. If they are not, this frame is a very expensive rifle that dies to a stiff breeze.",
+      "tags": [
+        "mech",
+        "deployable"
+      ],
+      "baseStats": {
+        "accuracy": 92,
+        "attack": 26,
+        "defense": 14,
+        "displacementResistance": 0,
+        "evasion": 12,
+        "magic": 82,
+        "maxClimb": 1,
+        "maxDrop": 2,
+        "maxHp": 68,
+        "movement": 4,
+        "propagationRadiusBonus": 0,
+        "resistance": 20,
+        "speed": 105
+      },
+      "resources": {
+        "capacitor": {
+          "max": 8,
+          "startsAt": 3
+        }
+      },
+      "abilities": [
+        "chainDischarge",
+        "surgeDischarge",
+        "arcLance",
+        "groundingCycle",
+        "ioniseTarget"
+      ],
+      "defaultAbilityId": "arcLance",
+      "aiProfile": "aggressive",
+      "defaultEquipment": {
+        "armor": "lightPlating",
+        "coreSystem": "standardCore",
+        "primaryWeapon": "arcProjector",
+        "utilitySystem": "targetingSuite"
+      }
+    },
     "civilianTransport": {
       "name": "Civilian Transport",
       "classId": "civilian",

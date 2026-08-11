@@ -24,6 +24,10 @@
  * =======================================================================*/
 
 import { REGISTRY_KINDS } from "./format.js";
+import { SELECTION_POLICY_IDS } from "../../combat/propagation.js";
+
+/** The chain's selection policies, offered to the author as a closed list. */
+const SELECTION_POLICY_OPTIONS = SELECTION_POLICY_IDS;
 
 /** Stats every unit carries. Mirrors DEFAULT_BASE_STATS in the engine. */
 export const BASE_STAT_FIELDS = [
@@ -42,6 +46,11 @@ export const BASE_STAT_FIELDS = [
     key: "displacementResistance",
     label: "Displacement resistance",
     help: "Tiles subtracted from any forced move. A bolted-down emplacement shrugs off a shove."
+  },
+  {
+    key: "propagationRadiusBonus",
+    label: "Propagation radius bonus",
+    help: "Extra tiles a chain may cross when arcing to or from this frame. A status can move it."
   }
 ];
 
@@ -289,6 +298,78 @@ export const REGISTRY_SCHEMAS = {
             typeKey: "type",
             behaviour: true,
             help: "A `displace` effect's distance is the maximum; the player chooses the actual distance."
+          }
+        ]
+      },
+      {
+        id: "propagation",
+        label: "Propagation",
+        note:
+          "Present only on chaining actions. The player picks the first target; " +
+          "every later one is chosen from live positions relative to the target " +
+          "before it. `maxHops` counts arcs, so 3 reaches four units in total. " +
+          "The effects that run on each node are the ordinary `propagate` effect's " +
+          "own list, which is why a chain of statuses or heals needs nothing new.",
+        fields: [
+          {
+            key: "propagation.maxHops",
+            label: "Maximum arcs",
+            kind: "number",
+            help: "Arcs after the initial target. Hard-capped by the engine however high this goes."
+          },
+          {
+            key: "propagation.hopRadius",
+            label: "Arc range",
+            kind: "number",
+            help: "Tiles the chain may cross between one target and the next, before any conductivity bonus."
+          },
+          {
+            key: "propagation.relationship",
+            label: "Arcs to",
+            kind: "enum",
+            options: ["enemy", "ally", "any", "self"],
+            behaviour: true
+          },
+          {
+            key: "propagation.selection",
+            label: "Chooses",
+            kind: "enum",
+            options: SELECTION_POLICY_OPTIONS,
+            behaviour: true,
+            help: "How the next node is picked. Every policy is fully ordered, so a replay chains identically."
+          },
+          {
+            key: "propagation.requiresLineOfSight",
+            label: "Needs sight between nodes",
+            kind: "boolean",
+            behaviour: true
+          },
+          {
+            key: "propagation.allowRepeat",
+            label: "May strike the same target twice",
+            kind: "boolean",
+            behaviour: true,
+            help: "Off by default. On, the arc count is the only thing bounding the chain."
+          },
+          {
+            key: "propagation.includeSource",
+            label: "May arc through the caster",
+            kind: "boolean",
+            behaviour: true
+          },
+          {
+            key: "propagation.allowsDefeated",
+            label: "May arc to destroyed units",
+            kind: "boolean",
+            behaviour: true
+          },
+          {
+            key: "propagation.filters",
+            label: "Node filters",
+            kind: "objectList",
+            typeKey: "type",
+            behaviour: true,
+            help: "Applied to every candidate, in addition to the relationship above."
           }
         ]
       },

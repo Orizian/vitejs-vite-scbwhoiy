@@ -19,6 +19,17 @@
         "on": "selfActivation"
       }
     },
+    "capacitor": {
+      "name": "Capacitor",
+      "scope": "unit",
+      "description": "Stored charge. Ordinary weapon fire trickles it in and a dedicated grounding cycle floods it, but the discharge that matters spends most of the bank at once. A full capacitor is a threat to a whole formation; an empty one is a frame standing too far forward with a sidearm.",
+      "tags": [
+        "operator",
+        "offense"
+      ],
+      "max": 8,
+      "startsAt": 3
+    },
     "commandPoints": {
       "name": "Command Points",
       "scope": "faction",

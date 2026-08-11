@@ -4,6 +4,30 @@
   "registry": "equipment",
   "description": "Installed technology: weapons, armour, utility and core systems. Weapons are equipment with a weapon slot rather than a separate registry.",
   "entries": {
+    "arcProjector": {
+      "name": "Arc Projector",
+      "slot": "primaryWeapon",
+      "description": "A capacitor bank and an emitter. Accurate enough at conversational range, and utterly indifferent to how many things are standing next to whatever it hits.",
+      "compatibleClasses": [
+        "cascade"
+      ],
+      "tags": [
+        "weapon",
+        "electrical"
+      ],
+      "modifiers": [
+        {
+          "mode": "flat",
+          "stat": "magic",
+          "value": 14
+        },
+        {
+          "mode": "flat",
+          "stat": "accuracy",
+          "value": 4
+        }
+      ]
+    },
     "arcWelderRig": {
       "name": "Arc Welder Rig",
       "slot": "primaryWeapon",
@@ -172,9 +196,10 @@
       "slot": "armor",
       "description": "Minimal plating that keeps the frame nimble.",
       "compatibleClasses": [
-        "stealth",
+        "cascade",
+        "interdictor",
         "sniper",
-        "interdictor"
+        "stealth"
       ],
       "tags": [
         "armor",

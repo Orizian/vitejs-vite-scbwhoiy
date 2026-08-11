@@ -65,6 +65,40 @@
         }
       }
     },
+    "conductive": {
+      "name": "Conductive",
+      "category": "debuff",
+      "glyph": "≈",
+      "description": "Ionised plating. Charge reaches this frame from further away, and leaves it for the next one just as easily.",
+      "tags": [
+        "electrical"
+      ],
+      "duration": {
+        "amount": 2,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "propagationRadiusBonusFlat": 1,
+        "resistanceFlat": -8
+      }
+    },
+    "grounding": {
+      "name": "Grounding",
+      "category": "debuff",
+      "glyph": "⏚",
+      "description": "Cycling the capacitor bank. Charge builds fast, but the frame is committed to standing still while it does.",
+      "tags": [
+        "stance"
+      ],
+      "duration": {
+        "amount": 1,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "defenseFlat": -8,
+        "evasionFlat": -25
+      }
+    },
     "haste": {
       "name": "Haste",
       "category": "positive",

@@ -27,8 +27,14 @@ import { setTimeout as sleep } from "node:timers/promises";
  *
  * Comments are stripped before scanning. The rule is about behaviour, and a
  * comment cannot have any: "this is the shape Nyx's cloak will need" is design
- * rationale worth keeping, while `if (id === "nyx")` is the thing to catch. A
- * name inside a string literal still counts, because that is code.
+ * rationale worth keeping, while `if (id === "nyx")` is the thing to catch.
+ *
+ * What counts is a *whole string literal* equal to a forbidden name, because
+ * that is the shape every hard-coded content check takes: `=== "nyx"`,
+ * `["burst"]`, `statuses["conductive"]`. Matching the bare word anywhere would
+ * be stricter in theory and useless in practice — "cascade stopped" in a
+ * diagnostic message is English, not a special case, and a tripwire that cries
+ * about prose is one people learn to skip.
  * -------------------------------------------------------------*/
 const GENERIC_DIRS = ["src/combat", "src/reactions", "src/mission", "src/perception", "src/scene"];
 
@@ -53,7 +59,16 @@ const FORBIDDEN_NAMES = [
   "spoolDrive",
   "interdictor",
   "interdictorFrame",
-  "commandPoints"
+  "commandPoints",
+  "capacitor",
+  "chainDischarge",
+  "surgeDischarge",
+  "arcLance",
+  "groundingCycle",
+  "ioniseTarget",
+  "cascade",
+  "cascadeFrame",
+  "conductive"
 ];
 
 function sourceFiles(dir) {
@@ -79,16 +94,30 @@ function stripComments(source) {
     .replace(/\/\/[^\n]*/g, (line) => line.replace(/./g, " "));
 }
 
+/** Every complete string literal on a line, without its quotes. */
+function stringLiterals(line) {
+  const found = [];
+  const pattern = /"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`/g;
+  let match = pattern.exec(line);
+  while (match) {
+    found.push(match[1] !== undefined ? match[1] : match[2] !== undefined ? match[2] : match[3]);
+    match = pattern.exec(line);
+  }
+  return found;
+}
+
 function characterNameLeaks() {
   const leaks = [];
+  const forbidden = new Set(FORBIDDEN_NAMES.map((name) => name.toLowerCase()));
   for (const dir of GENERIC_DIRS) {
     for (const path of sourceFiles(dir)) {
       const lines = stripComments(readFileSync(path, "utf8")).split("\n");
       lines.forEach((line, index) => {
-        for (const name of FORBIDDEN_NAMES) {
-          if (new RegExp("\\b" + name + "\\b", "i").test(line)) {
-            leaks.push(path + ":" + (index + 1) + ' names "' + name + '": ' + line.trim().slice(0, 90));
-          }
+        for (const literal of stringLiterals(line)) {
+          if (!forbidden.has(literal.trim().toLowerCase())) continue;
+          leaks.push(
+            path + ":" + (index + 1) + ' names "' + literal + '": ' + line.trim().slice(0, 90)
+          );
         }
       });
     }

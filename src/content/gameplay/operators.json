@@ -4,6 +4,14 @@
   "registry": "operators",
   "description": "Playable pilots. An operator owns identity and progression and points at a chassis; it does not own the chassis's stats.",
   "entries": {
+    "arcSpecialist": {
+      "name": "Arc Specialist",
+      "ref": "arcSpecialist",
+      "glyph": "C",
+      "role": "Cascade",
+      "chassis": "cascadeFrame",
+      "recruit": true
+    },
     "commander": {
       "name": "Commander Vale",
       "ref": "vale",

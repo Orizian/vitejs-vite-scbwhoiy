@@ -158,16 +158,17 @@ export default function Editor({ onExit, onScenePreview }) {
   const fileInput = React.useRef(null);
 
   /* ---- autosave so a refresh never loses work ---- */
-  // Skips the run on mount. What is in state at that point is either exactly
-  // what was just read from storage — writing it back achieves nothing — or a
-  // blank mission nobody asked to save, and saving that would overwrite a
-  // draft another tab is holding. Only an actual edit is worth persisting.
-  const savedOnce = React.useRef(false);
+  //
+  // Gated on an actual edit, not on state changing. Skipping only the mount run
+  // is not enough: an editor holding a blank mission that never got touched can
+  // still be re-rendered into a second effect run, and it would then write that
+  // blank over a draft someone else had just put in storage. Losing a mission
+  // to a tab you forgot was open is the kind of bug that costs an evening's
+  // work, so the rule is the strict one — nothing is persisted until this
+  // editor has changed something.
+  const userEdited = React.useRef(false);
   React.useEffect(() => {
-    if (!savedOnce.current) {
-      savedOnce.current = true;
-      return undefined;
-    }
+    if (!userEdited.current) return undefined;
     const id = setTimeout(() => {
       try {
         localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(mission));
@@ -184,6 +185,7 @@ export default function Editor({ onExit, onScenePreview }) {
    * `update` takes a mutator over a structural clone, so panels can write
    * plainly (draft.units.push(...)) while state stays immutable. */
   const update = React.useCallback((mutate, options) => {
+    userEdited.current = true;
     setMission((current) => {
       const draft = structuredClone(current);
       mutate(draft);
@@ -197,6 +199,7 @@ export default function Editor({ onExit, onScenePreview }) {
   }, []);
 
   const undo = React.useCallback(() => {
+    userEdited.current = true;
     setMission((current) => {
       const previous = history.current.past.pop();
       if (!previous) return current;
@@ -206,6 +209,7 @@ export default function Editor({ onExit, onScenePreview }) {
   }, []);
 
   const redo = React.useCallback(() => {
+    userEdited.current = true;
     setMission((current) => {
       const next = history.current.future.pop();
       if (!next) return current;
@@ -369,6 +373,7 @@ export default function Editor({ onExit, onScenePreview }) {
       try {
         const loaded = parseMission(String(reader.result));
         history.current = { past: [], future: [] };
+        userEdited.current = true;
         setMission(loaded);
         setSelectedUnitRef(null);
         setSelectedRegionId(null);
@@ -529,6 +534,7 @@ export default function Editor({ onExit, onScenePreview }) {
           onClick={() => {
             if (!confirm("Discard the current mission and start a new one?")) return;
             history.current = { past: [], future: [] };
+            userEdited.current = true;
             setMission(createEmptyMission({ width: 36, height: 48 }));
           }}
         >
