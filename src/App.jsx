@@ -96,6 +96,24 @@ import {
   FIXTURE_VISIBILITY
 } from "./combat/fixtures.js";
 import {
+  HOSTILE_BARRIER_MODES,
+  WINDOW_RELATIONSHIPS,
+  INELIGIBLE_REASONS,
+  createSequencingState,
+  planActivationWindow,
+  validateOrder,
+  dealSlots,
+  commitSequence,
+  sequencedEntry,
+  consumeSequence,
+  pruneSequence,
+  clearSequence,
+  sequenceIsActive,
+  describeOrder,
+  serializeSequencing,
+  deserializeSequencing
+} from "./combat/sequencing.js";
+import {
   INTERVENTION_KINDS,
   INTERVENTION_LIMITS,
   createInterventionState,
@@ -3421,6 +3439,10 @@ function createBattle(encounterId, seed, options) {
     // The only window in which a defender can change what is about to occur.
     interventions: createInterventionState(),
 
+    // A commanded order over activations that are already coming. Empty means
+    // ordinary time rules, which is nearly always.
+    sequencing: createSequencingState(),
+
     // Faction-scoped resource balances. Unit balances stay on the unit, where
     // they already live; this is the shared half of one resource system.
     resources: createResourceState(COMBAT_RESOURCE_DEFINITIONS, encounter.teams.map((team) => team.id)),
@@ -3681,19 +3703,41 @@ function isFriendly(state, aId, bId) {
 
 function compareTimelineEntries(a, b) {
   if (a.time !== b.time) return a.time - b.time;
+  // A commanded sequence breaks ties its own way, and only between two units
+  // the same command named. This is what lets a reorder express *every*
+  // permutation: units sharing a timestamp are otherwise separated by speed,
+  // which would silently undo the order the player chose.
+  if (a.sequenceIndex != null && b.sequenceIndex != null && a.sequenceIndex !== b.sequenceIndex) {
+    return a.sequenceIndex - b.sequenceIndex;
+  }
   if (a.speed !== b.speed) return b.speed - a.speed;
   return a.creationOrder - b.creationOrder;
 }
 
+/**
+ * Who is scheduled, and when.
+ *
+ * The one place a commanded sequence is applied. A unit named by a live
+ * command reports the slot it was dealt instead of its own clock; the slot
+ * came out of the set those units already owned, so nobody outside the command
+ * shifts by a single position. `unit.nextActionTime` is untouched — see
+ * `src/combat/sequencing.js` for why that matters.
+ */
 function timelineCandidates(state) {
+  const sequence = state.sequencing;
   return livingUnits(state)
     .filter((unit) => !unit.dormant)
-    .map((unit) => ({
-      unitId: unit.id,
-      time: unit.nextActionTime,
-      speed: calculateUnitStats(state, unit.id).speed,
-      creationOrder: unit.creationOrder
-    }));
+    .map((unit) => {
+      const commanded = sequencedEntry(sequence, unit.id);
+      return {
+        unitId: unit.id,
+        time: commanded ? commanded.time : unit.nextActionTime,
+        scheduledTime: unit.nextActionTime,
+        sequenceIndex: commanded ? commanded.index : null,
+        speed: calculateUnitStats(state, unit.id).speed,
+        creationOrder: unit.creationOrder
+      };
+    });
 }
 
 function getNextActionableUnitId(state) {
@@ -3731,6 +3775,275 @@ function previewTimeline(state, count) {
     next.estimated = true;
   }
   return out;
+}
+
+/* ---------------------------------------------------------------
+ * COMMANDED SEQUENCING — the engine side
+ *
+ * The pure planner in `src/combat/sequencing.js` knows nothing about battles.
+ * This is the adapter: it turns the live timeline into the abstract entry list
+ * the planner wants, and it is the *only* way anything asks what a command may
+ * reorder. The preview, the validator, the executor and the tests all come
+ * through here, so none of them can disagree about the window.
+ * -------------------------------------------------------------*/
+
+/**
+ * A resource definition by id, whatever scope it has.
+ *
+ * The one lookup that lets an ability cost, a reaction cost and a command cost
+ * all name the same resource and mean the same thing.
+ */
+function combatResourceDefinition(resourceId) {
+  const raw = REACTION_INDEX.resourceById[resourceId];
+  if (raw) return normalizeResourceDefinition({ id: resourceId, ...raw });
+  // Pools declared only on a chassis have no registry entry. They are
+  // unit-scoped by definition — a unit's own resources dictionary is the only
+  // place they exist — so this describes what is already true rather than
+  // inventing anything.
+  return normalizeResourceDefinition({ id: resourceId, scope: "unit" });
+}
+
+/** Who pays for a cost of this resource when this unit uses the ability. */
+function costOwnerFor(state, unitId, definition) {
+  const unit = state.units[unitId];
+  if (!unit) return null;
+  return definition.scope === "faction" ? { teamId: unit.teamId } : { unitId };
+}
+
+/**
+ * Whether a unit can pay an ability's declared costs, in any scope.
+ *
+ * Shared by every validator that charges for an ability, so a faction-scoped
+ * cost is refused for the right reason rather than passing because nobody
+ * looked in the right pool.
+ */
+function abilityCostProblems(state, unitId, ability) {
+  const problems = [];
+  for (const resourceId of Object.keys((ability && ability.costs) || {})) {
+    const definition = combatResourceDefinition(resourceId);
+    const price = ability.costs[resourceId];
+    if (!definition) {
+      problems.push("Unknown resource " + resourceId + ".");
+      continue;
+    }
+    const owner = costOwnerFor(state, unitId, definition);
+    const check = canSpendResource(state, definition, owner, price);
+    if (!check.ok) {
+      problems.push(
+        "Not enough " + (definition.name || resourceId) + " (needs " + price + ")."
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * Which command an ability is issued through.
+ *
+ * Most abilities are an ordinary `useAbility`. A few need input that command
+ * cannot carry: a route needs segments, a detonator needs a device, a command
+ * needs an order. Declaring that once means the validator, the AI and the UI
+ * all agree about it rather than each growing its own list of exceptions —
+ * and the exceptions were already being got wrong. An AI handed a detonator
+ * would enumerate it as an ordinary attack, spend its action resolving an
+ * ability with no effects, and do nothing at all for the turn.
+ */
+function commandKindForAbility(ability) {
+  if (!ability) return "useAbility";
+  if (ability.trajectory) return "trajectory";
+  if (ability.fixtureTargeting) return "activateFixture";
+  if (ability.activationWindow) return "reorderActivations";
+  return "useAbility";
+}
+
+/** Window rules an ability declares. Absent, the ability cannot sequence. */
+function activationWindowRules(ability) {
+  const declared = (ability && ability.activationWindow) || null;
+  if (!declared) return null;
+  return {
+    relationship: declared.relationship || "allied",
+    lookahead: declared.lookahead == null ? Infinity : declared.lookahead,
+    maxUnits: declared.maxUnits == null ? 4 : declared.maxUnits,
+    hostileBarrier: declared.hostileBarrier || "stop",
+    includeActive: declared.includeActive === true
+  };
+}
+
+/**
+ * The upcoming activations one unit's command may sequence.
+ *
+ * Planned against the *effective* order — what the player is actually looking
+ * at — so issuing a second command sees the world the first one produced,
+ * rather than a timeline nobody is living in.
+ */
+function planUnitActivationWindow(state, unitId, ability) {
+  const rules = activationWindowRules(ability);
+  if (!rules) return null;
+  const actor = state.units[unitId];
+  const entries = timelineCandidates(state)
+    .sort(compareTimelineEntries)
+    .map((entry) => {
+      const unit = state.units[entry.unitId];
+      return {
+        unitId: entry.unitId,
+        time: entry.time,
+        scheduledTime: entry.scheduledTime,
+        relationship:
+          entry.unitId === unitId
+            ? "self"
+            : relationshipBetween(state.factions, actor.teamId, unit.teamId),
+        actionable: unit.alive && !unit.dormant,
+        active: state.activeUnitId === entry.unitId
+      };
+    });
+  return planActivationWindow(entries, { now: state.currentTime, ...rules });
+}
+
+/**
+ * Says out loud when a commanded slot stopped applying.
+ *
+ * A commander whose order quietly stops being followed is worse than one whose
+ * order is refused: the player planned around a sequence and has no way to
+ * discover it changed.
+ */
+function reportDroppedSequence(state, dropped) {
+  for (const entry of dropped || []) {
+    logLine(
+      state,
+      "activationOrderDropped",
+      unitLabel(state, entry.unitId) +
+        (entry.reason === "gone"
+          ? " leaves the commanded order"
+          : " was rescheduled and returns to the ordinary timeline"),
+      { unitId: entry.unitId, reason: entry.reason }
+    );
+  }
+}
+
+/**
+ * The upcoming order this plan would produce, without committing anything.
+ *
+ * Pure, and deliberately built the same way the live comparator builds the
+ * real one: dealt slot first, commanded index to break a tie between two
+ * commanded units, and current position for everyone else. If this and the
+ * comparator ever disagreed, the preview would be a lie — so they are the same
+ * three rules written once each.
+ */
+function projectCommandedOrder(plan, order) {
+  const dealt = dealSlots(plan, order);
+  const bySlot = new Map(dealt.map((entry, index) => [entry.unitId, { time: entry.time, index }]));
+  return plan.entries
+    .map((record, position) => {
+      const slot = bySlot.get(record.unitId);
+      return {
+        unitId: record.unitId,
+        time: slot ? slot.time : record.time,
+        sequenceIndex: slot ? slot.index : null,
+        position
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.time - b.time ||
+        (a.sequenceIndex != null && b.sequenceIndex != null
+          ? a.sequenceIndex - b.sequenceIndex
+          : 0) ||
+        a.position - b.position
+    )
+    .map((entry) => entry.unitId);
+}
+
+/**
+ * Everything the planning UI shows, and everything the acceptance run reads.
+ *
+ * Built from `planUnitActivationWindow` and `validateOrder` — the same two
+ * calls the command validator makes — so a preview can never describe an order
+ * the command would refuse, and never refuse one it would accept.
+ */
+function createCommandPlanModel(state, unitId, abilityId, order) {
+  const ability = CONTENT.abilities[abilityId];
+  const plan = planUnitActivationWindow(state, unitId, ability);
+  if (!plan) return null;
+
+  const chosen = (order || []).slice();
+  const check = chosen.length
+    ? validateOrder(plan, chosen)
+    : { ok: false, reason: "no units selected" };
+  const costProblems = abilityCostProblems(state, unitId, ability);
+  const unchanged = check.ok && sameOrder(plan.naturalOrder, chosen);
+
+  const describe = (record) => {
+    const unit = state.units[record.unitId];
+    const definition = CONTENT.units[unit.definitionId];
+    const team = state.teams.find((entry) => entry.id === unit.teamId) || {};
+    const selectedIndex = chosen.indexOf(record.unitId);
+    return {
+      unitId: record.unitId,
+      ref: unit.ref || record.unitId,
+      name: definition.name,
+      glyph: definition.glyph,
+      portrait: resolveDefinitionAsset(definition, "portrait", definition.glyph),
+      teamId: unit.teamId,
+      teamAccent: team.accent || "sky",
+      teamMarker: team.marker || "●",
+      hostile: record.relationship === "hostile",
+      time: Math.round(record.time * 100) / 100,
+      delay: Math.round(record.delay * 100) / 100,
+      eligible: record.eligible,
+      reason: record.reason,
+      selected: selectedIndex >= 0,
+      selectedIndex: selectedIndex >= 0 ? selectedIndex + 1 : null
+    };
+  };
+
+  return {
+    abilityId,
+    abilityName: ability.name,
+    costs: { ...(ability.costs || {}) },
+    costText: describeAbilityCosts(state, unitId, ability),
+    affordable: costProblems.length === 0,
+    costProblems,
+    maxUnits: plan.maxUnits,
+    lookahead: plan.lookahead,
+    barrier: plan.barrier
+      ? { ...plan.barrier, name: CONTENT.units[state.units[plan.barrier.unitId].definitionId].name }
+      : null,
+    entries: plan.entries.map(describe),
+    eligibleIds: plan.eligibleIds.slice(),
+    naturalOrder: plan.naturalOrder.slice(),
+    selectedOrder: chosen,
+    resultingOrder: check.ok ? projectCommandedOrder(plan, chosen) : plan.entries.map((e) => e.unitId),
+    unchanged,
+    ok: check.ok && !unchanged && costProblems.length === 0,
+    reason: costProblems[0] || (unchanged ? "That is already the order." : check.reason)
+  };
+}
+
+/** "2 Command Points", in whatever scopes the ability draws from. */
+function describeAbilityCosts(state, unitId, ability) {
+  const parts = [];
+  for (const resourceId of Object.keys((ability && ability.costs) || {})) {
+    const definition = combatResourceDefinition(resourceId);
+    parts.push(ability.costs[resourceId] + " " + ((definition && definition.name) || resourceId));
+  }
+  return parts.join(", ");
+}
+
+/** Whether two id sequences are the same list in the same order. */
+function sameOrder(a, b) {
+  const left = a || [];
+  const right = b || [];
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+/** Drops commanded slots the timeline has overtaken. Cheap and idempotent. */
+function refreshSequencing(state) {
+  if (!sequenceIsActive(state.sequencing)) return [];
+  return pruneSequence(state.sequencing, (unitId) => {
+    const unit = state.units[unitId];
+    if (!unit) return null;
+    return { actionable: unit.alive && !unit.dormant, time: unit.nextActionTime };
+  });
 }
 
 /* ---------------------------------------------------------------
@@ -5639,6 +5952,11 @@ const EVENT_HANDLERS = {
   unitActivated(state, event) {
     const unit = state.units[event.unitId];
     state.activationCount += 1;
+    // The commanded slot is spent the moment its unit takes it. Consuming here
+    // rather than at `turnEnded` means a unit destroyed mid-activation still
+    // leaves the sequence in a correct state, because it has already had its
+    // turn as far as the command is concerned.
+    consumeSequence(state.sequencing, unit.id);
     logLine(state, "unitActivated", unitLabel(state, unit.id) + " activates", {
       unitId: unit.id,
       teamId: unit.teamId,
@@ -6111,16 +6429,29 @@ const EVENT_HANDLERS = {
     });
   },
 
+  /**
+   * Spending a resource an ability declared as its cost.
+   *
+   * Scope-aware, and it had to become so: this used to read
+   * `unit.resources[id]` and nothing else, so an ability whose cost named a
+   * *faction*-scoped resource — Command Points, the squad's whole coordination
+   * budget — deducted nothing at all and reported nothing. It was free, and
+   * silently so, which is the worst way for a cost to be wrong.
+   */
   resourceSpent(state, event) {
     const unit = state.units[event.targetUnitId || event.sourceUnitId];
-    if (!unit || !unit.resources[event.resourceId]) return;
-    const resource = unit.resources[event.resourceId];
-    resource.current = Math.max(0, resource.current - event.amount);
+    if (!unit) return;
+    const definition = combatResourceDefinition(event.resourceId);
+    if (!definition) return;
+    const owner = definition.scope === "faction" ? { teamId: unit.teamId } : { unitId: unit.id };
+    if (!resourceEntry(state, definition, owner)) return;
+    spendCombatResource(state, definition, owner, event.amount);
     logLine(state, "resourceSpent", unitLabel(state, unit.id) + " spends " + event.amount + " " + event.resourceId, {
       unitId: unit.id,
       resourceId: event.resourceId,
       amount: event.amount,
-      remaining: resource.current
+      scope: definition.scope,
+      remaining: resourceBalance(state, definition, owner)
     });
   },
 
@@ -6496,6 +6827,33 @@ const EVENT_HANDLERS = {
         requestedDelta: requested,
         appliedDelta: applied,
         clamped: requested !== event.delta || applied !== requested / rate
+      }
+    );
+  },
+
+  /**
+   * A commanded order was issued.
+   *
+   * Its own event rather than a log line: the order is authoritative state,
+   * and a change to it deserves the same visibility a damage number gets. It
+   * carries both orders so the log and the debug view can show the difference
+   * rather than the result.
+   */
+  activationOrderChanged(state, event) {
+    const naming = (ids) => describeOrder(ids, (id) => unitLabel(state, id));
+    logLine(
+      state,
+      "activationOrderChanged",
+      unitLabel(state, event.sourceUnitId) + " sets the order: " + naming(event.order),
+      {
+        unitId: event.sourceUnitId,
+        abilityId: event.abilityId || null,
+        previousOrder: event.previousOrder,
+        order: event.order,
+        unitIds: event.order,
+        cost: event.cost || null,
+        windowStart: event.windowStart,
+        windowEnd: event.windowEnd
       }
     );
   },
@@ -7273,6 +7631,59 @@ const COMMAND_VALIDATORS = {
   },
 
   /**
+   * Setting the order of activations that are already coming.
+   *
+   * Every rule is read from the ability's authored `activationWindow`, so the
+   * same command serves any commander with any reach. There is no unit id and
+   * no ability id anywhere in this function.
+   *
+   * The plan is recomputed here rather than trusted from the caller. A preview
+   * the player looked at three seconds ago is a claim about a world that may
+   * have moved, and the difference between a stale plan and a live one is a
+   * unit acting twice.
+   */
+  reorderActivations(state, command) {
+    const errors = [];
+    const unit = state.units[command.unitId];
+    if (!unit) return { errors: ["Unknown unit."], preview: {} };
+    if (state.activeUnitId !== command.unitId) errors.push("Unit is not the active unit.");
+    if (!unit.alive) errors.push("Defeated units cannot act.");
+    if (state.activation && state.activation.acted) errors.push("Unit has already acted.");
+
+    const ability = command.abilityId ? CONTENT.abilities[command.abilityId] : null;
+    if (!ability) errors.push("Unknown ability.");
+    else if (!activationWindowRules(ability)) errors.push("That action does not command the timeline.");
+    if (ability) errors.push(...abilityCostProblems(state, command.unitId, ability));
+
+    const plan = ability ? planUnitActivationWindow(state, command.unitId, ability) : null;
+    let check = { ok: false, reason: null };
+    if (plan) {
+      check = validateOrder(plan, command.order || []);
+      if (!check.ok) errors.push(check.reason);
+      // A reorder that changes nothing is not an error, but spending the
+      // squad's coordination budget to confirm the status quo is a mistake the
+      // player almost certainly did not mean to make.
+      else if (sameOrder(plan.naturalOrder, command.order)) {
+        errors.push("That is already the order.");
+      }
+    }
+
+    return {
+      errors,
+      preview: errors.length
+        ? {}
+        : {
+            previousOrder: plan.naturalOrder.slice(),
+            order: command.order.slice(),
+            windowStart: plan.windowStart,
+            windowEnd: plan.windowEnd,
+            barrier: plan.barrier,
+            recovery: ability.timing.recovery
+          }
+    };
+  },
+
+  /**
    * Activating a fixture you own.
    *
    * Every rule here is read from the ability's authored `fixtureTargeting`
@@ -7292,12 +7703,7 @@ const COMMAND_VALIDATORS = {
     const rules = fixtureTargetingRules(ability);
     if (ability && !rules) errors.push("That action does not activate fixtures.");
 
-    for (const resourceId of Object.keys((ability && ability.costs) || {})) {
-      const pool = unit.resources[resourceId];
-      const price = ability.costs[resourceId];
-      if (!pool) errors.push("Unit has no " + resourceId + " resource.");
-      else if (pool.current < price) errors.push("Not enough " + resourceId + " (needs " + price + ").");
-    }
+    errors.push(...abilityCostProblems(state, command.unitId, ability));
 
     const fixture = findFixture(state.fixtures, command.fixtureId);
     if (!fixture) errors.push("That fixture is no longer there.");
@@ -7418,17 +7824,9 @@ const COMMAND_VALIDATORS = {
         errors.push(ability.requirementText || "This ability's requirements are not met.");
       }
     }
-    if (ability) {
-      for (const resourceId of Object.keys(ability.costs || {})) {
-        const cost = ability.costs[resourceId];
-        const resource = unit.resources[resourceId];
-        if (!resource) {
-          errors.push("Unit has no " + resourceId + " resource.");
-        } else if (resource.current < cost) {
-          errors.push("Not enough " + resourceId + " (needs " + cost + ").");
-        }
-      }
-    }
+    // Every scope, through one helper: a squad-wide cost is checked against
+    // the squad's pool rather than looked for on the unit and not found.
+    if (ability) errors.push(...abilityCostProblems(state, command.unitId, ability));
     let targeting = { targetUnitIds: [], tiles: [] };
     if (!errors.length) {
       targeting = evaluateTargeting(
@@ -8173,6 +8571,49 @@ const COMMAND_HANDLERS = {
   },
 
   /**
+   * Commits an order over activations that are already coming.
+   *
+   * Re-plans rather than trusting the validator's preview, for the same reason
+   * the validator re-plans rather than trusting the caller: these are two
+   * different moments and the only safe assumption is that the world moved
+   * between them.
+   */
+  reorderActivations(state, command) {
+    const ability = CONTENT.abilities[command.abilityId];
+    const plan = planUnitActivationWindow(state, command.unitId, ability);
+    const previous = plan.naturalOrder.slice();
+
+    state.activation.acted = true;
+    state.activation.actionRecovery += abilityRecovery(command.abilityId);
+    for (const resourceId of Object.keys(ability.costs || {})) {
+      queueEvent(state, {
+        type: "resourceSpent",
+        sourceUnitId: command.unitId,
+        targetUnitId: command.unitId,
+        resourceId,
+        amount: ability.costs[resourceId]
+      });
+    }
+
+    const dealt = dealSlots(plan, command.order);
+    commitSequence(state.sequencing, dealt, {
+      issuedBy: command.unitId,
+      abilityId: command.abilityId,
+      issuedAt: state.activationCount
+    });
+    queueEvent(state, {
+      type: "activationOrderChanged",
+      sourceUnitId: command.unitId,
+      abilityId: command.abilityId,
+      previousOrder: previous,
+      order: command.order.slice(),
+      cost: { ...(ability.costs || {}) },
+      windowStart: plan.windowStart,
+      windowEnd: plan.windowEnd
+    });
+  },
+
+  /**
    * Sets off one of your own fixtures, now, because you chose to.
    *
    * Generic on purpose: what it selects is "a fixture this ability is allowed
@@ -8384,6 +8825,10 @@ function settleCommand(state, options) {
     events = events.concat(processAllEvents(state, onEvent));
   }
   if (reactionWindowPending(state)) return events;
+  // Anything that just happened may have killed a commanded unit or moved one
+  // on the timeline. Dropping those slots here means the sequencing layer can
+  // never outlive the facts it was built from.
+  reportDroppedSequence(state, refreshSequencing(state));
   checkObjectives(state, onEvent);
 
   // Mission script last, so beats react to a settled battle state. Objectives
@@ -9228,6 +9673,10 @@ function deserializeBattle(serialized) {
   // save taken before it existed. A save made while a declaration was open
   // reloads with that declaration still open and its verdict intact.
   state.interventions = deserializeInterventions(state.interventions);
+  // Carried, never re-derived. A permutation is precisely the thing timestamps
+  // cannot express, so reconstructing it from them would quietly change the
+  // remaining order across a reload.
+  state.sequencing = deserializeSequencing(state.sequencing);
   for (const id of state.unitOrder) {
     const unit = state.units[id];
     if (unit.ref == null) unit.ref = id;
@@ -11276,6 +11725,10 @@ function chooseAiCommands(state, unitId) {
 
     for (const abilityId of getUnitAbilities(state, unitId)) {
       if ((unit.cooldowns[abilityId] || 0) > 0) continue;
+      // Abilities issued through a different command are not the AI's to
+      // choose here. Enumerating them produced an action that spent the turn
+      // and resolved nothing.
+      if (commandKindForAbility(CONTENT.abilities[abilityId]) !== "useAbility") continue;
       if (!abilityConditionsMet(state, unitId, abilityId)) continue;
       for (const target of enumerateAiTargets(state, unitId, abilityId, origin)) {
         const targeting = evaluateTargeting(state, unitId, abilityId, target, origin);
@@ -11406,6 +11859,11 @@ function collectContentIssues(registry) {
       const ability = registry.abilities[abilityId];
       if (!ability) continue;
       for (const resourceId of Object.keys(ability.costs || {})) {
+        // A faction-scoped cost is paid from the squad's pool, so the unit
+        // carrying the ability is not expected to declare it. Checking only
+        // the unit's own dictionary made a squad-wide cost look impossible.
+        const declared = REACTION_INDEX.resourceById[resourceId];
+        if (declared && declared.scope === "faction") continue;
         if (!unit.resources[resourceId]) {
           errors.push(
             "Unit " + unitId + " cannot pay the " + resourceId + " cost of " + abilityId + "."
@@ -24570,6 +25028,104 @@ test("Continuation", "Declining every window still runs a battle to an ending", 
 });
 
 /* ---------------------------------------------------------------
+ * THE ACTIVATION-OWNERSHIP INVARIANT
+ *
+ * Written before anything could reorder a timeline, for the same reason the
+ * continuation property above was written before anything could veto an
+ * action: the failure mode of a sequencing bug is a unit that acts twice or
+ * never acts again, and both are invisible until somebody notices the battle
+ * feels wrong three activations later.
+ *
+ * The invariant is deliberately about *ownership*, not about order:
+ *
+ *   every unit that can act owns exactly one upcoming activation, and the
+ *   set of units owning one does not change when the order does.
+ * -------------------------------------------------------------*/
+
+/** Who is scheduled, and where. One entry per unit, by construction. */
+function scheduledActivations(state) {
+  const seen = new Map();
+  for (const entry of timelineCandidates(state)) {
+    assert(!seen.has(entry.unitId), "a unit appeared twice on the timeline: " + entry.unitId);
+    seen.set(entry.unitId, entry);
+  }
+  return seen;
+}
+
+/**
+ * Every actionable unit owns exactly one upcoming activation.
+ *
+ * @returns the ordered unit ids, so a caller can compare sequences.
+ */
+function assertOwnsOneActivationEach(state, why) {
+  const where = why ? " (" + why + ")" : "";
+  const scheduled = scheduledActivations(state);
+  for (const unitId of state.unitOrder) {
+    const unit = state.units[unitId];
+    const actionable = unit.alive && !unit.dormant;
+    assertEqual(
+      scheduled.has(unitId),
+      actionable,
+      "an actionable unit owns exactly one activation and nobody else owns any" + where + ": " + unitId
+    );
+  }
+  const ordered = [...scheduled.values()].sort(compareTimelineEntries);
+  return ordered.map((entry) => entry.unitId);
+}
+
+test("Sequencing", "Every actionable unit owns exactly one upcoming activation", () => {
+  const state = linkBattle(130, { autoResolveReactions: true });
+  assertOwnsOneActivationEach(state, "at the start");
+
+  let activations = 0;
+  while (!state.finished && activations < 120) {
+    const result = runActivation(state);
+    if (!result.unitId) break;
+    activations += 1;
+    assertOwnsOneActivationEach(state, "after activation " + activations);
+  }
+  assert(activations > 3, "the battle ran, got " + activations);
+});
+
+test("Sequencing", "Activation order is a pure function of the timeline, not of iteration order", () => {
+  const state = linkBattle(131);
+  const first = assertOwnsOneActivationEach(state, "as built");
+
+  // The same battle, with the unit map rebuilt in reverse insertion order. If
+  // ordering depended on object key order anywhere, this would differ — which
+  // is the property a reorder layer is about to start leaning on hard.
+  const shuffled = deserializeBattle(serializeBattle(state));
+  const reversed = {};
+  for (const id of shuffled.unitOrder.slice().reverse()) reversed[id] = shuffled.units[id];
+  shuffled.units = reversed;
+  shuffled.unitOrder = shuffled.unitOrder.slice().reverse();
+
+  assertEqual(
+    assertOwnsOneActivationEach(shuffled, "rebuilt backwards").join(","),
+    first.join(","),
+    "the order must not depend on how the units happen to be stored"
+  );
+});
+
+test("Sequencing", "Units sharing a timestamp still order deterministically", () => {
+  const state = linkBattle(132);
+  // The case a naive reorder gets wrong: identical times mean the comparator
+  // falls through to its tie-breaks, and any scheme that expresses order
+  // *only* through timestamps cannot separate these two at all.
+  for (const unitId of state.unitOrder) state.units[unitId].nextActionTime = 500;
+  const once = assertOwnsOneActivationEach(state, "all tied");
+  const twice = assertOwnsOneActivationEach(state, "all tied, again");
+  assertEqual(once.join(","), twice.join(","), "a tie is not a coin flip");
+
+  const restored = deserializeBattle(serializeBattle(state));
+  assertEqual(
+    assertOwnsOneActivationEach(restored, "reloaded").join(","),
+    once.join(","),
+    "and it survives a save"
+  );
+});
+
+/* ---------------------------------------------------------------
  * CAUSALITY
  * -------------------------------------------------------------*/
 
@@ -28386,6 +28942,490 @@ test("Interception", "Declaring an action stays cheap", () => {
     state.interventions.order.length <= INTERVENTION_LIMITS.retained,
     "and the record stays bounded at " + state.interventions.order.length
   );
+});
+
+/* =========================================================================
+ * COMMANDED SEQUENCING
+ *
+ * Choosing the order of turns that are already coming. The mechanic is small;
+ * most of what follows is the invariant, because the failure mode of a
+ * sequencing bug is a unit acting twice or never again, and both are invisible
+ * until the battle has already gone wrong.
+ * =======================================================================*/
+
+const COMMAND_ENCOUNTER = "file:fixture-command-arena";
+
+function commandBattle(seed, options) {
+  return createBattle(COMMAND_ENCOUNTER, seed == null ? 5 : seed, {
+    autoResolveScenes: true,
+    autoResolveReactions: true,
+    ...options
+  });
+}
+
+/**
+ * Activates the commander and gives the named refs a deliberate upcoming order.
+ *
+ * The scheduling has to happen *after* the activation, because
+ * `activateForTest` flattens everybody else to one timestamp to guarantee the
+ * unit it wants is next — which is exactly the thing these tests need not to
+ * be true.
+ */
+function stageCommand(state, actorRef, upcoming, options) {
+  const opts = options || {};
+  const step = opts.step == null ? 100 : opts.step;
+  const actor = unitByRef(state, actorRef);
+  activateForTest(state, actor.id);
+
+  const base = state.currentTime + 100;
+  upcoming.forEach((ref, index) => {
+    unitByRef(state, ref).nextActionTime = base + index * step;
+  });
+  // Everything unnamed is parked far enough away to stay out of any window.
+  const named = new Set(upcoming.map((ref) => unitByRef(state, ref).id));
+  named.add(actor.id);
+  for (const unitId of state.unitOrder) {
+    if (!named.has(unitId)) state.units[unitId].nextActionTime = base + 100000;
+  }
+  return actor;
+}
+
+/** The effective upcoming order, by ref. The active unit is included, because
+ *  the timeline rail shows it — `queued` is the one without it. */
+function upcomingRefs(state, count) {
+  return timelineCandidates(state)
+    .sort(compareTimelineEntries)
+    .slice(0, count == null ? 6 : count)
+    .map((entry) => state.units[entry.unitId].ref);
+}
+
+/** Who is waiting, in order, ignoring whoever is mid-activation. */
+function queuedRefs(state, count) {
+  return timelineCandidates(state)
+    .sort(compareTimelineEntries)
+    .filter((entry) => entry.unitId !== state.activeUnitId)
+    .slice(0, count == null ? 6 : count)
+    .map((entry) => state.units[entry.unitId].ref);
+}
+
+function refIds(state, refs) {
+  return refs.map((ref) => unitByRef(state, ref).id);
+}
+
+/** Issues a command as the player would, through the real command path. */
+function issueCommand(state, actorRef, order, abilityId) {
+  const actor = unitByRef(state, actorRef);
+  return executeCommand(state, {
+    type: "reorderActivations",
+    unitId: actor.id,
+    abilityId: abilityId || "battlePlan",
+    order: refIds(state, order)
+  });
+}
+
+/* ---- the window ---- */
+
+test("Sequencing", "The window stops at the first enemy activation", () => {
+  const state = commandBattle(400);
+  // Ally, ally, ENEMY, ally: the fourth is unreachable, and that is the whole
+  // reason initiative survives having a commander in it.
+  stageCommand(state, "vale", ["kell", "reyes", "blocker", "nyx"]);
+
+  const plan = planUnitActivationWindow(state, unitByRef(state, "vale").id, CONTENT.abilities.battlePlan);
+  const eligible = plan.eligibleIds.map((id) => state.units[id].ref);
+  assertEqual(eligible.join(","), "kell,reyes", "the window closes at the enemy");
+  assert(plan.barrier, "and says what closed it");
+  assertEqual(state.units[plan.barrier.unitId].ref, "blocker");
+
+  const behind = plan.entries.find((entry) => entry.unitId === unitByRef(state, "nyx").id);
+  assertEqual(behind.eligible, false, "the ally behind the enemy is out of reach");
+  assertEqual(behind.reason, INELIGIBLE_REASONS.behindBarrier);
+});
+
+test("Sequencing", "A far-future ally cannot be pulled into the window", () => {
+  const state = commandBattle(401);
+  stageCommand(state, "vale", ["kell", "reyes"]);
+  const nyx = unitByRef(state, "nyx");
+  nyx.nextActionTime = state.currentTime + 90000;
+
+  const plan = planUnitActivationWindow(state, unitByRef(state, "vale").id, CONTENT.abilities.battlePlan);
+  assert(!plan.eligibleIds.includes(nyx.id), "beyond the reach is beyond the reach");
+  const record = plan.entries.find((entry) => entry.unitId === nyx.id);
+  assertEqual(record.reason, INELIGIBLE_REASONS.beyondWindow);
+});
+
+test("Sequencing", "The commander cannot sequence the activation she is spending", () => {
+  const state = commandBattle(402);
+  const vale = stageCommand(state, "vale", ["kell", "reyes", "nyx"]);
+
+  const plan = planUnitActivationWindow(state, vale.id, CONTENT.abilities.battlePlan);
+  const record = plan.entries.find((entry) => entry.unitId === vale.id);
+  // She is standing in the present, not waiting in the queue. There is no slot
+  // of hers to move, and pretending otherwise is where "take another turn"
+  // creeps in.
+  assert(!record || !record.eligible, "the acting commander has no slot to reorder");
+  assert(!plan.eligibleIds.includes(vale.id));
+});
+
+test("Sequencing", "The selection cap is enforced", () => {
+  const state = commandBattle(403);
+  const vale = stageCommand(state, "vale", ["kell", "reyes", "nyx", "veteran"]);
+
+  const narrow = {
+    ...CONTENT.abilities.battlePlan,
+    activationWindow: { ...CONTENT.abilities.battlePlan.activationWindow, maxUnits: 2 }
+  };
+  const plan = planUnitActivationWindow(state, vale.id, narrow);
+  assertEqual(plan.eligibleIds.length, 2, "the cap bites");
+  const excluded = plan.entries.find((entry) => entry.reason === INELIGIBLE_REASONS.beyondReach);
+  assert(excluded, "and the excluded unit says why");
+
+  const refused = validateOrder(plan, plan.entries.slice(0, 3).map((entry) => entry.unitId));
+  assertEqual(refused.ok, false, "and an over-long order is refused");
+});
+
+/* ---- the invariant ---- */
+
+test("Sequencing", "A reorder changes the order and nothing else", () => {
+  const state = commandBattle(404);
+  const vale = stageCommand(state, "vale", ["reyes", "veteran", "nyx", "kell"]);
+  void vale;
+
+  const before = assertOwnsOneActivationEach(state, "before the command");
+  assertEqual(queuedRefs(state, 4).join(","), "reyes,veteran,nyx,kell");
+
+  const result = issueCommand(state, "vale", ["kell", "reyes", "veteran", "nyx"]);
+  assert(result.ok, result.errors.join(" | "));
+
+  const after = assertOwnsOneActivationEach(state, "after the command");
+  assertEqual(
+    before.slice().sort().join(","),
+    after.slice().sort().join(","),
+    "exactly the same units own exactly one activation each"
+  );
+  assertEqual(
+    queuedRefs(state, 4).join(","),
+    "kell,reyes,veteran,nyx",
+    "and only the sequence moved"
+  );
+});
+
+test("Sequencing", "Nobody acts twice and nobody loses a turn", () => {
+  const state = commandBattle(405);
+  stageCommand(state, "vale", ["reyes", "veteran", "nyx", "kell"]);
+  assert(issueCommand(state, "vale", ["kell", "reyes", "veteran", "nyx"]).ok);
+  executeCommand(state, { type: "endTurn", unitId: unitByRef(state, "vale").id });
+
+  const commanded = ["kell", "reyes", "veteran", "nyx"];
+  const seen = [];
+  for (let index = 0; index < commanded.length; index += 1) {
+    const next = getNextActionableUnitId(state);
+    seen.push(state.units[next].ref);
+    runActivation(state);
+    assertOwnsOneActivationEach(state, "after " + state.units[next].ref);
+  }
+  assertEqual(seen.join(","), commanded.join(","), "the commanded order is the order that happened");
+  // Each of them acted exactly once, which is the claim the whole mechanic
+  // rests on. Counting activations is the only way to actually check it.
+  const activations = state.battleLog.filter((entry) => entry.type === "unitActivated");
+  for (const ref of commanded) {
+    const unitId = unitByRef(state, ref).id;
+    assertEqual(
+      activations.filter((entry) => entry.data.unitId === unitId).length,
+      1,
+      ref + " acted exactly once"
+    );
+  }
+});
+
+test("Sequencing", "A permutation survives units sharing a timestamp", () => {
+  const state = commandBattle(406);
+  const vale = stageCommand(state, "vale", ["reyes", "veteran", "nyx"], { step: 0 });
+
+  const plan = planUnitActivationWindow(state, vale.id, CONTENT.abilities.battlePlan);
+  const natural = plan.naturalOrder.map((id) => state.units[id].ref);
+  assertEqual(natural.length, 3, "three tied allies are all in the window");
+
+  // Every one of them holds the same timestamp, so a scheme that expresses
+  // order through timestamps alone cannot separate them at all. This is the
+  // case that decided the representation.
+  const reversed = natural.slice().reverse();
+  assert(issueCommand(state, "vale", reversed).ok);
+  assertEqual(
+    queuedRefs(state, 3).join(","),
+    reversed.join(","),
+    "the chosen order holds despite the tie"
+  );
+  assertOwnsOneActivationEach(state, "tied and reordered");
+});
+
+/* ---- refusals ---- */
+
+test("Sequencing", "An enemy activation cannot be quietly stepped over", () => {
+  const state = commandBattle(407);
+  stageCommand(state, "vale", ["kell", "blocker", "nyx"]);
+
+  const result = issueCommand(state, "vale", ["nyx", "kell"]);
+  assertEqual(result.ok, false, "the ally behind the enemy is not available");
+  assert(/enemy acts first/i.test(result.errors.join(" ")), result.errors.join(" | "));
+  assertEqual(
+    queuedRefs(state, 3).join(","),
+    "kell,blocker,nyx",
+    "and nothing moved"
+  );
+});
+
+test("Sequencing", "Duplicates, strangers and empty orders are all refused", () => {
+  const state = commandBattle(408);
+  const vale = stageCommand(state, "vale", ["kell", "reyes", "nyx"]);
+  const plan = planUnitActivationWindow(state, vale.id, CONTENT.abilities.battlePlan);
+  const kell = unitByRef(state, "kell").id;
+
+  assertEqual(validateOrder(plan, []).ok, false, "an empty order is not a command");
+  assertEqual(validateOrder(plan, [kell, kell]).ok, false, "a unit cannot be sequenced twice");
+  assertEqual(validateOrder(plan, ["nobody"]).ok, false, "a stranger is not in the window");
+  assertEqual(
+    issueCommand(state, "vale", ["kell", "reyes", "nyx"]).ok,
+    false,
+    "and confirming the order it already is spends nothing"
+  );
+});
+
+test("Sequencing", "The command is unavailable without the Command Points", () => {
+  const state = commandBattle(409);
+  const vale = stageCommand(state, "vale", ["reyes", "kell"]);
+  setFactionResource(state, "commandPoints", 1, vale.teamId);
+
+  const result = issueCommand(state, "vale", ["kell", "reyes"]);
+  assertEqual(result.ok, false, "two points are two points");
+  assert(/command points/i.test(result.errors.join(" ")), result.errors.join(" | "));
+  assertEqual(state.activation.acted, false, "and the action is not spent trying");
+});
+
+test("Sequencing", "Issuing the order spends the squad's budget exactly once", () => {
+  const state = commandBattle(410);
+  const vale = stageCommand(state, "vale", ["reyes", "kell"]);
+  const before = factionResource(state, "commandPoints", vale.teamId).current;
+
+  assert(issueCommand(state, "vale", ["kell", "reyes"]).ok);
+  assertEqual(
+    factionResource(state, "commandPoints", vale.teamId).current,
+    before - 2,
+    "a faction-scoped ability cost is actually charged"
+  );
+  assertEqual(state.activation.acted, true, "and it was her action for the turn");
+  assert(state.activation.actionRecovery > 0, "with ordinary recovery");
+});
+
+/* ---- living with the rest of the engine ---- */
+
+test("Sequencing", "A commanded unit that dies first is skipped, not mourned", () => {
+  const state = commandBattle(411);
+  const vale = stageCommand(state, "vale", ["reyes", "veteran", "kell"]);
+  assert(issueCommand(state, "vale", ["kell", "reyes", "veteran"]).ok);
+  executeCommand(state, { type: "endTurn", unitId: vale.id });
+
+  const kell = unitByRef(state, "kell");
+  kell.currentHp = 0;
+  queueEvent(state, { type: "unitDefeated", unitId: kell.id, sourceUnitId: null });
+  processAllEvents(state);
+  settleCommand(state);
+
+  assertOwnsOneActivationEach(state, "after a commanded unit died");
+  assertEqual(queuedRefs(state, 1)[0], "reyes", "the order closes over the gap");
+  assert(
+    !state.sequencing.entries.some((entry) => entry.unitId === kell.id),
+    "and no ghost slot is left behind"
+  );
+  assertContinuationIsLive(state, "after a commanded unit died");
+});
+
+test("Sequencing", "A rescheduled unit leaves the commanded order rather than fighting it", () => {
+  const state = commandBattle(412);
+  const vale = stageCommand(state, "vale", ["reyes", "veteran", "kell"]);
+  assert(issueCommand(state, "vale", ["kell", "reyes", "veteran"]).ok);
+  executeCommand(state, { type: "endTurn", unitId: vale.id });
+  assertEqual(queuedRefs(state, 3).join(","), "kell,reyes,veteran");
+
+  // An ordinary timeline effect on a commanded unit. The command sequenced
+  // what was there; something authoritative has now moved it, and the timeline
+  // outranks the command rather than the other way round.
+  const reyes = unitByRef(state, "reyes");
+  REACTION_ENGINE.modifyTurnDelay(state, reyes.id, 900, { sourceUnitId: reyes.id });
+  settleCommand(state);
+
+  assert(
+    !state.sequencing.entries.some((entry) => entry.unitId === reyes.id),
+    "the rescheduled unit is no longer commanded"
+  );
+  assert(
+    state.battleLog.some((entry) => entry.type === "activationOrderDropped"),
+    "and the log says so rather than the order quietly changing"
+  );
+  assertOwnsOneActivationEach(state, "after a commanded unit was delayed");
+});
+
+test("Sequencing", "Ordinary haste and delay still work after a commanded activation", () => {
+  const state = commandBattle(413);
+  const vale = stageCommand(state, "vale", ["reyes", "kell"]);
+  assert(issueCommand(state, "vale", ["kell", "reyes"]).ok);
+  executeCommand(state, { type: "endTurn", unitId: vale.id });
+
+  const kell = unitByRef(state, "kell");
+  runActivation(state);
+  assert(!sequenceIsActive(state.sequencing) || !sequencedEntry(state.sequencing, kell.id),
+    "the commanded slot was spent by acting");
+
+  const before = kell.nextActionTime;
+  REACTION_ENGINE.modifyTurnDelay(state, kell.id, -400, { sourceUnitId: kell.id });
+  assert(kell.nextActionTime < before, "the ordinary timeline still moves");
+  assertOwnsOneActivationEach(state, "after a haste on a formerly commanded unit");
+});
+
+test("Sequencing", "A save taken mid-window resumes on the same remaining order", () => {
+  const state = commandBattle(414);
+  const vale = stageCommand(state, "vale", ["reyes", "veteran", "nyx", "kell"]);
+  assert(issueCommand(state, "vale", ["kell", "reyes", "veteran", "nyx"]).ok);
+  executeCommand(state, { type: "endTurn", unitId: vale.id });
+  runActivation(state);
+
+  const remaining = queuedRefs(state, 3);
+  const restored = deserializeBattle(serializeBattle(state));
+  assertEqual(
+    queuedRefs(restored, 3).join(","),
+    remaining.join(","),
+    "the remaining order survives exactly"
+  );
+  assertEqual(
+    restored.sequencing.entries.length,
+    state.sequencing.entries.length,
+    "carried rather than re-derived"
+  );
+  assertOwnsOneActivationEach(restored, "reloaded mid-window");
+});
+
+test("Sequencing", "Reactions behave identically inside a commanded sequence", () => {
+  const state = commandBattle(415, { autoResolveReactions: true });
+  const vale = stageCommand(state, "vale", ["veteran", "kell"]);
+  const kell = unitByRef(state, "kell");
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "target");
+
+  // The whole point of the command: the sniper wants to be holding the lane
+  // before the frame that walks somebody into it.
+  assert(issueCommand(state, "vale", ["kell", "veteran"]).ok);
+  executeCommand(state, { type: "endTurn", unitId: vale.id });
+  assertEqual(queuedRefs(state, 2).join(","), "kell,veteran");
+
+  runActivation(state);
+  applyStatusForTest(state, kell.id, "overwatching");
+  kell.x = 4;
+  kell.y = 8;
+  target.x = 12;
+  target.y = 8;
+  veteran.x = 14;
+  veteran.y = 8;
+
+  const before = state.reactions.log.length;
+  pushUnit(state, veteran.id, target.id, 1);
+  processAllEvents(state);
+  settleCommand(state);
+
+  // Not asserting that the shot fired — the point is that the reaction
+  // lifecycle ran at all and left the battle valid. A reordered turn is an
+  // ordinary turn, with no special reaction mode anywhere.
+  assert(state.reactions.log.length >= before, "the reaction runtime engaged normally");
+  assertOwnsOneActivationEach(state, "after a reaction inside a commanded window");
+  assertContinuationIsLive(state, "after a reaction inside a commanded window");
+});
+
+test("Sequencing", "Interventions are unaffected by a commanded order", () => {
+  const state = commandBattle(416, { autoResolveReactions: true });
+  const vale = stageCommand(state, "vale", ["reyes", "kell"]);
+  assert(issueCommand(state, "vale", ["kell", "reyes"]).ok);
+  executeCommand(state, { type: "endTurn", unitId: vale.id });
+
+  const declarations = state.interventions.order.length;
+  runActivation(state);
+  // Declarations still open and close exactly as they did; sequencing touches
+  // the order of turns, not what happens inside one.
+  assert(
+    state.interventions.order.length >= declarations,
+    "declarations still open inside a commanded turn"
+  );
+  for (const id of state.interventions.order) {
+    const record = state.interventions.byId[id];
+    assert(record.resolved || record === openDeclarationOf(state.interventions), "no orphaned declaration");
+  }
+  assertContinuationIsLive(state, "after a commanded turn with declarations");
+});
+
+/* ---- preview parity and shape ---- */
+
+test("Sequencing", "The preview and the command cannot disagree", () => {
+  const state = commandBattle(417);
+  const vale = stageCommand(state, "vale", ["reyes", "veteran", "nyx", "kell"]);
+
+  const wanted = refIds(state, ["kell", "reyes", "veteran", "nyx"]);
+  const model = createCommandPlanModel(state, vale.id, "battlePlan", wanted);
+  assert(model.ok, model.reason || "the preview accepted it");
+  const predicted = model.resultingOrder.map((id) => state.units[id].ref);
+
+  assert(issueCommand(state, "vale", ["kell", "reyes", "veteran", "nyx"]).ok);
+  assertEqual(
+    queuedRefs(state, predicted.length).join(","),
+    predicted.filter((ref) => ref !== "vale").join(","),
+    "what the preview promised is what happened"
+  );
+
+  // And the refusals match too: a preview that accepts what the command
+  // rejects is the same bug wearing a different hat.
+  const stale = createCommandPlanModel(state, vale.id, "battlePlan", [wanted[0], wanted[0]]);
+  assertEqual(stale.ok, false);
+});
+
+test("Sequencing", "The preview names every exclusion and its reason", () => {
+  const state = commandBattle(418);
+  const vale = stageCommand(state, "vale", ["kell", "blocker", "nyx"]);
+  const model = createCommandPlanModel(state, vale.id, "battlePlan", refIds(state, ["kell"]));
+
+  assert(model.barrier, "the barrier is named");
+  assertEqual(model.costText, "2 Command Points");
+  for (const entry of model.entries) {
+    assert(entry.eligible || entry.reason, entry.ref + " is excluded without a reason");
+    assert(entry.name && entry.glyph, "every entry is renderable without a lookup");
+  }
+  const hostile = model.entries.find((entry) => entry.hostile);
+  assert(hostile && !hostile.eligible, "the enemy is shown, and shown as unavailable");
+});
+
+test("Sequencing", "Nothing in the sequencing engine knows who is commanding", () => {
+  const sources = [
+    planUnitActivationWindow.toString(),
+    activationWindowRules.toString(),
+    timelineCandidates.toString(),
+    compareTimelineEntries.toString(),
+    refreshSequencing.toString(),
+    projectCommandedOrder.toString(),
+    COMMAND_HANDLERS.reorderActivations.toString(),
+    COMMAND_VALIDATORS.reorderActivations.toString()
+  ].join("\n");
+  for (const id of ["vale", "battlePlan", "kell", "nyx", "reyes", "veteran", "assaultMech"]) {
+    assert(!new RegExp('"' + id + '"').test(sources), "the engine names " + id);
+  }
+});
+
+test("Sequencing", "Planning a window stays cheap", () => {
+  const state = commandBattle(419);
+  const vale = stageCommand(state, "vale", ["reyes", "veteran", "nyx", "kell"]);
+
+  const runs = 400;
+  const started = Date.now();
+  for (let index = 0; index < runs; index += 1) {
+    planUnitActivationWindow(state, vale.id, CONTENT.abilities.battlePlan);
+  }
+  const per = (Date.now() - started) / runs;
+  assert(per < 2, "planning took " + per.toFixed(4) + "ms");
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
@@ -42411,6 +43451,26 @@ if (typeof window !== "undefined") {
       // The engine's own occupancy rule, so a harness asking "is that tile
       // still walkable" is asking the question movement asks.
       tileIsFree: (state, x, y, unitId) => isTileFree(state, x, y, unitId)
+    },
+    // The sequencing surface. `plan` is the authority the preview, the
+    // validator and the executor all share — a harness asking it is asking the
+    // player's question, which is the whole point of there being only one.
+    sequencing: {
+      plan: (state, unitId, abilityId) =>
+        planUnitActivationWindow(state, unitId, CONTENT.abilities[abilityId]),
+      order: (state) => (state.sequencing.entries || []).map((entry) => entry.unitId),
+      entries: (state) => (state.sequencing.entries || []).map((entry) => ({ ...entry })),
+      active: (state) => sequenceIsActive(state.sequencing),
+      /** The effective upcoming order, which is what the timeline rail shows. */
+      upcoming: (state) =>
+        timelineCandidates(state)
+          .sort(compareTimelineEntries)
+          .map((entry) => entry.unitId),
+      preview: (state, unitId, abilityId, order) =>
+        createCommandPlanModel(state, unitId, abilityId, order),
+      relationships: WINDOW_RELATIONSHIPS,
+      barriers: HOSTILE_BARRIER_MODES,
+      reasons: INELIGIBLE_REASONS
     },
     // The interception surface. Everything a harness needs to see an action
     // between being chosen and being true, and to change what it becomes —

@@ -26,6 +26,7 @@
 import { REGISTRY_KINDS } from "./format.js";
 import { SELECTION_POLICY_IDS } from "../../combat/propagation.js";
 import { FIXTURE_STATES, FIXTURE_VISIBILITY } from "../../combat/fixtures.js";
+import { HOSTILE_BARRIER_MODES, WINDOW_RELATIONSHIPS } from "../../combat/sequencing.js";
 
 /** The chain's selection policies, offered to the author as a closed list. */
 const SELECTION_POLICY_OPTIONS = SELECTION_POLICY_IDS;
@@ -299,6 +300,55 @@ export const REGISTRY_SCHEMAS = {
             typeKey: "type",
             behaviour: true,
             help: "A `displace` effect's distance is the maximum; the player chooses the actual distance."
+          }
+        ]
+      },
+      {
+        id: "activationWindow",
+        label: "Command window",
+        note:
+          "Present only on actions that set the order of activations already coming. " +
+          "Nobody gains a turn and nobody loses one — the same units act the same " +
+          "number of times, in an order the commander chose. An ability with this " +
+          "block is issued as a command rather than as an ordinary action, so its " +
+          "effect list is never run.",
+        fields: [
+          {
+            key: "activationWindow.relationship",
+            label: "May sequence",
+            kind: "enum",
+            options: WINDOW_RELATIONSHIPS,
+            behaviour: true,
+            help: '"allied" is a commander rearranging her own squad. "any" would let her reorder the enemy too.'
+          },
+          {
+            key: "activationWindow.lookahead",
+            label: "Reach ahead (time)",
+            kind: "number",
+            help: "How far past the present an activation may be and still be commandable."
+          },
+          {
+            key: "activationWindow.maxUnits",
+            label: "Most units sequenced",
+            kind: "number",
+            help: "Fewer than two leaves no order to change."
+          },
+          {
+            key: "activationWindow.hostileBarrier",
+            label: "Enemy activations",
+            kind: "enum",
+            options: HOSTILE_BARRIER_MODES,
+            behaviour: true,
+            help:
+              '"stop" makes an enemy turn a wall the command cannot reach past, which is ' +
+              "what keeps initiative a real system. \"ignore\" lets allies be moved across it."
+          },
+          {
+            key: "activationWindow.includeActive",
+            label: "Can sequence the unit acting now",
+            kind: "boolean",
+            behaviour: true,
+            help: "Normally false: the commander is standing in the present, not waiting in the queue."
           }
         ]
       },

@@ -140,6 +140,44 @@
         "order": 1
       }
     },
+    "battlePlan": {
+      "name": "Battle Plan",
+      "description": "She looks at what is already coming and decides the order it comes in. Nobody gains a turn and nobody loses one — the squad simply stops acting in the sequence the clock happened to produce.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 0,
+        "rangeMin": 0,
+        "requiresLineOfSight": false,
+        "type": "self"
+      },
+      "timing": {
+        "cooldown": 1,
+        "recovery": 700
+      },
+      "costs": {
+        "commandPoints": 2
+      },
+      "effects": [],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "#",
+        "order": 1,
+        "tags": [
+          "command"
+        ]
+      },
+      "activationWindow": {
+        "hostileBarrier": "stop",
+        "includeActive": false,
+        "lookahead": 2600,
+        "maxUnits": 4,
+        "relationship": "allied"
+      }
+    },
     "bladeStrike": {
       "name": "Blade Strike",
       "description": "Melee strike. Destroying the target refunds this activation's movement once.",

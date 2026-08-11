@@ -1,0 +1,156 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-command-arena",
+  "name": "Command Bench",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. The natural upcoming order is deliberately the wrong one: the sniper who wants to be set up first is scheduled last, and the frame that creates his shot is scheduled before him. One enemy is parked mid-queue so a hostile barrier has something to be a barrier against. Nothing here is scripted — the only thing the command changes is order.",
+  "map": {
+    "name": "Bench",
+    "width": 22,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................"
+    ],
+    "elevationRows": [
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000"
+    ]
+  },
+  "teams": [
+    { "id": "sectionSeven", "name": "Section Seven", "controller": "human", "marker": "▲", "accent": "emerald" },
+    { "id": "loyalist", "name": "Loyalists", "controller": "ai", "marker": "■", "accent": "rose" }
+  ],
+  "units": [
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 6,
+      "y": 10,
+      "facing": "northeast",
+      "note": "The commander. She spends her own action to issue the order; she does not get the sequencing on top of a full turn."
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 4,
+      "y": 12,
+      "facing": "northeast",
+      "note": "Wants to be set up BEFORE the frame that creates his shot. Naturally scheduled last, which is the entire problem the command exists to solve."
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 5,
+      "y": 12,
+      "facing": "northeast",
+      "note": "Ordinary support. Present so the window has something in it that does not matter, which is how a partial selection gets tested."
+    },
+    {
+      "ref": "veteran",
+      "definitionId": "interdictorFrame",
+      "teamId": "sectionSeven",
+      "x": 8,
+      "y": 8,
+      "facing": "east",
+      "note": "Runway east, and a shove that can put an enemy into the sniper's lane — but only if the sniper is already holding it."
+    },
+    {
+      "ref": "nyx",
+      "definitionId": "stealthMech",
+      "teamId": "sectionSeven",
+      "x": 6,
+      "y": 13,
+      "facing": "northeast",
+      "note": "Last in the commanded order. Present to prove a unit moved to the back still gets its one ordinary activation."
+    },
+    {
+      "ref": "target",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 12,
+      "y": 8,
+      "facing": "west",
+      "note": "East of the veteran, one shove north of row 12 — the sniper's lane. The displacement synergy needs somebody to displace."
+    },
+    {
+      "ref": "blocker",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 16,
+      "y": 3,
+      "facing": "west",
+      "note": "Parked mid-queue by its scheduled time, so a hostile barrier has something real to stop at."
+    },
+    {
+      "ref": "heavy",
+      "definitionId": "heavyEnforcer",
+      "teamId": "loyalist",
+      "x": 19,
+      "y": 6,
+      "facing": "west",
+      "note": "Far enough away to stay out of the command window, which is how the lookahead limit gets tested."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 15,
+      "facing": "west",
+      "note": "Keeps the battle from ending while a sequencing test is mid-flight."
+    }
+  ],
+  "regions": [],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Exercise the order",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "factions": { "relationships": [] },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": { "briefing": [], "victory": [], "defeat": [] },
+  "midBattle": []
+}

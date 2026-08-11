@@ -31,7 +31,8 @@
         "scatterShot",
         "coverAlly",
         "stabilize",
-        "targetMark"
+        "targetMark",
+        "battlePlan"
       ],
       "defaultAbilityId": "scatterShot",
       "aiProfile": "aggressive",

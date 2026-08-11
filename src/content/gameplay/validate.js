@@ -15,6 +15,7 @@ import { validateResourceDefinition } from "../../combat/resources.js";
 import { REDIRECT_IDS } from "../../combat/trajectory.js";
 import { SELECTION_POLICY_IDS, MAX_PROPAGATION_HOPS } from "../../combat/propagation.js";
 import { FIXTURE_STATES, FIXTURE_VISIBILITY } from "../../combat/fixtures.js";
+import { HOSTILE_BARRIER_MODES, WINDOW_RELATIONSHIPS } from "../../combat/sequencing.js";
 
 /** Trigger kinds the fixture runtime understands. */
 const FIXTURE_TRIGGER_TYPES = ["unitEnters", "command"];
@@ -312,11 +313,57 @@ export function validateGameplayData(data, context) {
     }
 
     for (const resourceId of Object.keys(ability.costs || {})) {
+      // A faction-scoped cost comes out of the squad's pool, so the unit
+      // holding the ability is not expected to declare it. Checking a unit's
+      // own dictionary for one made a squad-wide cost look unpayable.
+      if ((resources[resourceId] || {}).scope === "faction") continue;
       const users = Object.keys(units).filter((unitId) => (units[unitId].abilities || []).includes(id));
       const unmet = users.filter((unitId) => !((units[unitId].resources || {})[resourceId]));
       if (users.length && unmet.length === users.length) {
         errors.push(
           label("abilities", id) + ' costs "' + resourceId + '" but no unit that has it carries that resource.'
+        );
+      }
+    }
+
+    /* ---- activation window ----
+     *
+     * A command that sequences turns is authored entirely as numbers, so it
+     * can be authored into uselessness in several quiet ways. Each of these
+     * produces an ability that appears, costs its resource and then does
+     * nothing a player could notice. */
+    const window = ability.activationWindow;
+    if (window) {
+      if (window.lookahead != null && !(window.lookahead > 0)) {
+        errors.push(label("abilities", id) + " commands a window that reaches no further than now.");
+      }
+      if (window.maxUnits != null && window.maxUnits < 2) {
+        errors.push(
+          label("abilities", id) +
+            " can sequence fewer than two activations, so there is no order to change."
+        );
+      }
+      if (window.relationship && !WINDOW_RELATIONSHIPS.includes(window.relationship)) {
+        errors.push(
+          label("abilities", id) + ' commands unknown relationship "' + window.relationship +
+            '". Available: ' + WINDOW_RELATIONSHIPS.join(", ")
+        );
+      }
+      if (window.hostileBarrier && !HOSTILE_BARRIER_MODES.includes(window.hostileBarrier)) {
+        errors.push(
+          label("abilities", id) + ' uses unknown hostile-barrier mode "' + window.hostileBarrier +
+            '". Available: ' + HOSTILE_BARRIER_MODES.join(", ")
+        );
+      }
+      if (window.includeActive && window.maxUnits === 1) {
+        errors.push(
+          label("abilities", id) + " can only sequence the unit already acting, which changes nothing."
+        );
+      }
+      if ((ability.effects || []).length) {
+        warnings.push(
+          label("abilities", id) +
+            " is a sequencing command with ordinary effects; those never run, because it is not issued as one."
         );
       }
     }
