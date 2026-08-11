@@ -16,9 +16,20 @@
  *   after   the handler has run and battle state reflects it. This is where
  *           counterattacks, pursuit and "advance into the opening" live.
  *
- * Cancellation (a before-reaction that stops the triggering event outright) is
- * deliberately NOT supported yet: it needs an event-veto contract the queue
- * does not have. `STAGES` is where it would be added.
+ * CANCELLATION, AND WHY IT IS NOT A STAGE
+ *
+ * This header used to say that cancelling a triggering event needed an
+ * event-veto contract the queue does not have, and that `STAGES` was where it
+ * would go. It was wrong about the location. Teaching `processNextEvent` to
+ * skip handlers would have made every handler's precondition "unless somebody
+ * vetoed me", which is the kind of rule that is true in review and false in
+ * production six months later.
+ *
+ * The answer was an ordinary event instead: `actionDeclared` fires before an
+ * action becomes real, a before-stage reaction writes a verdict onto it, and
+ * the *declaration's own handler* decides what to emit. Nothing is ever
+ * skipped, and the veto lives in exactly one handler that exists to hold it.
+ * See `src/combat/interventions.js`.
  * =======================================================================*/
 
 export const STAGES = ["before", "after"];
@@ -46,6 +57,34 @@ export const REACTION_EVENT_TYPES = [
     name: "Activation ended",
     from: ["turnEnded"],
     fields: ["unitRef", "teamId"],
+    stages: ["after"]
+  },
+  {
+    id: "actionDeclared",
+    name: "Action declared",
+    from: ["actionDeclared"],
+    fields: [
+      "unitRef",
+      "teamId",
+      "actionKind",
+      "abilityId",
+      "targetRefs",
+      "declarationId",
+      "redirectable"
+    ],
+    // The only stage at which an intervention means anything. An action that
+    // has already resolved cannot be cancelled, and pretending otherwise by
+    // offering an `after` stage here would be a trap for authors.
+    stages: ["before"]
+  },
+  {
+    id: "actionPrevented",
+    name: "Action prevented",
+    from: ["actionPrevented"],
+    fields: ["unitRef", "teamId", "sourceRef", "abilityId", "reason"],
+    // The follow-up moment: you stopped them, now make it hurt. Deliberately
+    // `after`, so the punish lands against a world in which the enemy's action
+    // has definitively not happened.
     stages: ["after"]
   },
   {
@@ -195,6 +234,50 @@ export function deriveReactionEvents(simEvent, stage, view) {
           unitRef: ref(simEvent.unitId),
           teamId: team(simEvent.unitId),
           unitId: simEvent.unitId
+        });
+      }
+      break;
+
+    case "actionDeclared": {
+      if (stage !== "before") break;
+      const targetIds = simEvent.targetUnitIds || [];
+      out.push({
+        type: "actionDeclared",
+        unitRef: ref(simEvent.sourceUnitId),
+        teamId: team(simEvent.sourceUnitId),
+        unitId: simEvent.sourceUnitId,
+        sourceUnitId: simEvent.sourceUnitId,
+        actionKind: simEvent.kind,
+        abilityId: simEvent.abilityId || null,
+        targetRefs: targetIds.map(ref),
+        targetUnitIds: targetIds.slice(),
+        // The handle an intervention effect needs. Carried on the event rather
+        // than looked up from "whatever is currently open", because a nested
+        // declaration would otherwise shadow the one this reaction is actually
+        // responding to.
+        declarationId: simEvent.declarationId || null,
+        redirectable: simEvent.redirectable !== false,
+        tile: simEvent.target || null,
+        from: simEvent.from || null,
+        to: simEvent.target || null,
+        path: simEvent.path || null
+      });
+      break;
+    }
+
+    case "actionPrevented":
+      if (stage === "after") {
+        out.push({
+          type: "actionPrevented",
+          // The subject is whoever was stopped; the source is whoever stopped
+          // them. A punish reaction belongs to the source.
+          unitRef: ref(simEvent.unitId),
+          teamId: team(simEvent.unitId),
+          unitId: simEvent.unitId,
+          sourceRef: ref(simEvent.sourceUnitId),
+          sourceUnitId: simEvent.sourceUnitId || null,
+          abilityId: simEvent.abilityId || null,
+          reason: simEvent.reason || null
         });
       }
       break;

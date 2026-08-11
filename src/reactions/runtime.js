@@ -279,7 +279,9 @@ function buildConditionContext(state, deps, view, reaction, reactorId, event) {
     reactorIsActionable: () => view.unitIsActionable(reactorId),
     reactorHpPercent: () => view.hpPercent(reactorId),
     reactorHasStatus: (statusId) => view.hasStatus(reactorId, statusId),
+    unitHasStatus: (id, statusId) => (id ? view.hasStatus(id, statusId) : false),
     unitIsAlive: (id) => view.unitIsAlive(id),
+    unitIsActionable: (id) => (id ? view.unitIsActionable(id) : false),
     distanceTo: (id) => (id ? view.distance(reactorId, id) : null),
     missionFact: (fact) => (state.mission ? state.mission.facts[fact] : undefined),
     // What the *reactor's faction* believes about a unit. A reaction gated on

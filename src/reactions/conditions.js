@@ -162,6 +162,46 @@ export const REACTION_CONDITION_REGISTRY = {
     evaluate: (condition, ctx) => ctx.reactorHasStatus(condition.reactorHasStatus)
   },
 
+  /**
+   * A status on somebody other than the reactor.
+   *
+   * This is how a duel is expressed without the engine knowing what a duel is:
+   * one ability marks an enemy, and the reaction that answers that enemy's
+   * actions asks whether the mark is there. No relationship table, no bespoke
+   * "challenger" field on the unit — a status and a condition.
+   */
+  subjectHasStatus: {
+    fields: ["subjectHasStatus", "of"],
+    summary: 'A status on the event\'s subject, or on its source with `of: "source"`.',
+    evaluate: (condition, ctx) => {
+      const targetId = condition.of === "source" ? ctx.event.sourceUnitId : ctx.event.unitId;
+      if (!targetId) return false;
+      return ctx.unitHasStatus(targetId, condition.subjectHasStatus);
+    }
+  },
+
+  /**
+   * Who the declared action is aimed at, relative to the reactor.
+   *
+   * `self` is the bodyguard's own turn to be shot at; `allied` is the reason
+   * she steps in front of somebody else. Multi-target declarations match if
+   * *any* of their targets qualify, because a blast that catches your charge
+   * is still a blast that caught your charge.
+   */
+  declaredTargetRelation: {
+    fields: ["declaredTargetRelation"],
+    summary: "The declared action targets the reactor (self), an ally, an enemy or a neutral.",
+    evaluate: (condition, ctx) => {
+      const wanted = condition.declaredTargetRelation;
+      const targets = ctx.event.targetUnitIds || [];
+      if (!targets.length) return false;
+      if (wanted === "self") return targets.includes(ctx.reactorId);
+      return targets.some(
+        (id) => id !== ctx.reactorId && ctx.relationship(ctx.reactorId, id) === wanted
+      );
+    }
+  },
+
   missionFact: {
     fields: ["missionFact", "equals"],
     summary: "A mission-local fact set by the scripting layer.",
@@ -234,6 +274,44 @@ export const REACTION_CONDITION_REGISTRY = {
       if (!from || !to) return false;
       const became = !ctx.canSeeTile(from) && ctx.canSeeTile(to);
       return condition.subjectBecameExposed === false ? !became : became;
+    }
+  },
+
+  /**
+   * The unit that declared the triggering action can still take it.
+   *
+   * The condition an intervention needs and nothing else does. Reactions are
+   * re-checked immediately before they execute, but "is the actor still
+   * there?" is not something the existing vocabulary could ask: `subjectAlive`
+   * asks about the unit an event happened *to*, and for a declaration the
+   * actor and the subject are the same unit only by coincidence.
+   *
+   * Without it, a second duelist reacting to the same declaration spends a
+   * Command Point intercepting somebody the first one already killed.
+   */
+  triggeringActorStillValid: {
+    fields: ["triggeringActorStillValid"],
+    summary: "The unit whose action triggered this can still act (alive, not dormant).",
+    evaluate: (condition, ctx) => {
+      const actorId = ctx.event.sourceUnitId || ctx.event.unitId;
+      const valid = !!actorId && ctx.unitIsActionable(actorId);
+      return condition.triggeringActorStillValid === false ? !valid : valid;
+    }
+  },
+
+  /**
+   * The declared action can be pointed at somebody else.
+   *
+   * Authored on the declaration, not guessed here: an area effect and a
+   * self-buff are not redirectable, and a taunt that is offered against them
+   * is a prompt the player can only regret taking.
+   */
+  actionIsRedirectable: {
+    fields: ["actionIsRedirectable"],
+    summary: "The triggering declaration is a single-target action that can be redirected.",
+    evaluate: (condition, ctx) => {
+      const can = ctx.event.redirectable !== false && !!ctx.event.declarationId;
+      return condition.actionIsRedirectable === false ? !can : can;
     }
   },
 

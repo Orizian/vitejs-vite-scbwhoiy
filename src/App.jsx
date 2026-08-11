@@ -96,6 +96,20 @@ import {
   FIXTURE_VISIBILITY
 } from "./combat/fixtures.js";
 import {
+  INTERVENTION_KINDS,
+  INTERVENTION_LIMITS,
+  createInterventionState,
+  openDeclaration,
+  findDeclaration,
+  openDeclarationOf,
+  proposeIntervention,
+  resolveDeclaration,
+  describeIntervention,
+  describeVerdict,
+  serializeInterventions,
+  deserializeInterventions
+} from "./combat/interventions.js";
+import {
   createCausalityState,
   beginChain,
   childCause,
@@ -3403,6 +3417,10 @@ function createBattle(encounterId, seed, options) {
     // Always present, so no code path has to ask whether the collection exists.
     fixtures: createFixtureState(),
 
+    // Actions that have been chosen and paid for but have not happened yet.
+    // The only window in which a defender can change what is about to occur.
+    interventions: createInterventionState(),
+
     // Faction-scoped resource balances. Unit balances stay on the unit, where
     // they already live; this is the shared half of one resource system.
     resources: createResourceState(COMBAT_RESOURCE_DEFINITIONS, encounter.teams.map((team) => team.id)),
@@ -5428,6 +5446,192 @@ function emitBattleTrigger(state, triggerName, payload) {
   for (const listener of state.triggerListeners) listener(state, triggerName, payload);
 }
 
+/* ---------------------------------------------------------------
+ * DECLARED ACTIONS
+ *
+ * A command used to become its consequence immediately: `useAbility` queued
+ * `abilityUsed`, and by the time anything could respond, the shot had been
+ * fired. There was no moment at which an action was *chosen but not yet true*,
+ * and without that moment a defender can only ever clean up afterwards.
+ *
+ * `actionDeclared` is that moment. It is an ordinary event with an ordinary
+ * handler, which is the whole trick: the veto contract the event queue does
+ * not have is not needed, because the declaration itself is the veto point.
+ * The handler asks the intervention record what the verdict was and emits the
+ * real action, a different real action, or nothing at all.
+ *
+ * WHAT THIS BUYS
+ *
+ *   - `processNextEvent` is untouched. No handler is ever skipped, no event is
+ *     ever silently dropped, and the continuation invariant is unaffected:
+ *     `actionDeclared` always resolves, it just sometimes resolves into
+ *     nothing.
+ *   - A cancelled action and a resolved one have the same shape in a causal
+ *     trace. One has a shorter tail.
+ *   - Content that never mentions interventions behaves byte-identically,
+ *     because the default verdict is "continue".
+ *
+ * COST-COMMIT SEMANTICS — the rule, stated once
+ *
+ *   A declared action is paid for whether or not it resolves.
+ *
+ * The resource cost is queued *ahead* of the declaration, so it has already
+ * been spent by the time anyone can object. The activation is marked spent by
+ * the declaration, not by the outcome. Recovery is charged either way. Being
+ * stopped is a thing that happened to you, not a refund — if it were a refund,
+ * intercepting would cost the defender a Command Point to accomplish nothing
+ * except making the attacker try again, and no defensive ability should be a
+ * tempo loss for the person using it.
+ * -------------------------------------------------------------*/
+
+/**
+ * Opens the window in which an action can still be stopped.
+ *
+ * Queued first so the event carries a real cause, then the declaration is
+ * opened against that cause's chain and the id is stamped back onto the event.
+ */
+function declareAction(state, declaration) {
+  const actor = state.units[declaration.unitId];
+  const event = queueEvent(state, {
+    type: "actionDeclared",
+    kind: declaration.kind,
+    unitId: declaration.unitId,
+    sourceUnitId: declaration.unitId,
+    abilityId: declaration.abilityId || null,
+    target: declaration.target || null,
+    targetUnitIds: (declaration.targetUnitIds || []).slice(),
+    tiles: declaration.tiles || [],
+    path: declaration.path || null,
+    from: declaration.from || null,
+    stepFacings: declaration.stepFacings || [],
+    facingFrom: declaration.facingFrom || null,
+    facingTo: declaration.facingTo || null,
+    redirectable: declaration.redirectable !== false
+  });
+  const record = openDeclaration(state.interventions, {
+    kind: declaration.kind,
+    actorUnitId: declaration.unitId,
+    actorTeamId: actor ? actor.teamId : null,
+    abilityId: declaration.abilityId || null,
+    targetUnitIds: declaration.targetUnitIds || [],
+    tile: declaration.target || null,
+    path: declaration.path || null,
+    redirectable: declaration.redirectable !== false,
+    chainId: event.cause ? event.cause.chainId : null,
+    openedAt: state.activationCount
+  });
+  event.declarationId = record.id;
+  return record;
+}
+
+/**
+ * Whether an action can be pointed at somebody else at all.
+ *
+ * A single-target shot can. A self-buff, an empty-tile placement and a
+ * five-tile blast cannot — dragging an area effect across the map is not a
+ * defensive parry, it is a second ability, and the honest answer for those is
+ * that a defender must cancel or replace instead.
+ */
+function actionIsRedirectable(ability, targeting) {
+  if (!ability) return false;
+  const shape = (ability.targeting.area && ability.targeting.area.shape) || "single";
+  if (shape !== "single") return false;
+  if (ability.targeting.type === "self" || ability.targeting.type === "emptyTile") return false;
+  return (targeting.targetUnitIds || []).length === 1;
+}
+
+/** The declared route, cut short at a tile that is actually on it. */
+function truncatedRoute(path, tile) {
+  if (!path || path.length < 2 || !tile) return null;
+  const index = path.findIndex((step) => step.x === tile.x && step.y === tile.y);
+  // Index 0 is where the mover already stands, so stopping there is a cancel
+  // rather than a redirect, and the last tile is the declared destination.
+  if (index < 1 || index >= path.length - 1) return null;
+  return { path: path.slice(0, index + 1), to: { x: tile.x, y: tile.y }, tiles: index };
+}
+
+/**
+ * What a declared action actually turns into.
+ *
+ * The fallback matters as much as the verdicts. A redirect whose new target is
+ * not legally targetable does not silently become a shot at the wrong person
+ * and does not silently evaporate: it reverts to the declared action and says
+ * why, because a defensive ability that sometimes does nothing for reasons the
+ * player cannot see is worse than one that fails loudly.
+ */
+function resolveDeclaredAction(state, event, verdict) {
+  const actor = state.units[event.sourceUnitId];
+  if (!actor || !actor.alive || actor.dormant) {
+    // Not an intervention kind: the engine simply will not resolve an action
+    // for somebody who is no longer able to take it. An intercept that killed
+    // the attacker stops the attack without needing to say so.
+    return { prevented: true, reason: "actorGone", byUnitId: verdict.byUnitId || null };
+  }
+  if (verdict.kind === "cancel" || verdict.kind === "replace") {
+    return {
+      prevented: true,
+      reason: verdict.kind,
+      byUnitId: verdict.byUnitId || null,
+      reactionId: verdict.byReactionId || null
+    };
+  }
+  if (verdict.kind !== "redirect") return { prevented: false, event };
+
+  const revert = (why) => ({ prevented: false, event, revertedFrom: "redirect", why });
+
+  if (event.kind === "movement") {
+    const stop = truncatedRoute(event.path, verdict.tile);
+    if (!stop) return revert("that tile is not on the route");
+    if (!isTileFree(state, stop.to.x, stop.to.y, event.sourceUnitId)) {
+      return revert("that tile is occupied");
+    }
+    const stepFacings = (event.stepFacings || []).slice(0, stop.tiles);
+    return {
+      prevented: false,
+      redirected: true,
+      byUnitId: verdict.byUnitId || null,
+      event: {
+        ...event,
+        path: stop.path,
+        target: stop.to,
+        tiles: stop.tiles,
+        stepFacings,
+        facingTo: stepFacings.length ? stepFacings[stepFacings.length - 1] : event.facingFrom
+      }
+    };
+  }
+
+  const target = state.units[verdict.targetUnitId];
+  if (!target || !target.alive) return revert("the new target is gone");
+  // The full targeting check, not a distance comparison: range, line of sight,
+  // filters and concealment all still apply to a shot somebody else pulled.
+  const retargeted = evaluateTargeting(state, event.sourceUnitId, event.abilityId, {
+    unitId: verdict.targetUnitId
+  });
+  if (!retargeted.valid) return revert(retargeted.errors[0] || "the shot cannot be pulled that way");
+
+  return {
+    prevented: false,
+    redirected: true,
+    byUnitId: verdict.byUnitId || null,
+    event: {
+      ...event,
+      target: retargeted.tile,
+      targetUnitIds: retargeted.targetUnitIds,
+      tiles: retargeted.tiles,
+      facingTo: facingFromTiles(actor, retargeted.tile, actor.facing)
+    }
+  };
+}
+
+/** A short human phrase for what was declared. Shared by the log, the reaction
+ *  prompt and the debug view so all three call the same thing by one name. */
+function describeDeclaredAction(state, event) {
+  if (event.kind === "movement") return "the move";
+  const ability = event.abilityId ? CONTENT.abilities[event.abilityId] : null;
+  return ability ? ability.name : "the action";
+}
+
 const EVENT_HANDLERS = {
   unitActivated(state, event) {
     const unit = state.units[event.unitId];
@@ -5568,6 +5772,132 @@ const EVENT_HANDLERS = {
       from: event.from || priorFacing,
       to: unit.facing,
       reason: event.reason || "manual"
+    });
+  },
+
+  /**
+   * The action has been chosen and paid for. This is the last moment anyone
+   * can do anything about it.
+   *
+   * By the time this handler runs, the before-stage reactions have already had
+   * their say and written a verdict onto the declaration. All that is left is
+   * to emit what the verdict describes.
+   */
+  actionDeclared(state, event) {
+    const verdict = resolveDeclaration(state.interventions, event.declarationId);
+    const outcome = resolveDeclaredAction(state, event, verdict);
+    const what = describeDeclaredAction(state, event);
+
+    if (outcome.revertedFrom) {
+      logLine(
+        state,
+        "interventionFailed",
+        "The redirect on " + what + " did not hold — " + outcome.why,
+        { declarationId: event.declarationId, unitId: event.sourceUnitId, reason: outcome.why }
+      );
+    }
+
+    if (outcome.prevented) {
+      // The activation is spent either way. See the cost-commit rule above:
+      // being stopped is a thing that happened to you, not a refund.
+      if (event.kind === "movement" && state.activation && state.activation.unitId === event.sourceUnitId) {
+        state.activation.moved = true;
+        state.activation.movementRecovery += movementRecoveryFor(0);
+      }
+      queueEvent(state, {
+        type: "actionPrevented",
+        declarationId: event.declarationId,
+        kind: event.kind,
+        unitId: event.sourceUnitId,
+        sourceUnitId: outcome.byUnitId || null,
+        abilityId: event.abilityId || null,
+        targetUnitIds: event.targetUnitIds || [],
+        reactionId: outcome.reactionId || null,
+        reason: outcome.reason
+      });
+      return;
+    }
+
+    const resolved = outcome.event;
+    if (resolved.facingTo && resolved.facingTo !== resolved.facingFrom) {
+      queueEvent(state, {
+        type: "facingChanged",
+        unitId: resolved.sourceUnitId,
+        from: resolved.facingFrom,
+        to: resolved.facingTo,
+        reason: resolved.kind === "movement" ? "movement" : "attack"
+      });
+    }
+
+    if (outcome.redirected) {
+      logLine(
+        state,
+        "actionRedirected",
+        unitLabel(state, outcome.byUnitId || resolved.sourceUnitId) +
+          " pulls " + what + " onto " +
+          (resolved.kind === "movement"
+            ? tileKey(resolved.target.x, resolved.target.y)
+            : unitLabel(state, resolved.targetUnitIds[0])),
+        {
+          declarationId: event.declarationId,
+          unitId: outcome.byUnitId || null,
+          targetUnitIds: resolved.targetUnitIds || [],
+          abilityId: resolved.abilityId || null
+        }
+      );
+    }
+
+    if (resolved.kind === "movement") {
+      queueEvent(state, {
+        type: "unitMoved",
+        unitId: resolved.sourceUnitId,
+        from: resolved.from,
+        to: resolved.target,
+        path: resolved.path.map((step) => ({ x: step.x, y: step.y })),
+        tiles: resolved.tiles,
+        startFacing: resolved.facingFrom,
+        stepFacings: resolved.stepFacings || []
+      });
+      return;
+    }
+
+    queueEvent(state, {
+      type: "abilityUsed",
+      sourceUnitId: resolved.sourceUnitId,
+      abilityId: resolved.abilityId,
+      target: resolved.target,
+      targetUnitIds: resolved.targetUnitIds,
+      tiles: resolved.tiles
+    });
+  },
+
+  /**
+   * An action that was declared and then did not happen.
+   *
+   * Its own event rather than a log line, because everything downstream of an
+   * action that never resolved is a legitimate reactive moment: the defender
+   * who stopped it may want to follow up, and the attacker's allies may want
+   * to answer.
+   */
+  actionPrevented(state, event) {
+    const what = event.abilityId
+      ? (CONTENT.abilities[event.abilityId] || {}).name || event.abilityId
+      : "the move";
+    const whose = unitLabel(state, event.unitId) + "'s " + what;
+    const by = event.sourceUnitId ? unitLabel(state, event.sourceUnitId) : "the defence";
+    const text =
+      event.reason === "actorGone"
+        ? whose + " never happens: they are no longer able to act"
+        : event.reason === "replace"
+        ? whose + " never lands — " + by + " got there first"
+        : whose + " is stopped by " + by;
+    logLine(state, "actionPrevented", text, {
+      unitId: event.unitId,
+      sourceUnitId: event.sourceUnitId,
+      abilityId: event.abilityId,
+      reactionId: event.reactionId,
+      reason: event.reason,
+      declarationId: event.declarationId
     });
   },
 
@@ -7893,37 +8223,33 @@ const COMMAND_HANDLERS = {
     });
   },
 
+  /**
+   * Voluntary movement. Declared, and therefore stoppable.
+   *
+   * Being shoved is not: `unitForcedMove` has no declaration and never will,
+   * because a mover who did not choose to go has made no decision for a
+   * defender to answer. That asymmetry is the point, not an oversight — it is
+   * what stops a duelist from vetoing the consequences of a shove she was not
+   * part of.
+   */
   move(state, command) {
     const path = command.path;
     const unit = state.units[command.unitId];
-    const from = { x: path[0].x, y: path[0].y };
-    const to = { x: path[path.length - 1].x, y: path[path.length - 1].y };
     const startFacing = normalizeFacing(unit.facing);
     const stepFacings = path.slice(1).map((tile, index) =>
       facingFromTiles(path[index], tile, startFacing)
     );
-    const finalFacing = stepFacings.length
-      ? stepFacings[stepFacings.length - 1]
-      : startFacing;
-    queueEvent(state, {
-      type: "unitMoved",
+    declareAction(state, {
+      kind: "movement",
       unitId: command.unitId,
-      from,
-      to,
+      from: { x: path[0].x, y: path[0].y },
+      target: { x: path[path.length - 1].x, y: path[path.length - 1].y },
       path: path.map((p) => ({ x: p.x, y: p.y })),
       tiles: path.length - 1,
-      startFacing,
-      stepFacings
+      stepFacings,
+      facingFrom: startFacing,
+      facingTo: stepFacings.length ? stepFacings[stepFacings.length - 1] : startFacing
     });
-    if (finalFacing !== startFacing) {
-      queueEvent(state, {
-        type: "facingChanged",
-        unitId: command.unitId,
-        from: startFacing,
-        to: finalFacing,
-        reason: "movement"
-      });
-    }
   },
 
   useAbility(state, command) {
@@ -7936,6 +8262,9 @@ const COMMAND_HANDLERS = {
     state.activation.acted = true;
     state.activation.actionRecovery += abilityRecovery(command.abilityId);
     const abilityDefinition = CONTENT.abilities[command.abilityId];
+    // Queued ahead of the declaration on purpose: the cost is spent before
+    // anybody can object, which is the cost-commit rule in the one place it
+    // has to be true.
     for (const resourceId of Object.keys(abilityDefinition.costs || {})) {
       queueEvent(state, {
         type: "resourceSpent",
@@ -7946,24 +8275,18 @@ const COMMAND_HANDLERS = {
       });
     }
     const actor = state.units[command.unitId];
-    const attackFacing = targeting.tile
-      ? facingFromTiles(actor, targeting.tile, actor.facing)
-      : normalizeFacing(actor.facing);
-    if (targeting.tile && attackFacing !== normalizeFacing(actor.facing)) {
-      queueEvent(state, {
-        type: "facingChanged",
-        unitId: command.unitId,
-        from: normalizeFacing(actor.facing),
-        to: attackFacing,
-        reason: "attack"
-      });
-    }
-    queueEvent(state, {
-      type: "abilityUsed",
-      sourceUnitId: command.unitId,
+    declareAction(state, {
+      kind: "ability",
+      unitId: command.unitId,
       abilityId: command.abilityId,
       target: targeting.tile,
-      targetUnitIds: targeting.targetUnitIds
+      targetUnitIds: targeting.targetUnitIds,
+      tiles: targeting.tiles,
+      facingFrom: normalizeFacing(actor.facing),
+      facingTo: targeting.tile
+        ? facingFromTiles(actor, targeting.tile, actor.facing)
+        : normalizeFacing(actor.facing),
+      redirectable: actionIsRedirectable(abilityDefinition, targeting)
     });
   },
 
@@ -8895,6 +9218,10 @@ function deserializeBattle(serialized) {
   // re-establishes the shape for a save taken before they existed, and
   // rebuilds the id counter so a reload cannot mint an id already in use.
   state.fixtures = deserializeFixtures(state.fixtures);
+  // Same contract as fixtures: plain data, carried as-is, re-shaped only for a
+  // save taken before it existed. A save made while a declaration was open
+  // reloads with that declaration still open and its verdict intact.
+  state.interventions = deserializeInterventions(state.interventions);
   for (const id of state.unitOrder) {
     const unit = state.units[id];
     if (unit.ref == null) unit.ref = id;
@@ -10083,6 +10410,32 @@ const REACTION_ENGINE = {
 
   scriptedRepair(state, options) {
     MISSION_ENGINE.scriptedRepair(state, options);
+  },
+
+  /**
+   * Offers to change what a declared action does.
+   *
+   * The reaction layer never touches the intervention collection directly, and
+   * never sees a command. It hands over a proposal and is told yes or no; the
+   * engine owns the legality that the reaction layer has no way to judge —
+   * whether a redirected shot is still in range and still has line of sight.
+   */
+  proposeIntervention(state, declarationId, proposal) {
+    if (!state.interventions) return { ok: false, reason: "no intervention model" };
+    return proposeIntervention(state.interventions, declarationId, proposal, (record, offer) => {
+      if (offer.kind !== "redirect") return null;
+      const target = state.units[offer.targetUnitId];
+      if (!target || !target.alive) return "the new target is gone";
+      if (record.kind === "movement") return "a move cannot be pointed at a unit";
+      // The same check the declaration's own handler will make when it
+      // resolves. Running it here as well means an illegal redirect is refused
+      // while the reaction can still be refunded, rather than accepted now and
+      // quietly reverted a moment later.
+      const retargeted = evaluateTargeting(state, record.actorUnitId, record.abilityId, {
+        unitId: offer.targetUnitId
+      });
+      return retargeted.valid ? null : retargeted.errors[0] || "that target is not legal";
+    });
   },
 
   applyStatus(state, sourceUnitId, targetUnitIds, statusId) {
@@ -21759,6 +22112,18 @@ test("Event queue", "Event processing cannot run forever", () => {
   );
 });
 
+/**
+ * Events that deliberately write nothing.
+ *
+ * `actionDeclared` is bookkeeping: it opens the window in which an action can
+ * be stopped, and when nothing stops it — which is nearly always — narrating
+ * it would print "declares Heavy Blow" immediately above "uses Heavy Blow" for
+ * every attack in the game. When something *does* stop it, the log is not
+ * quiet at all: `actionPrevented`, `actionRedirected` and `interventionFailed`
+ * each write their own line, and between them they tell the whole story.
+ */
+const SILENT_EVENT_TYPES = new Set(["actionDeclared"]);
+
 test("Event queue", "Battle logs match resolved events", () => {
   const state = testBattle();
   isolate(state, ["u2", "u4"]);
@@ -21774,6 +22139,7 @@ test("Event queue", "Battle logs match resolved events", () => {
   });
   const logged = state.battleLog.slice(before).map((entry) => entry.type);
   for (const event of result.events) {
+    if (SILENT_EVENT_TYPES.has(event.type)) continue;
     assert(logged.includes(event.type), "Missing log entry for " + event.type);
   }
 });
@@ -23856,6 +24222,147 @@ test("Orchestration", "The input state machine can never sit on a unit that is n
   activateForTest(resumed, other.kell.id);
   const stale = reconcileInputWithBattle(createInputState(), resumed);
   assertEqual(stale.selectedUnitId, other.kell.id, "and picks the active unit back up");
+});
+
+/* ---------------------------------------------------------------
+ * THE CONTINUATION INVARIANT, AS A PROPERTY
+ *
+ * The tests above pin the specific shapes the softlock took. These pin the
+ * property itself, so a later phase that invents a new way to interrupt an
+ * action finds out here rather than at the point somebody notices the battle
+ * has quietly stopped asking for input.
+ *
+ * They are deliberately written against `battleContinuation` and nothing else,
+ * because that function is the contract: the UI does what it says, and every
+ * softlock this project has had was a moment when it said something the UI
+ * could not act on.
+ * -------------------------------------------------------------*/
+
+/**
+ * The battle always has somewhere to go.
+ *
+ * Four things have to agree, and every stall so far has been a moment when
+ * they did not:
+ *
+ *   - the continuation is never "stalled";
+ *   - a pending reaction window is the *only* reason to report "reaction";
+ *   - an "active" unit is one that can genuinely act;
+ *   - the activation record names the unit the state calls active.
+ */
+function assertContinuationIsLive(state, why) {
+  const where = why ? " (" + why + ")" : "";
+  const next = battleContinuation(state);
+  assert(next.kind !== "stalled", "the battle stalled" + where + ": " + (next.reason || ""));
+  assertEqual(
+    next.kind === "reaction",
+    reactionWindowPending(state),
+    'only a pending window may report "reaction"' + where
+  );
+  if (state.activation) {
+    assertEqual(
+      state.activation.unitId,
+      state.activeUnitId,
+      "the activation record names the active unit" + where
+    );
+  }
+  if (next.kind === "active") {
+    const unit = state.units[next.unitId];
+    assert(unit && unit.alive && !unit.dormant, "an active unit must be able to act" + where);
+  }
+  if (next.kind === "advance") {
+    assertEqual(state.activeUnitId, null, "advancing means nothing is activated" + where);
+    assert(next.unitId, "advancing must name who acts next" + where);
+  }
+  return next;
+}
+
+test("Continuation", "The invariant holds after every activation of a whole battle", () => {
+  const state = linkBattle(120, { autoResolveReactions: true });
+  assertContinuationIsLive(state, "before anything happens");
+
+  let activations = 0;
+  while (!state.finished && activations < 200) {
+    const result = runActivation(state);
+    if (!result.unitId) break;
+    activations += 1;
+    assertContinuationIsLive(state, "after activation " + activations + " (" + result.unitId + ")");
+  }
+  assert(activations > 3, "the battle actually ran, got " + activations + " activations");
+  assert(state.finished || activations >= 200, "and reached an ending");
+});
+
+test("Continuation", "A parked window is the only thing that stops the queue, and it always resumes", () => {
+  const state = linkBattle(121, { autoResolveReactions: false });
+  const { kell, target } = stageLinkChain(state);
+  activateForTest(state, kell.id);
+  assertContinuationIsLive(state, "activated");
+
+  target.currentHp = 1;
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [target.id],
+    power: 400,
+    formula: "physical"
+  });
+  processAllEvents(state);
+
+  assert(reactionWindowPending(state), "a choice is pending");
+  assertEqual(assertContinuationIsLive(state, "parked").kind, "reaction");
+  // The queue is parked, not lost: whatever was mid-drain is still there to
+  // finish, which is exactly what the old deadlock threw away.
+  assertEqual(state.activeUnitId, kell.id, "and the actor keeps the floor while it waits");
+
+  resolveReactionChoice(state, reactionModel(state).window.offers[0].id);
+  assert(!reactionWindowPending(state), "the window closed");
+  assertContinuationIsLive(state, "resumed");
+});
+
+test("Continuation", "A battle saved inside a reaction window resumes on the same window", () => {
+  const state = linkBattle(122, { autoResolveReactions: false });
+  const { kell, target } = stageLinkChain(state);
+  activateForTest(state, kell.id);
+  target.currentHp = 1;
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: kell.id,
+    targetUnitIds: [target.id],
+    power: 400,
+    formula: "physical"
+  });
+  processAllEvents(state);
+  assert(reactionWindowPending(state), "a choice is pending before the save");
+
+  const restored = deserializeBattle(serializeBattle(state));
+  assert(reactionWindowPending(restored), "and is still pending after the reload");
+  assertEqual(
+    restored.reactions.window.id,
+    state.reactions.window.id,
+    "the same window, not a freshly discovered one"
+  );
+  assertEqual(assertContinuationIsLive(restored, "reloaded").kind, "reaction");
+
+  resolveReactionChoice(restored, restored.reactions.window.offers[0].id);
+  assertContinuationIsLive(restored, "resolved after a reload");
+});
+
+test("Continuation", "Declining every window still runs a battle to an ending", () => {
+  const state = linkBattle(123, { autoResolveReactions: false });
+  let activations = 0;
+  let guard = 0;
+  while (!state.finished && activations < 200 && guard < 600) {
+    guard += 1;
+    if (reactionWindowPending(state)) {
+      // The pathological player: says no to everything, forever. The battle
+      // still has to end, and every step of it still has to be answerable.
+      resolveReactionChoice(state, null);
+      assertContinuationIsLive(state, "after declining");
+      continue;
+    }
+    const result = runActivation(state);
+    if (!result.unitId) break;
+    activations += 1;
+    assertContinuationIsLive(state, "after activation " + activations);
+  }
+  assert(guard < 600, "declining must not livelock the driver");
 });
 
 /* ---------------------------------------------------------------

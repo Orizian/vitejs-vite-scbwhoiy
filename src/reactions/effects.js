@@ -21,7 +21,140 @@
  *                        no non-basic ability, no second action.
  * =======================================================================*/
 
+/**
+ * Shared preamble for the three intervention effects.
+ *
+ * All of them do the same two things before they do anything different: find
+ * the declaration their triggering event named, and refuse politely if there
+ * is not one. Refusing is the important half — a reaction whose effect returns
+ * `{ ok: false }` is refunded and recorded, which is exactly right for "you
+ * tried to intercept something that had already resolved".
+ */
+function interveningOn(ctx) {
+  const declarationId = ctx.event.declarationId;
+  if (!declarationId) {
+    return { error: "that trigger does not carry an action to intervene in" };
+  }
+  if (!ctx.engine.proposeIntervention) {
+    return { error: "this engine has no intervention model" };
+  }
+  return { declarationId };
+}
+
 export const REACTION_EFFECT_REGISTRY = {
+  /**
+   * No. That does not happen.
+   *
+   * The purest form of the defensive fantasy, and the one that needs the least
+   * explanation: the enemy chose an action, and it does not occur. They still
+   * paid for it — see the cost-commit rule in App.jsx — which is what stops
+   * this from being a way to farm an opponent's turn for free.
+   */
+  cancelTriggeringAction: {
+    name: "Cancel the declared action",
+    fields: [],
+    summary: "The action that triggered this reaction never resolves. Its cost is still spent.",
+    run(effect, ctx) {
+      const found = interveningOn(ctx);
+      if (found.error) return { ok: false, reason: found.error };
+      const result = ctx.engine.proposeIntervention(ctx.state, found.declarationId, {
+        kind: "cancel",
+        byUnitId: ctx.reactorId
+      });
+      if (!result.ok) return { ok: false, reason: result.reason };
+      return { ok: true, detail: "stopped " + (ctx.event.abilityId || "the action") };
+    }
+  },
+
+  /**
+   * You are dealing with me.
+   *
+   * Pulls the declared action onto a different target — by default the
+   * reactor, which is the taunt, the body-block and the parry all at once.
+   * `target: "subject"` points it at the unit the event happened to instead,
+   * which is how a protective ability shields a specific ally.
+   *
+   * The new target is revalidated in full at resolution time: range, line of
+   * sight, filters and concealment all still apply. A defender cannot drag a
+   * short-ranged swing across the map by standing far away and volunteering.
+   */
+  redirectTriggeringAction: {
+    name: "Redirect the declared action",
+    fields: ["target"],
+    summary: "The action resolves against the reactor (or another unit) instead.",
+    validate(effect) {
+      if (effect.target && !["self", "subject", "source"].includes(effect.target)) {
+        return ['redirectTriggeringAction target must be "self", "subject" or "source".'];
+      }
+      return [];
+    },
+    run(effect, ctx) {
+      const found = interveningOn(ctx);
+      if (found.error) return { ok: false, reason: found.error };
+      if (ctx.event.redirectable === false) {
+        return { ok: false, reason: "that action cannot be pointed at somebody else" };
+      }
+      const which = effect.target || "self";
+      const targetId = which === "self" ? ctx.reactorId : ctx.eventUnitId(which);
+      if (!targetId || !ctx.unitIsAlive(targetId)) {
+        return { ok: false, reason: "no living unit to take it instead" };
+      }
+      const result = ctx.engine.proposeIntervention(ctx.state, found.declarationId, {
+        kind: "redirect",
+        byUnitId: ctx.reactorId,
+        targetUnitId: targetId
+      });
+      if (!result.ok) return { ok: false, reason: result.reason };
+      return { ok: true, detail: "took " + (ctx.event.abilityId || "the action") + " instead" };
+    }
+  },
+
+  /**
+   * You are dealing with me *first*.
+   *
+   * The reactor attacks the declared actor, and the declared action never
+   * resolves. Deliberately one effect rather than two, because "hit them and
+   * also stop them" composed out of an attack effect and a cancel effect would
+   * be two reactions racing for one declaration, and the loser would fire into
+   * the void.
+   *
+   * The order inside is the whole design: the intervention is proposed *first*
+   * and the attack only happens if it was accepted. An intercept that was
+   * refused — because something else already intervened, or the chain is
+   * exhausted — costs nothing and does nothing, rather than dealing damage for
+   * an interception that did not occur.
+   */
+  interceptAction: {
+    name: "Intercept",
+    fields: ["abilityId", "power", "formula"],
+    summary: "Attack the declared actor; the action they declared never resolves.",
+    run(effect, ctx) {
+      const found = interveningOn(ctx);
+      if (found.error) return { ok: false, reason: found.error };
+      const actorId = ctx.eventUnitId("source");
+      if (!actorId) return { ok: false, reason: "the event named no actor" };
+      if (!ctx.unitIsAlive(actorId)) return { ok: false, reason: "the actor is already gone" };
+      if (!ctx.isHostile(ctx.reactorId, actorId)) {
+        return { ok: false, reason: "the actor is not an enemy" };
+      }
+
+      const result = ctx.engine.proposeIntervention(ctx.state, found.declarationId, {
+        kind: "replace",
+        byUnitId: ctx.reactorId
+      });
+      if (!result.ok) return { ok: false, reason: result.reason };
+
+      ctx.engine.scriptedAttack(ctx.state, {
+        sourceUnitId: ctx.reactorId,
+        targetUnitIds: [actorId],
+        abilityId: effect.abilityId || null,
+        power: effect.power,
+        formula: effect.formula
+      });
+      return { ok: true, detail: "intercepted " + ctx.unitRef(actorId) };
+    }
+  },
+
   /**
    * Attack a unit named by the triggering event.
    *
