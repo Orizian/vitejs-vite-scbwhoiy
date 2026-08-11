@@ -28,6 +28,7 @@
 import { deriveMissionEvents, DEFAULT_HP_THRESHOLDS } from "./events.js";
 import { matchTrigger, evaluateCondition } from "./conditions.js";
 import { actionById, isBlockingAction } from "./actions.js";
+import { regionContains } from "./regions.js";
 import {
   createFactionState,
   setRelationship,
@@ -120,7 +121,7 @@ function buildContext(state, deps) {
 
   const regionsContaining = (x, y) =>
     (script.regions || [])
-      .filter((region) => region.tiles.some((tile) => tile.x === x && tile.y === y))
+      .filter((region) => regionContains(region.tiles, x, y))
       .map((region) => region.id);
 
   const objectiveDefinition = (ref) =>
@@ -374,7 +375,7 @@ function buildContext(state, deps) {
         },
         region(ref) {
           const tiles = regionTiles(ref);
-          return { contains: (x, y) => tiles.some((tile) => tile.x === x && tile.y === y) };
+          return { contains: (x, y) => regionContains(tiles, x, y) };
         },
         teamAliveCount(teamId) {
           return state.unitOrder.filter((id) => state.units[id].alive && state.units[id].teamId === teamId)

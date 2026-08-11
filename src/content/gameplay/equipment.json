@@ -124,7 +124,8 @@
       "slot": "primaryWeapon",
       "description": "Standard close-quarters shotgun.",
       "compatibleClasses": [
-        "assault"
+        "assault",
+        "sapper"
       ],
       "tags": [
         "ballistic",

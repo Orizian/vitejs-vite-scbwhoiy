@@ -25,6 +25,7 @@
 
 import { REGISTRY_KINDS } from "./format.js";
 import { SELECTION_POLICY_IDS } from "../../combat/propagation.js";
+import { FIXTURE_STATES, FIXTURE_VISIBILITY } from "../../combat/fixtures.js";
 
 /** The chain's selection policies, offered to the author as a closed list. */
 const SELECTION_POLICY_OPTIONS = SELECTION_POLICY_IDS;
@@ -298,6 +299,52 @@ export const REGISTRY_SCHEMAS = {
             typeKey: "type",
             behaviour: true,
             help: "A `displace` effect's distance is the maximum; the player chooses the actual distance."
+          }
+        ]
+      },
+      {
+        id: "fixtureTargeting",
+        label: "Fixture targeting",
+        note:
+          "Present only on actions that command a device already on the map — a " +
+          "remote charge, a beacon, a deployable. Selection is by tag, never by " +
+          "fixture id, so a new device of the same kind needs no code and no new " +
+          "ability.",
+        fields: [
+          {
+            key: "fixtureTargeting.tag",
+            label: "Commands fixtures tagged",
+            kind: "line",
+            help: "Any fixture carrying this tag is eligible. Empty means any fixture."
+          },
+          {
+            key: "fixtureTargeting.ownership",
+            label: "Whose devices",
+            kind: "enum",
+            options: ["own", "team", "any"],
+            behaviour: true
+          },
+          {
+            key: "fixtureTargeting.states",
+            label: "In state",
+            kind: "tags",
+            behaviour: true,
+            help: FIXTURE_STATES.join(" · ")
+          },
+          { key: "fixtureTargeting.rangeMax", label: "Maximum range", kind: "number" },
+          {
+            key: "fixtureTargeting.requiresLineOfSight",
+            label: "Requires line of sight",
+            kind: "boolean",
+            behaviour: true
+          },
+          {
+            key: "fixtureAction",
+            label: "What it does to the device",
+            kind: "enum",
+            options: ["", "disarm", "arm", "remove"],
+            behaviour: true,
+            help: "Empty activates it. Anything else changes its state instead."
           }
         ]
       },
@@ -855,6 +902,154 @@ export const REGISTRY_SCHEMAS = {
       fields: [{ key: "modifiers", label: "Modifiers", kind: "numberMap" }]
     }
   ]
+  },
+
+  fixtures: {
+    idLabel: "Fixture ref",
+    nameKey: "name",
+    categorize: (entry) => {
+      const tags = entry.tags || [];
+      if (tags.includes("trap")) return "Traps";
+      if (tags.includes("commandable")) return "Commanded devices";
+      return "Other fixtures";
+    },
+    sections: [
+      {
+        id: "identity",
+        label: "Identity",
+        fields: [
+          { key: "name", label: "Display name", kind: "line", required: true },
+          { key: "glyph", label: "Glyph", kind: "line" },
+          { key: "description", label: "Description", kind: "text", rows: 3 },
+          {
+            key: "tags",
+            label: "Tags",
+            kind: "tags",
+            help: "How commanding abilities select this. A detonator targets a tag, never an id."
+          }
+        ]
+      },
+      {
+        id: "presence",
+        label: "On the map",
+        note:
+          "A fixture sits on a tile without being a unit: it takes no turn, has " +
+          "no health, and normally does not block the tile it is on.",
+        fields: [
+          {
+            key: "visibility",
+            label: "Who can see it",
+            kind: "enum",
+            options: FIXTURE_VISIBILITY,
+            behaviour: true,
+            help: "Its owner always can. Once something is revealed it stays revealed."
+          },
+          {
+            key: "blocksMovement",
+            label: "Blocks its tile",
+            kind: "boolean",
+            behaviour: true,
+            help: "Off for a trap — a mine nobody can walk onto is not a mine."
+          },
+          {
+            key: "stacks",
+            label: "May share a tile with its own kind",
+            kind: "boolean",
+            behaviour: true
+          },
+          {
+            key: "triggerTiles",
+            label: "Extra trigger tiles",
+            kind: "objectList",
+            help: "Tiles beyond the anchor that also set it off. Empty means the anchor alone."
+          }
+        ]
+      },
+      {
+        id: "lifecycle",
+        label: "State",
+        fields: [
+          {
+            key: "initialState",
+            label: "Starts",
+            kind: "enum",
+            options: FIXTURE_STATES.filter((entry) => entry !== "removed" && entry !== "triggered"),
+            behaviour: true
+          },
+          {
+            key: "charges",
+            label: "Activations",
+            kind: "number",
+            help: "How many times it can go off. Empty means unlimited."
+          },
+          {
+            key: "consumedOnTrigger",
+            label: "Removed when spent",
+            kind: "boolean",
+            behaviour: true,
+            help: "Off leaves an inert device on the map instead of clearing it."
+          }
+        ]
+      },
+      {
+        id: "trigger",
+        label: "What sets it off",
+        fields: [
+          {
+            key: "trigger.type",
+            label: "Trigger",
+            kind: "enum",
+            options: ["unitEnters", "command"],
+            behaviour: true
+          },
+          {
+            key: "trigger.triggeredBy",
+            label: "Triggered by",
+            kind: "enum",
+            options: ["enemy", "ally", "any"],
+            behaviour: true
+          },
+          {
+            key: "trigger.includesOwner",
+            label: "Its own owner sets it off",
+            kind: "boolean",
+            behaviour: true
+          }
+        ]
+      },
+      {
+        id: "activation",
+        label: "What it does",
+        note:
+          "An ordinary effect list against ordinary area targeting. There is no " +
+          "blast system: a charge that damages and shoves is the same machinery " +
+          "as an ability that damages and shoves.",
+        fields: [
+          {
+            key: "area.shape",
+            label: "Area shape",
+            kind: "enum",
+            options: ["single", "adjacent", "diamond", "square", "line", "cone"],
+            behaviour: true
+          },
+          { key: "area.radius", label: "Area radius", kind: "number" },
+          {
+            key: "affects",
+            label: "Affects",
+            kind: "enum",
+            options: ["enemy", "ally", "any"],
+            behaviour: true
+          },
+          {
+            key: "effects",
+            label: "Effects",
+            kind: "objectList",
+            typeKey: "type",
+            behaviour: true
+          }
+        ]
+      }
+    ]
   }
 };
 
@@ -910,6 +1105,23 @@ export function blankEntity(kindId) {
     aiProfiles: { expectedDamage: 1, lethalBonus: 40, healing: 1, targetProximity: 2, selfDanger: -1, timelineDelay: 1 },
     operators: { name: "New Operator", glyph: "?", role: "", chassis: "assaultMech", perkChoices: [] },
     perks: { name: "New Perk", description: "", modifiers: {} },
+    fixtures: {
+      name: "New Fixture",
+      glyph: "◈",
+      description: "",
+      tags: [],
+      visibility: "ownerTeam",
+      initialState: "armed",
+      trigger: { type: "unitEnters", triggeredBy: "enemy" },
+      area: { shape: "single" },
+      affects: "enemy",
+      effects: [],
+      charges: 1,
+      consumedOnTrigger: true,
+      blocksMovement: false,
+      stacks: false,
+      triggerTiles: []
+    },
     resources: {
       name: "New Resource",
       scope: "unit",

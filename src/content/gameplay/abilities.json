@@ -516,6 +516,46 @@
         ]
       }
     },
+    "defuse": {
+      "name": "Defuse",
+      "description": "Somebody has to be able to walk up to the thing and turn it off. It is not glamorous and it takes the whole activation.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 0,
+        "rangeMin": 0,
+        "requiresLineOfSight": false,
+        "type": "self"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 700
+      },
+      "requirementText": "Needs an armed device within reach.",
+      "effects": [],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "⊘",
+        "order": 4,
+        "tags": [
+          "fixture"
+        ]
+      },
+      "fixtureAction": "disarm",
+      "fixtureTargeting": {
+        "ownership": "any",
+        "rangeMax": 1,
+        "requiresLineOfSight": true,
+        "states": [
+          "armed",
+          "placed"
+        ],
+        "tag": "trap"
+      }
+    },
     "delayStrike": {
       "name": "Delay Strike",
       "description": "Weak hit that pushes the target back on the timeline.",
@@ -548,6 +588,85 @@
         "basic": false,
         "category": "control",
         "order": 2
+      }
+    },
+    "demolitionShot": {
+      "name": "Demolition Shot",
+      "description": "A short-barrelled launcher. It is what she carries so that having no charges left is inconvenient rather than fatal.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 4,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 500
+      },
+      "effects": [
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 85,
+          "type": "damage"
+        },
+        {
+          "amount": 1,
+          "applyTo": "source",
+          "resourceId": "ordnance",
+          "type": "restoreResource"
+        }
+      ],
+      "ui": {
+        "basic": true,
+        "category": "attack",
+        "glyph": "•",
+        "order": 5,
+        "tags": [
+          "ranged"
+        ]
+      }
+    },
+    "detonate": {
+      "name": "Detonate",
+      "description": "Now. Not when they step on it, not when they notice it — now, while three of them are standing in the same place and one of them is reloading.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 0,
+        "rangeMin": 0,
+        "requiresLineOfSight": false,
+        "type": "self"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 350
+      },
+      "requirementText": "Needs one of your own charges on the field.",
+      "effects": [],
+      "ui": {
+        "basic": false,
+        "category": "attack",
+        "glyph": "✸",
+        "order": 3,
+        "tags": [
+          "fixture"
+        ]
+      },
+      "fixtureTargeting": {
+        "ownership": "own",
+        "rangeMax": null,
+        "requiresLineOfSight": false,
+        "states": [
+          "armed"
+        ],
+        "tag": "commandable"
       }
     },
     "droneWeld": {
@@ -1190,6 +1309,81 @@
         "order": 4,
         "tags": [
           "stance"
+        ]
+      }
+    },
+    "placeCharge": {
+      "name": "Place Charge",
+      "description": "Set a charge and walk away from it. It will sit there doing nothing for as long as it takes, which is the difference between a trap and a decision.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 3,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "emptyTile"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 550
+      },
+      "costs": {
+        "ordnance": 1
+      },
+      "requirementText": "Requires 1 Ordnance.",
+      "effects": [
+        {
+          "definitionId": "remoteCharge",
+          "type": "placeFixture"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "◇",
+        "order": 2,
+        "tags": [
+          "fixture"
+        ]
+      }
+    },
+    "placeMine": {
+      "name": "Place Mine",
+      "description": "Set a pressure plate on a nearby tile. The tile stays walkable, which is the entire point — it has to look like somewhere worth standing.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 3,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "emptyTile"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 550
+      },
+      "costs": {
+        "ordnance": 1
+      },
+      "requirementText": "Requires 1 Ordnance.",
+      "effects": [
+        {
+          "definitionId": "pressureMine",
+          "type": "placeFixture"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "◈",
+        "order": 1,
+        "tags": [
+          "fixture",
+          "trap"
         ]
       }
     },

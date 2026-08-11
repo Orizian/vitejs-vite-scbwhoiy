@@ -54,6 +54,14 @@
         "reyesReinforcement"
       ]
     },
+    "sapper": {
+      "name": "Sapper",
+      "ref": "sapper",
+      "glyph": "S",
+      "role": "Preparation",
+      "chassis": "sapperFrame",
+      "recruit": true
+    },
     "veteran": {
       "name": "Veteran Interdictor",
       "ref": "veteran",

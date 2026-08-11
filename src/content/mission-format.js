@@ -18,6 +18,7 @@
  * think about it.
  * =======================================================================*/
 
+import { isRectangular } from "../mission/regions.js";
 import {
   TERRAIN_CATALOG,
   TERRAIN_IDS,
@@ -663,13 +664,6 @@ export function validateMission(mission, catalog) {
         break;
       }
     }
-    if (!isRectangular(region.tiles)) {
-      push(
-        warnings,
-        'Region "' + region.id +
-          '" is not rectangular. Objectives use its exact tiles, but the unitEnteredZone trigger only tests its bounding box.'
-      );
-    }
   }
 
   /* --- objective --- */
@@ -998,15 +992,6 @@ function isWalkableTerrain(id) {
   return !!terrain && terrain.walkable;
 }
 
-function isRectangular(tiles) {
-  if (!tiles.length) return true;
-  const xs = tiles.map((tile) => tile.x);
-  const ys = tiles.map((tile) => tile.y);
-  const w = Math.max(...xs) - Math.min(...xs) + 1;
-  const h = Math.max(...ys) - Math.min(...ys) + 1;
-  return w * h === tiles.length;
-}
-
 /* ---------------------------------------------------------------
  * COMPILATION
  *
@@ -1234,12 +1219,10 @@ function compileMidBattle(beat, resolveUnits, regionTiles) {
   const trigger = { ...beat.trigger };
 
   if (trigger.regionRef) {
-    const tiles = regionTiles[trigger.regionRef] || [];
-    if (trigger.type === "extractionReached") {
-      trigger.tiles = tiles;
-    } else {
-      trigger.zone = boundingBox(tiles);
-    }
+    // The region's own tiles, whatever shape they make. This used to compile
+    // to a bounding box for everything but extraction, which quietly widened
+    // every irregular region to the rectangle around it.
+    trigger.tiles = regionTiles[trigger.regionRef] || [];
     delete trigger.regionRef;
   }
   if (trigger.unitRefs) {
@@ -1259,18 +1242,6 @@ function compileMidBattle(beat, resolveUnits, regionTiles) {
   if (beat.followUpLines.length) compiled.followUpLines = beat.followUpLines.map((line) => ({ ...line }));
   if (beat.when) compiled.when = beat.when;
   return compiled;
-}
-
-function boundingBox(tiles) {
-  if (!tiles.length) return { xMin: 0, xMax: -1, yMin: 0, yMax: -1 };
-  const xs = tiles.map((tile) => tile.x);
-  const ys = tiles.map((tile) => tile.y);
-  return {
-    xMin: Math.min(...xs),
-    xMax: Math.max(...xs),
-    yMin: Math.min(...ys),
-    yMax: Math.max(...ys)
-  };
 }
 
 function buildLegend(mission) {

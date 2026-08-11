@@ -74,6 +74,28 @@ import {
   describeTermination
 } from "./combat/propagation.js";
 import {
+  createFixtureState,
+  createFixture,
+  findFixture,
+  allFixtures,
+  fixturesAtTile,
+  fixtureTiles,
+  pathContact,
+  setFixtureState,
+  armFixture,
+  disarmFixture,
+  consumeFixtureCharge,
+  removeFixture,
+  serializeFixtures,
+  deserializeFixtures,
+  fixtureVisibleTo,
+  describeFixture,
+  isArmed,
+  isActive as fixtureIsActive,
+  FIXTURE_STATES,
+  FIXTURE_VISIBILITY
+} from "./combat/fixtures.js";
+import {
   createCausalityState,
   beginChain,
   childCause,
@@ -129,6 +151,14 @@ import {
 import { ACTION_REGISTRY, ENGINE_ADAPTER_CONTRACT } from "./mission/actions.js";
 import { MISSION_EVENT_TYPES, deriveMissionEvents } from "./mission/events.js";
 import {
+  regionContains,
+  pathEntersRegion,
+  createTileIndex,
+  tileKeyOf,
+  boundingBoxOf,
+  isRectangular
+} from "./mission/regions.js";
+import {
   CONDITION_REGISTRY,
   evaluateCondition as evaluateMissionCondition,
   matchTrigger as matchMissionTrigger
@@ -163,6 +193,7 @@ import {
 import {
   validateMission as validateMissionFile,
   normalizeMission,
+  compileMission,
   serializeMission as serializeMissionFile
 } from "./content/mission-format.js";
 import {
@@ -531,6 +562,13 @@ const STATUSES = GAMEPLAY_CONTENT.statuses;
  * own swatch for each tile — the palette and the rules are one entry now,
  * rather than two files that can disagree about what a wall is. */
 const TERRAINS = engineTerrain();
+
+/* ===============================================================
+ * FIXTURE DEFINITIONS
+ * Authored in src/content/gameplay/fixtures.json. What a mine, a charge or a
+ * beacon *is*; what one does when it goes off is an ordinary effect list.
+ * =============================================================*/
+const FIXTURE_DEFINITIONS = GAMEPLAY_CONTENT.fixtures;
 
 /* ===============================================================
  * COMBAT RESOURCES
@@ -2327,6 +2365,29 @@ function buildContentRegistry(sources) {
 
   // Presentation records. The engine only ever checks that referenced ids
   // exist; it never reads a source, a URL, or a pixel.
+  /* Things that sit on a tile and are not units. Normalised the same way as
+   * everything else, so an author who omits a field gets the safe default
+   * rather than an undefined the runtime trips over. */
+  const fixtures = deriveIds(sources.fixtures || {}, (entry) => {
+    entry.name = entry.name || entry.id;
+    entry.glyph = entry.glyph || "◈";
+    entry.description = entry.description || "";
+    entry.tags = entry.tags || [];
+    entry.visibility = entry.visibility || "ownerTeam";
+    entry.initialState = entry.initialState || "armed";
+    entry.trigger = entry.trigger || { type: "command" };
+    entry.area = entry.area || { shape: "single" };
+    entry.affects = entry.affects || "enemy";
+    entry.effects = entry.effects || [];
+    entry.charges = entry.charges == null ? 1 : entry.charges;
+    entry.consumedOnTrigger = entry.consumedOnTrigger !== false;
+    entry.blocksMovement = entry.blocksMovement === true;
+    entry.stacks = entry.stacks === true;
+    entry.triggerTiles = entry.triggerTiles || [];
+    entry.assets = entry.assets || {};
+    return entry;
+  });
+
   const presentationAssets = deriveIds(sources.presentationAssets || {}, (entry) => {
     entry.type = entry.type || "image";
     entry.src = entry.src == null ? null : entry.src;
@@ -2362,6 +2423,7 @@ function buildContentRegistry(sources) {
     encounters,
     aiProfiles,
     equipment,
+    fixtures,
     presentationAssets,
 
     unitAbilities,
@@ -2381,6 +2443,7 @@ function buildContentRegistry(sources) {
   deepFreeze(registry.encounters);
   deepFreeze(registry.aiProfiles);
   deepFreeze(registry.equipment);
+  deepFreeze(registry.fixtures);
   deepFreeze(registry.presentationAssets);
 
   return registry;
@@ -3335,6 +3398,10 @@ function createBattle(encounterId, seed, options) {
     // Why each event happened. Ambient parentage plus a chain id, so a
     // reaction cascade can be attributed, bounded and explained.
     causality: createCausalityState(),
+
+    // Things standing on tiles that are not units: mines, charges, beacons.
+    // Always present, so no code path has to ask whether the collection exists.
+    fixtures: createFixtureState(),
 
     // Faction-scoped resource balances. Unit balances stay on the unit, where
     // they already live; this is the shared half of one resource system.
@@ -4740,6 +4807,83 @@ function resolvePropagateEffect(state, context) {
   state.propagation = previous || null;
 }
 
+/**
+ * Puts an authored fixture on a tile.
+ *
+ * A tile effect, so it resolves against the tile the ability targeted rather
+ * than a unit. The definition supplies everything about what the thing is; the
+ * effect supplies only where it goes and who it belongs to.
+ */
+function resolvePlaceFixtureEffect(state, context) {
+  const effect = context.effect;
+  const tile = context.targetTile;
+  if (!tile) {
+    state.errors.push("placeFixture needs a target tile.");
+    return;
+  }
+  const definition = fixtureDefinition(effect.definitionId);
+  if (!definition) {
+    state.errors.push("placeFixture references unknown fixture: " + effect.definitionId);
+    return;
+  }
+  const owner = state.units[context.sourceUnitId];
+  const existing = fixturesAtTile(state.fixtures, tile.x, tile.y).filter((entry) =>
+    fixtureIsActive(entry)
+  );
+  // One of a kind per tile unless the definition says stacking is fine. Two
+  // mines on one tile is almost always a misclick, and letting it through
+  // makes the board lie about how dangerous a tile is.
+  if (!definition.stacks && existing.some((entry) => entry.definitionId === effect.definitionId)) {
+    state.errors.push("A " + (definition.name || effect.definitionId) + " is already on that tile.");
+    return;
+  }
+
+  const fixture = createFixture(state.fixtures, {
+    definitionId: effect.definitionId,
+    x: tile.x,
+    y: tile.y,
+    ownerTeamId: owner ? owner.teamId : null,
+    ownerUnitId: context.sourceUnitId || null,
+    createdBy: context.sourceUnitId || null,
+    state: definition.initialState || "armed",
+    visibility: definition.visibility,
+    revealed: definition.visibility === "everyone",
+    blocksMovement: definition.blocksMovement === true,
+    charges: definition.charges,
+    consumedOnTrigger: definition.consumedOnTrigger !== false,
+    triggerTiles: definition.triggerTiles || [],
+    createdAt: state.currentTime
+  });
+
+  queueEvent(state, {
+    type: "fixturePlaced",
+    fixtureId: fixture.id,
+    definitionId: fixture.definitionId,
+    sourceUnitId: context.sourceUnitId || null,
+    ownerTeamId: fixture.ownerTeamId,
+    tile: { x: tile.x, y: tile.y }
+  });
+}
+
+/** Moves a fixture between authored states. Used for arming and disarming. */
+function resolveSetFixtureStateEffect(state, context) {
+  const effect = context.effect;
+  const fixtureId = effect.fixtureId || (context.targetFixtureId || null);
+  const fixture = findFixture(state.fixtures, fixtureId);
+  if (!fixture) return;
+  const result = setFixtureState(state.fixtures, fixture.id, effect.state);
+  if (!result.ok || !result.changed) return;
+  queueEvent(state, {
+    type: "fixtureStateChanged",
+    fixtureId: fixture.id,
+    definitionId: fixture.definitionId,
+    ownerTeamId: fixture.ownerTeamId,
+    from: result.from,
+    to: effect.state,
+    byUnitId: context.sourceUnitId || null
+  });
+}
+
 const EFFECT_HANDLERS = {
   damage: resolveDamageEffect,
   heal: resolveHealEffect,
@@ -4770,6 +4914,8 @@ const EFFECT_HANDLERS = {
   conditionalEffect: resolveConditionalEffect,
   repeatEffect: resolveRepeatEffect,
   propagate: resolvePropagateEffect,
+  placeFixture: resolvePlaceFixtureEffect,
+  setFixtureState: resolveSetFixtureStateEffect,
   refreshActivationResource: resolveRefreshActivationResource
 };
 
@@ -5047,6 +5193,9 @@ const EFFECT_METADATA = {
   conditionalEffect: { applies: "unit" },
   repeatEffect: { applies: "unit" },
   propagate: { applies: "unit" },
+  // A fixture goes on a tile, not on whoever happens to be standing there.
+  placeFixture: { applies: "tile", needsTile: true },
+  setFixtureState: { applies: "tile" },
   refreshActivationResource: { applies: "unit", allowsDefeated: true }
 };
 
@@ -5334,26 +5483,79 @@ const EVENT_HANDLERS = {
       }
     }
     const unit = state.units[event.unitId];
-    unit.x = event.to.x;
-    unit.y = event.to.y;
+    // Something may be waiting partway along this path. A mover crossing a
+    // mined tile has to set it off *there*, so the move stops at the first
+    // contact and the rest is queued behind whatever the contact does. With no
+    // fixtures placed this is a scan of an empty list and nothing changes.
+    const path = event.path && event.path.length ? event.path : [event.from, event.to];
+    const contact = firstFixtureContactOnPath(state, unit.id, path);
+    const interrupted = contact && contact.index < path.length - 1 ? contact : null;
+    const landing = interrupted ? interrupted.tile : event.to;
+    const travelled = interrupted ? interrupted.index : event.tiles;
+
+    unit.x = landing.x;
+    unit.y = landing.y;
     // Out-of-turn movement never touches the activation. A reaction advance or
     // a cinematic reposition must not spend the unit's move for the turn, and
     // must not add movement recovery to a turn it is not part of.
     if (!event.scripted && state.activation && state.activation.unitId === unit.id) {
       state.activation.moved = true;
-      state.activation.movementRecovery += movementRecoveryFor(event.tiles);
+      state.activation.movementRecovery += movementRecoveryFor(travelled);
     }
     logLine(
       state,
       "unitMoved",
       unitLabel(state, unit.id) +
         " moves to " +
-        tileKey(event.to.x, event.to.y) +
+        tileKey(landing.x, landing.y) +
         " (" +
-        event.tiles +
+        travelled +
         " tiles)",
-      { unitId: unit.id, tiles: event.tiles, from: event.from, to: event.to }
+      { unitId: unit.id, tiles: travelled, from: event.from, to: { ...landing } }
     );
+
+    const resume = interrupted
+      ? {
+          unitId: unit.id,
+          from: { ...landing },
+          to: { ...event.to },
+          path: path.slice(interrupted.index),
+          tiles: event.tiles - travelled,
+          startFacing: event.startFacing,
+          scripted: event.scripted === true
+        }
+      : null;
+    const fired = contact ? triggerFixturesAt(state, unit.id, landing, resume) : 0;
+    // Nothing actually triggered — the contact was stale — so the rest of the
+    // walk is owed immediately rather than never.
+    if (resume && !fired) queueEvent(state, { type: "unitMovementResumed", ...resume });
+  },
+
+  /**
+   * The rest of a movement that stopped on something.
+   *
+   * Queued behind the interruption, so whatever the fixture did has already
+   * resolved by the time this runs. It re-checks everything rather than
+   * assuming: the mover may be dead, may have been thrown somewhere else, or
+   * may be standing on a second fixture.
+   */
+  unitMovementResumed(state, event) {
+    const unit = state.units[event.unitId];
+    if (!unit || !unit.alive || unit.dormant) return;
+    // Displaced by the blast, or otherwise no longer where the rest of this
+    // path starts. The remainder is not owed to it.
+    if (unit.x !== event.from.x || unit.y !== event.from.y) return;
+    if (event.tiles <= 0) return;
+    queueEvent(state, {
+      type: "unitMoved",
+      unitId: event.unitId,
+      from: { ...event.from },
+      to: { ...event.to },
+      path: event.path,
+      tiles: event.tiles,
+      startFacing: event.startFacing,
+      scripted: event.scripted === true
+    });
   },
 
   facingChanged(state, event) {
@@ -5514,6 +5716,16 @@ const EVENT_HANDLERS = {
     if (!unit) return;
     unit.x = event.to.x;
     unit.y = event.to.y;
+    // A shove crosses tiles exactly the way a walk does, and anything waiting
+    // on one of them cannot tell the difference. This is the whole reason
+    // punching an enemy onto a mine needs no special case: both movement
+    // handlers ask the same question of the same list.
+    const forcedPath = event.path && event.path.length ? event.path : [event.from, event.to];
+    const forcedContact = firstFixtureContactOnPath(state, unit.id, forcedPath);
+    if (forcedContact) {
+      unit.x = forcedContact.tile.x;
+      unit.y = forcedContact.tile.y;
+    }
     logLine(
       state,
       "unitForcedMove",
@@ -5532,9 +5744,11 @@ const EVENT_HANDLERS = {
         blocked: event.blocked,
         blockReason: event.blockReason || null,
         blockTile: event.blockTile || null,
-        blockedBy: event.blockedBy || null
+        blockedBy: event.blockedBy || null,
+        stoppedOnFixture: !!forcedContact
       }
     );
+    if (forcedContact) triggerFixturesAt(state, unit.id, forcedContact.tile);
   },
 
   unitTeleported(state, event) {
@@ -6036,6 +6250,111 @@ const EVENT_HANDLERS = {
         endpoint: event.endpoint
       }
     );
+  },
+
+  fixturePlaced(state, event) {
+    const fixture = findFixture(state.fixtures, event.fixtureId);
+    const definition = fixtureDefinition(event.definitionId);
+    logLine(
+      state,
+      "fixturePlaced",
+      unitLabel(state, event.sourceUnitId) +
+        " places " +
+        ((definition && definition.name) || event.definitionId) +
+        " at " + tileKey(event.tile.x, event.tile.y),
+      {
+        fixtureId: event.fixtureId,
+        definitionId: event.definitionId,
+        sourceUnitId: event.sourceUnitId,
+        ownerTeamId: event.ownerTeamId,
+        tile: event.tile,
+        state: fixture ? fixture.state : "removed",
+        // Deliberately not the visibility flag: a log line the player reads is
+        // their own side's record, and it is their fixture.
+        charges: fixture ? fixture.charges : null
+      }
+    );
+  },
+
+  fixtureTriggered(state, event) {
+    const definition = fixtureDefinition(event.definitionId);
+    logLine(
+      state,
+      "fixtureTriggered",
+      ((definition && definition.name) || event.definitionId) +
+        " triggers under " +
+        unitLabel(state, event.unitId),
+      {
+        fixtureId: event.fixtureId,
+        definitionId: event.definitionId,
+        unitId: event.unitId,
+        ownerTeamId: event.ownerTeamId,
+        tile: event.tile,
+        activation: event.activation
+      }
+    );
+    resolveFixtureActivation(state, event);
+    if (event.resume) queueEvent(state, { type: "unitMovementResumed", ...event.resume });
+  },
+
+  fixtureDetonated(state, event) {
+    const definition = fixtureDefinition(event.definitionId);
+    logLine(
+      state,
+      "fixtureDetonated",
+      ((definition && definition.name) || event.definitionId) +
+        " goes off, catching " +
+        event.targetUnitIds.length +
+        (event.targetUnitIds.length === 1 ? " frame" : " frames"),
+      {
+        fixtureId: event.fixtureId,
+        definitionId: event.definitionId,
+        sourceUnitId: event.sourceUnitId,
+        ownerTeamId: event.ownerTeamId,
+        tile: event.tile,
+        targetUnitIds: event.targetUnitIds,
+        activation: event.activation,
+        triggeredByUnitId: event.triggeredByUnitId
+      }
+    );
+  },
+
+  fixtureSpent(state, event) {
+    const definition = fixtureDefinition(event.definitionId);
+    logLine(
+      state,
+      "fixtureSpent",
+      ((definition && definition.name) || event.definitionId) +
+        (event.consumed ? " is spent" : event.rearmed ? " resets" : " goes inert"),
+      {
+        fixtureId: event.fixtureId,
+        definitionId: event.definitionId,
+        ownerTeamId: event.ownerTeamId,
+        consumed: event.consumed,
+        rearmed: event.rearmed,
+        remaining: event.remaining,
+        state: event.state
+      }
+    );
+    if (event.consumed) removeFixture(state.fixtures, event.fixtureId);
+  },
+
+  fixtureStateChanged(state, event) {
+    const definition = fixtureDefinition(event.definitionId);
+    logLine(
+      state,
+      "fixtureStateChanged",
+      ((definition && definition.name) || event.definitionId) + " is " + event.to,
+      {
+        fixtureId: event.fixtureId,
+        definitionId: event.definitionId,
+        ownerTeamId: event.ownerTeamId,
+        from: event.from,
+        to: event.to,
+        byUnitId: event.byUnitId || null
+      }
+    );
+    if (event.to === "removed") removeFixture(state.fixtures, event.fixtureId);
   },
 
   propagationPlanned(state, event) {
@@ -6617,6 +6936,54 @@ const COMMAND_VALIDATORS = {
       errors.push("This unit is not next on the timeline.");
     }
     return { errors, preview: { time: unit.nextActionTime } };
+  },
+
+  /**
+   * Activating a fixture you own.
+   *
+   * Every rule here is read from the ability's authored `fixtureTargeting`
+   * block, so the same command serves a remote charge, a beacon and a shield
+   * node. There is no list of fixture ids anywhere in this function.
+   */
+  activateFixture(state, command) {
+    const errors = [];
+    const unit = state.units[command.unitId];
+    if (!unit) return { errors: ["Unknown unit."], preview: {} };
+    if (state.activeUnitId !== command.unitId) errors.push("Unit is not the active unit.");
+    if (!unit.alive) errors.push("Defeated units cannot act.");
+    if (state.activation && state.activation.acted) errors.push("Unit has already acted.");
+
+    const ability = command.abilityId ? CONTENT.abilities[command.abilityId] : null;
+    if (!ability) errors.push("Unknown ability.");
+    const rules = fixtureTargetingRules(ability);
+    if (ability && !rules) errors.push("That action does not activate fixtures.");
+
+    for (const resourceId of Object.keys((ability && ability.costs) || {})) {
+      const pool = unit.resources[resourceId];
+      const price = ability.costs[resourceId];
+      if (!pool) errors.push("Unit has no " + resourceId + " resource.");
+      else if (pool.current < price) errors.push("Not enough " + resourceId + " (needs " + price + ").");
+    }
+
+    const fixture = findFixture(state.fixtures, command.fixtureId);
+    if (!fixture) errors.push("That fixture is no longer there.");
+    else if (rules) {
+      const check = fixtureActivationEligibility(state, command.unitId, fixture, rules);
+      if (!check.ok) errors.push(check.reason);
+    }
+
+    return {
+      errors,
+      preview: errors.length
+        ? {}
+        : {
+            fixtureId: fixture.id,
+            definitionId: fixture.definitionId,
+            tile: { x: fixture.x, y: fixture.y },
+            recovery: ability.timing.recovery,
+            targets: fixtureActivationTargets(state, fixture)
+          }
+    };
   },
 
   /**
@@ -7234,6 +7601,24 @@ const EFFECT_FORECASTERS = {
    * the numbers the chain will produce — including the fact that it stops one
    * enemy short.
    */
+  placeFixture(state, options) {
+    const definition = fixtureDefinition(options.effect.definitionId);
+    return [
+      {
+        targetUnitId: null,
+        effectType: "placeFixture",
+        label: "PLACE",
+        detail: (definition && definition.name) || options.effect.definitionId
+      }
+    ];
+  },
+
+  setFixtureState(state, options) {
+    return [
+      { targetUnitId: null, effectType: "setFixtureState", label: "SET", detail: options.effect.state }
+    ];
+  },
+
   propagate(state, options) {
     const effect = options.effect;
     const plan = planUnitPropagation(
@@ -7451,6 +7836,61 @@ const COMMAND_HANDLERS = {
 
   trajectory(state, command) {
     executeTrajectory(state, command);
+  },
+
+  /**
+   * Sets off one of your own fixtures, now, because you chose to.
+   *
+   * Generic on purpose: what it selects is "a fixture this ability is allowed
+   * to activate", which is as true of a beacon or a shield node as it is of a
+   * charge. The ability names a tag, never an id.
+   */
+  activateFixture(state, command) {
+    const ability = CONTENT.abilities[command.abilityId];
+    const fixture = findFixture(state.fixtures, command.fixtureId);
+    state.activation.acted = true;
+    state.activation.actionRecovery += abilityRecovery(command.abilityId);
+    for (const resourceId of Object.keys((ability && ability.costs) || {})) {
+      queueEvent(state, {
+        type: "resourceSpent",
+        sourceUnitId: command.unitId,
+        targetUnitId: command.unitId,
+        resourceId,
+        amount: ability.costs[resourceId]
+      });
+    }
+    // What the ability does to the device it selected. Setting it off is the
+    // default; anything else moves it between states instead, which is how one
+    // command serves both a detonator and a pair of wire cutters.
+    const action = (ability && ability.fixtureAction) || "activate";
+    if (action !== "activate") {
+      const next = action === "disarm" ? "disarmed" : action === "arm" ? "armed" : "removed";
+      const changed = setFixtureState(state.fixtures, fixture.id, next);
+      if (changed.ok && changed.changed) {
+        queueEvent(state, {
+          type: "fixtureStateChanged",
+          fixtureId: fixture.id,
+          definitionId: fixture.definitionId,
+          ownerTeamId: fixture.ownerTeamId || null,
+          from: changed.from,
+          to: next,
+          byUnitId: command.unitId
+        });
+      }
+      return;
+    }
+    queueEvent(state, {
+      type: "fixtureTriggered",
+      fixtureId: fixture.id,
+      definitionId: fixture.definitionId,
+      unitId: command.unitId,
+      sourceUnitId: fixture.ownerUnitId || command.unitId,
+      ownerTeamId: fixture.ownerTeamId || null,
+      tile: { x: fixture.x, y: fixture.y },
+      // The one thing that separates this from a pressure plate, and the
+      // reason it is worth recording rather than inferring.
+      activation: "command"
+    });
   },
 
   move(state, command) {
@@ -8451,6 +8891,10 @@ function deserializeBattle(serialized) {
   if (!state.terrainOverrides) state.terrainOverrides = {};
   if (!state.delayedEffects) state.delayedEffects = [];
   if (!state.errors) state.errors = [];
+  // Fixtures are plain data, so the save carries them as-is; this only
+  // re-establishes the shape for a save taken before they existed, and
+  // rebuilds the id counter so a reload cannot mint an id already in use.
+  state.fixtures = deserializeFixtures(state.fixtures);
   for (const id of state.unitOrder) {
     const unit = state.units[id];
     if (unit.ref == null) unit.ref = id;
@@ -9123,6 +9567,274 @@ function planUnitPropagation(state, sourceUnitId, abilityId, initialTargetId) {
     initialTargetId,
     propagationDeps(state, sourceUnitId, abilityId, rules),
     rules
+  );
+}
+
+/* ===============================================================
+ * FIXTURES
+ *
+ * Authored definitions live in the gameplay registry; runtime instances live
+ * in `state.fixtures` and are owned by `src/combat/fixtures.js`. This half is
+ * the adapter: it decides eligibility using the engine's own relationship
+ * rules, and it resolves activation through the ordinary effect pipeline.
+ *
+ * Nothing here knows what a mine is.
+ * =============================================================*/
+
+function fixtureDefinition(definitionId) {
+  return (definitionId && CONTENT.fixtures[definitionId]) || null;
+}
+
+/**
+ * Whether a unit walking onto a fixture sets it off.
+ *
+ * Relationship comes from the engine's existing faction rules, so a fixture
+ * that is hostile to you is hostile for the same reason everything else is.
+ * An author can widen it — a healing station triggers for allies — but the
+ * default is the one that makes a mine a mine.
+ */
+function fixtureTriggeredBy(state, fixture, unitId) {
+  if (!isArmed(fixture)) return false;
+  const unit = state.units[unitId];
+  if (!unit || !unit.alive) return false;
+  const definition = fixtureDefinition(fixture.definitionId);
+  if (!definition) return false;
+  const trigger = definition.trigger || {};
+  if (trigger.type !== "unitEnters") return false;
+
+  // The owner does not step on their own mine unless the author says so.
+  if (fixture.ownerUnitId === unitId && !trigger.includesOwner) return false;
+
+  const relationship = trigger.triggeredBy || "enemy";
+  if (relationship === "any") return true;
+  if (!fixture.ownerTeamId) return relationship === "enemy";
+  const ownerUnit = fixture.ownerUnitId ? state.units[fixture.ownerUnitId] : null;
+  const reference = ownerUnit || { teamId: fixture.ownerTeamId };
+  const hostile = relationshipBetween(state.factions, reference.teamId, unit.teamId) === "hostile";
+  if (relationship === "enemy") return hostile;
+  if (relationship === "ally") return !hostile;
+  return false;
+}
+
+/**
+ * Queues activation for every fixture waiting on a tile.
+ *
+ * Called from the movement handlers, so voluntary and forced movement reach it
+ * by exactly the same route. There is deliberately no "was this a shove?"
+ * branch: a mine cannot tell the difference and neither can this.
+ */
+function triggerFixturesAt(state, unitId, tile, resume) {
+  const waiting = fixturesAtTile(state.fixtures, tile.x, tile.y, (fixture) =>
+    fixtureTriggeredBy(state, fixture, unitId)
+  );
+  waiting.forEach((fixture, index) => {
+    queueEvent(state, {
+      type: "fixtureTriggered",
+      fixtureId: fixture.id,
+      definitionId: fixture.definitionId,
+      unitId,
+      sourceUnitId: fixture.ownerUnitId || null,
+      ownerTeamId: fixture.ownerTeamId || null,
+      tile: { x: tile.x, y: tile.y },
+      activation: "automatic",
+      // Rides on the last trigger so the rest of an interrupted walk resumes
+      // only once everything waiting on this tile has finished with the mover.
+      resume: index === waiting.length - 1 ? resume || null : null
+    });
+  });
+  return waiting.length;
+}
+
+/**
+ * The earliest point on a path where something is waiting.
+ *
+ * A mover crossing a mined tile has to set it off there rather than on
+ * arrival, so the movement handlers ask this before applying the whole move
+ * and stop at the answer. With no fixtures placed it is a scan of an empty
+ * list and movement is unchanged, which is the property that makes this
+ * additive rather than a rewrite.
+ */
+function firstFixtureContactOnPath(state, unitId, path) {
+  if (!state.fixtures || !state.fixtures.order.length) return null;
+  let earliest = null;
+  for (const fixture of allFixtures(state.fixtures)) {
+    if (!fixtureTriggeredBy(state, fixture, unitId)) continue;
+    const contact = pathContact(fixture, path);
+    if (!contact) continue;
+    // Index 0 is where the mover already stood; it did not enter it.
+    if (contact.index === 0) continue;
+    if (!earliest || contact.index < earliest.index) earliest = contact;
+  }
+  return earliest;
+}
+
+/**
+ * Resolves a fixture's authored activation.
+ *
+ * The effects are an ordinary effect list against ordinary area targeting, so
+ * a charge that damages and shoves is the same machinery as an ability that
+ * damages and shoves. Nothing about this is explosive.
+ */
+function resolveFixtureActivation(state, event) {
+  const fixture = findFixture(state.fixtures, event.fixtureId);
+  if (!fixture) return;
+  const definition = fixtureDefinition(fixture.definitionId);
+  if (!definition) {
+    state.errors.push("Fixture references unknown definition: " + fixture.definitionId);
+    return;
+  }
+
+  const centre = { x: fixture.x, y: fixture.y };
+  const area = definition.area || { shape: "single" };
+  const tiles = tilesInArea(state, centre, area, { sourceUnitId: fixture.ownerUnitId || null });
+  const targets = [];
+  for (const tile of tiles) {
+    const occupant = unitAt(state, tile.x, tile.y);
+    if (!occupant || !occupant.alive) continue;
+    if (definition.affects === "enemy" && fixture.ownerTeamId) {
+      if (relationshipBetween(state.factions, fixture.ownerTeamId, occupant.teamId) !== "hostile") {
+        continue;
+      }
+    }
+    if (definition.affects === "ally" && fixture.ownerTeamId) {
+      if (relationshipBetween(state.factions, fixture.ownerTeamId, occupant.teamId) === "hostile") {
+        continue;
+      }
+    }
+    targets.push(occupant.id);
+  }
+
+  queueEvent(state, {
+    type: "fixtureDetonated",
+    fixtureId: fixture.id,
+    definitionId: fixture.definitionId,
+    sourceUnitId: fixture.ownerUnitId || null,
+    ownerTeamId: fixture.ownerTeamId || null,
+    tile: centre,
+    tiles,
+    targetUnitIds: targets,
+    activation: event.activation || "automatic",
+    triggeredByUnitId: event.unitId || null
+  });
+  processAllEvents(state);
+
+  resolveEffects(state, {
+    // Attribution stays with whoever placed it. A mine's damage belongs to its
+    // owner, not to the ground, and the causal record already knew that.
+    sourceUnitId: fixture.ownerUnitId || event.unitId,
+    targetUnitIds: targets,
+    targetTile: centre,
+    affectedTiles: tiles,
+    abilityId: null,
+    effects: definition.effects || []
+  });
+  processAllEvents(state);
+
+  const spent = consumeFixtureCharge(state.fixtures, fixture.id);
+  queueEvent(state, {
+    type: "fixtureSpent",
+    fixtureId: fixture.id,
+    definitionId: fixture.definitionId,
+    ownerTeamId: fixture.ownerTeamId || null,
+    consumed: !!spent.consumed,
+    rearmed: !!spent.rearmed,
+    remaining: spent.remaining == null ? null : spent.remaining,
+    state: spent.fixture ? spent.fixture.state : "removed"
+  });
+}
+
+/** The authored rules for an ability that activates fixtures, or null. */
+function fixtureTargetingRules(ability) {
+  const declared = ability && ability.fixtureTargeting;
+  if (!declared) return null;
+  return {
+    // A tag rather than an id, so one ability can command a family of things
+    // and a new member of that family is a content change.
+    tag: declared.tag || null,
+    ownership: declared.ownership || "own",
+    states: declared.states || ["armed"],
+    rangeMax: declared.rangeMax == null ? null : declared.rangeMax,
+    requiresLineOfSight: declared.requiresLineOfSight === true
+  };
+}
+
+/** Whether a unit may activate a given fixture under an ability's rules. */
+function fixtureActivationEligibility(state, unitId, fixture, rules) {
+  const unit = state.units[unitId];
+  if (!unit) return { ok: false, reason: "Unknown unit." };
+  if (!fixtureIsActive(fixture)) return { ok: false, reason: "That fixture is spent." };
+
+  if (rules.ownership === "own" && fixture.ownerUnitId !== unitId) {
+    return { ok: false, reason: "That is not your device." };
+  }
+  if (rules.ownership === "team") {
+    if (!fixture.ownerTeamId || fixture.ownerTeamId !== unit.teamId) {
+      return { ok: false, reason: "That device belongs to another faction." };
+    }
+  }
+  if (rules.tag) {
+    const definition = fixtureDefinition(fixture.definitionId);
+    if (!definition || !(definition.tags || []).includes(rules.tag)) {
+      return { ok: false, reason: "This action cannot command that device." };
+    }
+  }
+  if (!rules.states.includes(fixture.state)) {
+    return { ok: false, reason: "That device is " + fixture.state + "." };
+  }
+  if (rules.rangeMax != null && gridDistance(unit, fixture) > rules.rangeMax) {
+    return { ok: false, reason: "That device is out of range." };
+  }
+  if (
+    rules.requiresLineOfSight &&
+    !hasLineOfSight(getMap(state), { x: unit.x, y: unit.y }, { x: fixture.x, y: fixture.y }, state)
+  ) {
+    return { ok: false, reason: "No line of sight to that device." };
+  }
+  return { ok: true, reason: null };
+}
+
+/** Every fixture a unit could activate with a given ability, in placement order. */
+function activatableFixtures(state, unitId, abilityId) {
+  const rules = fixtureTargetingRules(CONTENT.abilities[abilityId]);
+  if (!rules) return [];
+  return allFixtures(state.fixtures).filter(
+    (fixture) => fixtureActivationEligibility(state, unitId, fixture, rules).ok
+  );
+}
+
+/** Who a fixture would catch if it went off right now. Shared by the preview. */
+function fixtureActivationTargets(state, fixture) {
+  const definition = fixtureDefinition(fixture.definitionId);
+  if (!definition) return [];
+  const tiles = tilesInArea(state, { x: fixture.x, y: fixture.y }, definition.area || { shape: "single" }, {
+    sourceUnitId: fixture.ownerUnitId || null
+  });
+  const out = [];
+  for (const tile of tiles) {
+    const occupant = unitAt(state, tile.x, tile.y);
+    if (!occupant || !occupant.alive) continue;
+    if (definition.affects === "enemy" && fixture.ownerTeamId) {
+      if (relationshipBetween(state.factions, fixture.ownerTeamId, occupant.teamId) !== "hostile") continue;
+    }
+    if (definition.affects === "ally" && fixture.ownerTeamId) {
+      if (relationshipBetween(state.factions, fixture.ownerTeamId, occupant.teamId) === "hostile") continue;
+    }
+    out.push(occupant.id);
+  }
+  return out;
+}
+
+/**
+ * The fixtures a faction is entitled to see.
+ *
+ * The only path by which fixtures reach a view model or a plan, so a device
+ * hidden from a side is hidden everywhere that side can look — the board, the
+ * panels and the AI's inputs alike. Leaking a mine's coordinates through a
+ * debug surface would be the same bug as drawing it.
+ */
+function visibleFixturesFor(state, teamId, options) {
+  return allFixtures(state.fixtures).filter(
+    (fixture) => fixtureIsActive(fixture) && fixtureVisibleTo(fixture, teamId, options)
   );
 }
 
@@ -9917,6 +10629,12 @@ const EFFECT_AI_SCORERS = {
    * target *because* of who stands behind them — but it can at least tell that
    * an action hitting four units is worth more than one hitting one.
    */
+  /* Preparing ground is worth something, but the AI cannot reason about where
+   * an enemy will want to stand two activations from now. A flat, modest score
+   * keeps it from spamming devices without pretending it has a plan. */
+  placeFixture: () => GAME_CONFIG.ai.statusValue * 0.5,
+  setFixtureState: () => 0,
+
   propagate(state, context) {
     const plan = planUnitPropagation(state, context.unitId, context.abilityId, context.target.id);
     const per = scoreEffectList(state, context, context.effect.effects || []);
@@ -10433,7 +11151,15 @@ const EFFECT_VALIDATORS = {
     }
     errors.push(...validateEffectList(registry, effect.effects || [], label + " (arc)"));
     return errors;
-  }
+  },
+  placeFixture: (registry, effect, label) =>
+    registry.fixtures && registry.fixtures[effect.definitionId]
+      ? []
+      : [label + " places unknown fixture " + effect.definitionId + "."],
+  setFixtureState: (registry, effect, label) =>
+    FIXTURE_STATES.includes(effect.state)
+      ? []
+      : [label + ' sets unknown fixture state "' + effect.state + '".']
 };
 
 function requireStatus(registry, effect, label) {
@@ -10714,7 +11440,21 @@ const ENGINE_FUNCTIONS = {
   propagatingAbility,
   propagationContextOf,
   resolvePropagateEffect,
-  createChainPreviewModel
+  createChainPreviewModel,
+  // The fixture surface. A thing that sits on a tile and belongs to somebody is
+  // exactly where an `if (fixtureId === …)` would hide.
+  fixtureDefinition,
+  fixtureTriggeredBy,
+  triggerFixturesAt,
+  firstFixtureContactOnPath,
+  resolveFixtureActivation,
+  resolvePlaceFixtureEffect,
+  resolveSetFixtureStateEffect,
+  fixtureTargetingRules,
+  fixtureActivationEligibility,
+  activatableFixtures,
+  fixtureActivationTargets,
+  visibleFixturesFor
 };
 
 function engineSourceEntries() {
@@ -11691,6 +12431,7 @@ const CONTENT = buildContentRegistry(prepareAssetAwareContentSources({
   encounters: { ...MISSION_CONTENT.encounters, ...ENCOUNTERS },
   aiProfiles: AI_PROFILES,
   equipment: EQUIPMENT,
+  fixtures: FIXTURE_DEFINITIONS,
   presentationAssets: ASSETS
 }));
 /* =========================================================================
@@ -18988,11 +19729,26 @@ function evaluateMidBattleTriggers(missionId, state, alreadyFired, campaign) {
     if (params.teamId && (!source || source.teamId !== params.teamId)) return false;
     return true;
   });
-  const unitInZone = (unit, zone) => unit && unit.alive && zone &&
-    unit.x >= (zone.xMin == null ? unit.x : zone.xMin) &&
-    unit.x <= (zone.xMax == null ? unit.x : zone.xMax) &&
-    unit.y >= (zone.yMin == null ? unit.y : zone.yMin) &&
-    unit.y <= (zone.yMax == null ? unit.y : zone.yMax);
+  /**
+   * Whether a unit is standing in a trigger's zone.
+   *
+   * `tiles` is what a compiled region produces and is exact. `zone` is the
+   * older hand-authorable rectangle and is still honoured, because a mission
+   * that wrote one meant a rectangle — but nothing derives one from a region
+   * any more.
+   */
+  const unitInZone = (unit, trigger) => {
+    if (!unit || !unit.alive) return false;
+    if (trigger.tiles) return regionContains(trigger.tiles, unit.x, unit.y);
+    const zone = trigger.zone;
+    if (!zone) return false;
+    return (
+      unit.x >= (zone.xMin == null ? unit.x : zone.xMin) &&
+      unit.x <= (zone.xMax == null ? unit.x : zone.xMax) &&
+      unit.y >= (zone.yMin == null ? unit.y : zone.yMin) &&
+      unit.y <= (zone.yMax == null ? unit.y : zone.yMax)
+    );
+  };
   const triggerMet = (entry) => {
     const trigger = typeof entry.trigger === "string" ? { type: entry.trigger } : (entry.trigger || {});
     const type = trigger.type;
@@ -19020,7 +19776,7 @@ function evaluateMidBattleTriggers(missionId, state, alreadyFired, campaign) {
       return false;
     }
     if (type === "objectivePhaseChanged") return log.some((item) => item.type === "objectivePhaseChanged" && (!trigger.toId || (item.data && item.data.toId === trigger.toId)));
-    if (type === "unitEnteredZone") return units.some((unit) => (!trigger.teamId || unit.teamId === trigger.teamId) && unitInZone(unit, trigger.zone));
+    if (type === "unitEnteredZone") return units.some((unit) => (!trigger.teamId || unit.teamId === trigger.teamId) && unitInZone(unit, trigger));
     if (type === "extractionActivated") {
       const phases = (state.objectiveState.params && state.objectiveState.params.phases) || [];
       const index = (state.objectiveState.progress && state.objectiveState.progress.phaseIndex) || 0;
@@ -25583,6 +26339,730 @@ test("Propagation", "Planning a chain stays cheap on a crowded battlefield", () 
   assert(perPlan < 12, "a preview redraw must not stall: " + perPlan.toFixed(2) + "ms per plan");
 });
 
+/* =========================================================================
+ * BATTLEFIELD FIXTURES
+ *
+ * Something on a tile that is not a unit: it belongs to somebody, remembers
+ * what state it is in, and does not take a turn. The operator built on top of
+ * it turns tiles the enemy has not reached yet into places they will regret
+ * reaching — which only works if the trigger cannot tell the difference
+ * between walking onto a tile and being thrown onto it.
+ * =======================================================================*/
+
+const SAPPER_ENCOUNTER = "file:fixture-sapper-arena";
+
+function sapperBattle(seed, options) {
+  return createBattle(SAPPER_ENCOUNTER, seed == null ? 5 : seed, {
+    autoResolveScenes: true,
+    autoResolveReactions: false,
+    ...options
+  });
+}
+
+/** Places a fixture the way the ability does, without spending an activation. */
+function placeFixtureForTest(state, ownerRef, definitionId, tile, overrides) {
+  const owner = unitByRef(state, ownerRef);
+  const definition = CONTENT.fixtures[definitionId];
+  const fixture = createFixture(state.fixtures, {
+    definitionId,
+    x: tile.x,
+    y: tile.y,
+    ownerTeamId: owner ? owner.teamId : null,
+    ownerUnitId: owner ? owner.id : null,
+    createdBy: owner ? owner.id : null,
+    state: definition.initialState,
+    visibility: definition.visibility,
+    charges: definition.charges,
+    consumedOnTrigger: definition.consumedOnTrigger,
+    blocksMovement: definition.blocksMovement,
+    ...(overrides || {})
+  });
+  return fixture;
+}
+
+/* ---------------------------------------------------------------
+ * THE THING ITSELF
+ * -------------------------------------------------------------*/
+
+test("Fixtures", "A placed fixture is on the map, owned, and is not a unit", () => {
+  const state = sapperBattle(90);
+  const sapper = unitByRef(state, "sapper");
+  const unitsBefore = state.unitOrder.length;
+  activateForTest(state, sapper.id);
+
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: sapper.id,
+    abilityId: "placeMine",
+    target: { x: 6, y: 8 }
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+
+  const placed = fixturesAtTile(state.fixtures, 6, 8);
+  assertEqual(placed.length, 1, "one fixture on the tile");
+  const mine = placed[0];
+  assertEqual(mine.definitionId, "pressureMine");
+  assertEqual(mine.ownerUnitId, sapper.id, "it belongs to whoever placed it");
+  assertEqual(mine.ownerTeamId, sapper.teamId);
+  assertEqual(mine.state, "armed");
+  assertEqual(mine.blocksMovement, false);
+
+  // The thing this concept exists to avoid.
+  assertEqual(state.unitOrder.length, unitsBefore, "it did not become a unit");
+  assertEqual(state.units[mine.id], undefined, "and it is not in the unit table");
+  assert(
+    !state.timeline || !(state.timeline || []).some((entry) => entry.unitId === mine.id),
+    "it takes no turn"
+  );
+  assertEqual(unitResource(state, sapper.id, "ordnance").current, 2, "and it cost a device");
+});
+
+test("Fixtures", "A fixture does not block the tile it sits on", () => {
+  const state = sapperBattle(91);
+  const sapper = unitByRef(state, "sapper");
+  const walker = unitByRef(state, "walker");
+  placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+
+  // The engine's own movement rules, asked directly.
+  assertEqual(isTileFree(state, 8, 8, walker.id), true, "the tile is still free");
+  const step = evaluateTraversalStep(state, walker.id, { x: 7, y: 8 }, { x: 8, y: 8 }, {});
+  assertEqual(step.valid, true, (step.errors || []).join(" | "));
+  assert(findPath(state, sapper.id, { x: 8, y: 8 }), "and it is still a place you can walk to");
+});
+
+test("Fixtures", "A fixture moves through its states and refuses the ones that make no sense", () => {
+  const state = sapperBattle(92);
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+
+  assertEqual(isArmed(mine), true);
+  assertEqual(disarmFixture(state.fixtures, mine.id).ok, true);
+  assertEqual(mine.state, "disarmed");
+  assertEqual(isArmed(mine), false, "a disarmed device is not waiting for anybody");
+
+  assertEqual(armFixture(state.fixtures, mine.id).ok, true, "and it can be re-armed");
+  assertEqual(mine.state, "armed");
+
+  removeFixture(state.fixtures, mine.id);
+  assertEqual(findFixture(state.fixtures, mine.id), null, "removed means gone");
+
+  const gone = placeFixtureForTest(state, "sapper", "pressureMine", { x: 9, y: 9 });
+  removeFixture(state.fixtures, gone.id);
+  assertEqual(armFixture(state.fixtures, gone.id).ok, false, "and nothing comes back from removed");
+});
+
+/* ---------------------------------------------------------------
+ * TRIGGERING
+ * -------------------------------------------------------------*/
+
+test("Fixtures", "Walking onto an armed device sets it off", () => {
+  const state = sapperBattle(93);
+  const walker = unitByRef(state, "walker");
+  walker.x = 8;
+  walker.y = 2;
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 7, y: 2 });
+  const before = walker.currentHp;
+  activateForTest(state, walker.id);
+
+  const result = executeCommand(state, {
+    type: "move",
+    unitId: walker.id,
+    path: [{ x: 8, y: 2 }, { x: 7, y: 2 }]
+  });
+  assert(result.ok, (result.errors || []).join(" | "));
+
+  assert(walker.currentHp < before, "the mine went off under it");
+  assertEqual(findFixture(state.fixtures, mine.id), null, "and the mine is spent");
+  assert(
+    state.battleLog.some((entry) => entry.type === "fixtureDetonated"),
+    "with a detonation on the record"
+  );
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+test("Fixtures", "A disarmed device is walked over without incident", () => {
+  const state = sapperBattle(94);
+  const walker = unitByRef(state, "walker");
+  walker.x = 8;
+  walker.y = 2;
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 7, y: 2 });
+  disarmFixture(state.fixtures, mine.id);
+  const before = walker.currentHp;
+  activateForTest(state, walker.id);
+
+  executeCommand(state, { type: "move", unitId: walker.id, path: [{ x: 8, y: 2 }, { x: 7, y: 2 }] });
+  assertEqual(walker.currentHp, before, "nothing happened");
+  assert(findFixture(state.fixtures, mine.id), "and the device is still there");
+});
+
+test("Fixtures", "A device does not go off under its own side", () => {
+  const state = sapperBattle(95);
+  const vale = unitByRef(state, "vale");
+  vale.x = 8;
+  vale.y = 2;
+  placeFixtureForTest(state, "sapper", "pressureMine", { x: 7, y: 2 });
+  const before = vale.currentHp;
+  activateForTest(state, vale.id);
+
+  executeCommand(state, { type: "move", unitId: vale.id, path: [{ x: 8, y: 2 }, { x: 7, y: 2 }] });
+  assertEqual(vale.currentHp, before, "an ally walks over their own mine");
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+test("Fixtures", "A device crossed mid-path triggers where it is, not where the walk ended", () => {
+  const state = sapperBattle(96);
+  const walker = unitByRef(state, "walker");
+  walker.x = 16;
+  walker.y = 2;
+  walker.currentHp = 9999;
+  // A → B → C → D with the device on C.
+  const path = [{ x: 16, y: 2 }, { x: 15, y: 2 }, { x: 14, y: 2 }, { x: 13, y: 2 }];
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 14, y: 2 });
+  activateForTest(state, walker.id);
+
+  const result = executeCommand(state, { type: "move", unitId: walker.id, path });
+  assert(result.ok, (result.errors || []).join(" | "));
+
+  assert(walker.currentHp < 9999, "it went off");
+  assertEqual(findFixture(state.fixtures, mine.id), null, "and was spent");
+
+  const detonation = state.battleLog.find((entry) => entry.type === "fixtureDetonated");
+  assertEqual(detonation.data.tile.x, 14, "at the mined tile");
+  assertEqual(detonation.data.tile.y, 2);
+
+  // The mover survived, so the rest of the walk is still owed to it.
+  assertEqual(walker.x, 13, "and the remaining movement resolved afterwards");
+  assertEqual(walker.y, 2);
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+test("Fixtures", "A walk that kills the mover stops where it died", () => {
+  const state = sapperBattle(97);
+  const walker = unitByRef(state, "walker");
+  walker.x = 16;
+  walker.y = 2;
+  walker.currentHp = 1;
+  placeFixtureForTest(state, "sapper", "pressureMine", { x: 14, y: 2 });
+  activateForTest(state, walker.id);
+
+  executeCommand(state, {
+    type: "move",
+    unitId: walker.id,
+    path: [{ x: 16, y: 2 }, { x: 15, y: 2 }, { x: 14, y: 2 }, { x: 13, y: 2 }]
+  });
+
+  assertEqual(walker.alive, false, "the mine finished it");
+  assertEqual(walker.x, 14, "and it never reached the tile it was walking to");
+  assertEqual(walker.y, 2);
+  assertEqual(battleContinuation(state).kind !== "stalled", true);
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+/* ---------------------------------------------------------------
+ * THE ACCEPTANCE
+ * -------------------------------------------------------------*/
+
+/**
+ * The phase's central proof.
+ *
+ * One operator prepares a tile. A different operator, who knows nothing about
+ * it, throws an enemy onto that tile. The device goes off. No engine code
+ * connects the two: both movement handlers ask the same question of the same
+ * list, and a shove cannot tell itself apart from a walk.
+ */
+test("Fixtures", "An enemy shoved onto a device sets it off exactly as if it had walked", () => {
+  const state = sapperBattle(98);
+  const veteran = unitByRef(state, "veteran");
+  const bravo = unitByRef(state, "bravo");
+  bravo.currentHp = 9999;
+
+  // The sapper prepares a tile two west of where the enemy is standing.
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+  assertEqual(mine.state, "armed");
+  assertEqual(bravo.x, 10, "the enemy is not on it and has no reason to walk there");
+
+  // The veteran runs its own route and chooses an exact displacement.
+  activateForTest(state, veteran.id);
+  const shove = executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "w",
+        distance: 1,
+        contact: { targetUnitId: bravo.id, displace: { heading: "w", distance: 2 } }
+      }
+    ]
+  });
+  assert(shove.ok, (shove.errors || []).join(" | "));
+
+  assertEqual(bravo.x, 8, "the enemy landed on the prepared tile");
+  assertEqual(bravo.y, 8);
+  assert(bravo.currentHp < 9999, "and the device went off");
+  assertEqual(findFixture(state.fixtures, mine.id), null, "the device is consumed");
+
+  const detonation = state.battleLog.find((entry) => entry.type === "fixtureDetonated");
+  assert(detonation, "with a detonation on the record");
+  assertEqual(detonation.data.activation, "automatic", "which nobody commanded");
+  assert(
+    detonation.data.targetUnitIds.includes(bravo.id),
+    "catching the frame that was thrown onto it"
+  );
+
+  assertEqual(battleContinuation(state).kind !== "stalled", true, "and the battle carries on");
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+test("Fixtures", "The whole sequence stays one inspectable causal chain", () => {
+  const state = sapperBattle(99);
+  const veteran = unitByRef(state, "veteran");
+  const sapper = unitByRef(state, "sapper");
+  const bravo = unitByRef(state, "bravo");
+  bravo.currentHp = 9999;
+
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+  const traceBefore = (state.causalTrace || []).length;
+
+  activateForTest(state, veteran.id);
+  executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "w",
+        distance: 1,
+        contact: { targetUnitId: bravo.id, displace: { heading: "w", distance: 2 } }
+      }
+    ]
+  });
+
+  const trace = state.causalTrace.slice(traceBefore);
+  const forced = trace.find((entry) => entry.type === "unitForcedMove");
+  const triggered = trace.find((entry) => entry.type === "fixtureTriggered");
+  const detonated = trace.find((entry) => entry.type === "fixtureDetonated");
+  assert(forced && triggered && detonated, "every step of it is an event");
+  // One chain, and the blast descends from the shove rather than sitting
+  // beside it: the shove is the root the detonation points back at.
+  assertEqual(forced.cause.chainId, detonated.cause.chainId, "the shove and the blast are one chain");
+  assertEqual(forced.cause.depth, 0, "the shove is the root of it");
+  assert(detonated.cause.depth > triggered.cause.depth, "and the blast hangs below the trigger");
+  assertEqual(detonated.cause.rootSeq, triggered.cause.rootSeq, "sharing one root");
+  assert(forced.cause.forced, "the displacement is attributed as forced");
+  assert(describeCause(detonated.cause), describeCause(detonated.cause));
+
+  // Attribution survives: the damage belongs to whoever laid the device, not
+  // to the ground.
+  const detonation = state.battleLog.find((entry) => entry.type === "fixtureDetonated");
+  assertEqual(detonation.data.sourceUnitId, sapper.id, "the device is still hers");
+  assertEqual(detonation.data.fixtureId, mine.id);
+  assertEqual(detonation.data.triggeredByUnitId, bravo.id, "and it knows who set it off");
+});
+
+/* ---------------------------------------------------------------
+ * COMMANDED DEVICES
+ * -------------------------------------------------------------*/
+
+test("Fixtures", "A remote charge waits, and does not go off when walked on", () => {
+  const state = sapperBattle(100);
+  const walker = unitByRef(state, "walker");
+  walker.x = 8;
+  walker.y = 2;
+  walker.currentHp = 9999;
+  const charge = placeFixtureForTest(state, "sapper", "remoteCharge", { x: 7, y: 2 });
+  activateForTest(state, walker.id);
+
+  executeCommand(state, { type: "move", unitId: walker.id, path: [{ x: 8, y: 2 }, { x: 7, y: 2 }] });
+  assertEqual(walker.currentHp, 9999, "stepping on it does nothing");
+  assert(findFixture(state.fixtures, charge.id), "and it is still sitting there, waiting");
+  assertEqual(charge.state, "armed");
+});
+
+test("Fixtures", "Detonating is a command, and it catches everyone standing in it", () => {
+  const state = sapperBattle(101);
+  const sapper = unitByRef(state, "sapper");
+  const packA = unitByRef(state, "packA");
+  const packB = unitByRef(state, "packB");
+  const packC = unitByRef(state, "packC");
+  for (const unit of [packA, packB, packC]) unit.currentHp = 9999;
+
+  const charge = placeFixtureForTest(state, "sapper", "remoteCharge", { x: 15, y: 12 });
+  activateForTest(state, sapper.id);
+
+  const command = {
+    type: "activateFixture",
+    unitId: sapper.id,
+    abilityId: "detonate",
+    fixtureId: charge.id
+  };
+  const validation = validateCommand(state, command);
+  assert(validation.valid, validation.errors.join(" | "));
+  assertEqual(validation.preview.targets.length, 3, "the preview knows who is in it");
+
+  const result = executeCommand(state, command);
+  assert(result.ok, (result.errors || []).join(" | "));
+
+  for (const unit of [packA, packB, packC]) {
+    assert(unit.currentHp < 9999, unit.ref + " was caught");
+  }
+  assertEqual(findFixture(state.fixtures, charge.id), null, "the charge is spent");
+
+  const detonation = state.battleLog.find((entry) => entry.type === "fixtureDetonated");
+  assertEqual(detonation.data.activation, "command", "and the record says it was chosen");
+  assertEqual(battleContinuation(state).kind !== "stalled", true);
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+test("Fixtures", "You cannot set off somebody else's device", () => {
+  const state = sapperBattle(102);
+  const sapper = unitByRef(state, "sapper");
+  const walker = unitByRef(state, "walker");
+  // A charge belonging to the other side.
+  const theirs = createFixture(state.fixtures, {
+    definitionId: "remoteCharge",
+    x: 15,
+    y: 12,
+    ownerTeamId: walker.teamId,
+    ownerUnitId: walker.id,
+    state: "armed",
+    charges: 1,
+    consumedOnTrigger: true
+  });
+  activateForTest(state, sapper.id);
+
+  const validation = validateCommand(state, {
+    type: "activateFixture",
+    unitId: sapper.id,
+    abilityId: "detonate",
+    fixtureId: theirs.id
+  });
+  assertEqual(validation.valid, false, "refused");
+  assert(/not your device/i.test(validation.errors.join(" ")), validation.errors.join(" | "));
+  assert(findFixture(state.fixtures, theirs.id), "and it is untouched");
+});
+
+test("Fixtures", "A detonator selects by tag, so it cannot command a device of the wrong kind", () => {
+  const state = sapperBattle(103);
+  const sapper = unitByRef(state, "sapper");
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 6, y: 8 });
+  const charge = placeFixtureForTest(state, "sapper", "remoteCharge", { x: 5, y: 8 });
+  activateForTest(state, sapper.id);
+
+  const eligible = activatableFixtures(state, sapper.id, "detonate").map((entry) => entry.id);
+  assertEqual(eligible.join(","), charge.id, "only the commandable one is offered");
+
+  const refused = validateCommand(state, {
+    type: "activateFixture",
+    unitId: sapper.id,
+    abilityId: "detonate",
+    fixtureId: mine.id
+  });
+  assertEqual(refused.valid, false);
+  assert(/cannot command/i.test(refused.errors.join(" ")), refused.errors.join(" | "));
+
+  // And nothing in the handler names a fixture: the tag comes from the ability.
+  assertEqual(CONTENT.abilities.detonate.fixtureTargeting.tag, "commandable");
+});
+
+test("Fixtures", "A device can be walked up to and switched off", () => {
+  const state = sapperBattle(104);
+  const walker = unitByRef(state, "walker");
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 7, y: 2 });
+  // Standing adjacent, and it has been found.
+  walker.x = 8;
+  walker.y = 2;
+  mine.revealed = true;
+  activateForTest(state, walker.id);
+
+  const command = {
+    type: "activateFixture",
+    unitId: walker.id,
+    abilityId: "defuse",
+    fixtureId: mine.id
+  };
+  const validation = validateCommand(state, command);
+  assert(validation.valid, validation.errors.join(" | "));
+
+  const result = executeCommand(state, command);
+  assert(result.ok, (result.errors || []).join(" | "));
+  assertEqual(findFixture(state.fixtures, mine.id).state, "disarmed", "it is off");
+
+  // And walking over it now does nothing.
+  const before = walker.currentHp;
+  activateForTest(state, walker.id);
+  executeCommand(state, { type: "move", unitId: walker.id, path: [{ x: 8, y: 2 }, { x: 7, y: 2 }] });
+  assertEqual(walker.currentHp, before, "which is the whole point of defusing it");
+});
+
+/* ---------------------------------------------------------------
+ * VISIBILITY
+ * -------------------------------------------------------------*/
+
+test("Fixtures", "A hidden device is known to its own side and not to the enemy", () => {
+  const state = sapperBattle(105);
+  const sapper = unitByRef(state, "sapper");
+  const walker = unitByRef(state, "walker");
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+
+  assertEqual(fixtureVisibleTo(mine, sapper.teamId), true, "its own side sees it");
+  assertEqual(fixtureVisibleTo(mine, walker.teamId), false, "the enemy does not");
+
+  // The enemy-facing surface must not leak it.
+  const enemyView = visibleFixturesFor(state, walker.teamId);
+  assertEqual(enemyView.length, 0, "nothing leaks through the view model");
+  assertEqual(visibleFixturesFor(state, sapper.teamId).length, 1, "while its owners can see it");
+
+  mine.revealed = true;
+  assertEqual(fixtureVisibleTo(mine, walker.teamId), true, "once found, it stays found");
+  assertEqual(visibleFixturesFor(state, walker.teamId).length, 1);
+});
+
+test("Fixtures", "The AI is never handed a hidden hostile device", () => {
+  const state = sapperBattle(106);
+  const walker = unitByRef(state, "walker");
+  placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+
+  // Everything the AI is given to reason with, scanned for the fixture it is
+  // not allowed to know about.
+  const commands = chooseAiCommands(state, walker.id);
+  const serialized = JSON.stringify(commands);
+  for (const fixture of allFixtures(state.fixtures)) {
+    assert(!serialized.includes(fixture.id), "the AI plan names a hidden device");
+  }
+  assertEqual(state.errors.length, 0, state.errors.join(" | "));
+});
+
+/* ---------------------------------------------------------------
+ * PERSISTENCE
+ * -------------------------------------------------------------*/
+
+test("Fixtures", "Devices survive a save and reload with their state intact", () => {
+  const state = sapperBattle(107);
+  const mine = placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+  const charge = placeFixtureForTest(state, "sapper", "remoteCharge", { x: 9, y: 9 });
+  disarmFixture(state.fixtures, charge.id);
+
+  const restored = deserializeBattle(serializeBattle(state));
+  assert(restored, "the save loaded");
+  assertEqual(allFixtures(restored.fixtures).length, 2, "both came back");
+
+  const restoredMine = findFixture(restored.fixtures, mine.id);
+  assertEqual(restoredMine.definitionId, "pressureMine");
+  assertEqual(restoredMine.x + "," + restoredMine.y, "8,8", "on the same tile");
+  assertEqual(restoredMine.state, "armed");
+  assertEqual(restoredMine.ownerUnitId, mine.ownerUnitId, "still hers");
+  assertEqual(findFixture(restored.fixtures, charge.id).state, "disarmed", "state survived");
+
+  // And a new device placed after the reload cannot reuse an id.
+  const fresh = createFixture(restored.fixtures, { definitionId: "pressureMine", x: 1, y: 1 });
+  assertEqual(findFixture(restored.fixtures, fresh.id).x, 1);
+  assert(fresh.id !== mine.id && fresh.id !== charge.id, "ids stay unique across a reload");
+
+  // A save from before fixtures existed loads rather than being rejected.
+  const legacy = JSON.parse(serializeBattle(state));
+  delete legacy.state.fixtures;
+  const older = deserializeBattle(JSON.stringify(legacy));
+  assert(older, "an older save still loads");
+  assertEqual(allFixtures(older.fixtures).length, 0, "with no devices on it");
+});
+
+test("Fixtures", "A device that goes off still leaves the battle in a valid state", () => {
+  const state = sapperBattle(108, { autoResolveReactions: true });
+  const bravo = unitByRef(state, "bravo");
+  const veteran = unitByRef(state, "veteran");
+  placeFixtureForTest(state, "sapper", "pressureMine", { x: 8, y: 8 });
+
+  activateForTest(state, veteran.id);
+  executeCommand(state, {
+    type: "trajectory",
+    unitId: veteran.id,
+    abilityId: "machStrike",
+    segments: [
+      {
+        heading: "w",
+        distance: 1,
+        contact: { targetUnitId: bravo.id, displace: { heading: "w", distance: 2 } }
+      }
+    ]
+  });
+  processAllEvents(state);
+  settleCommand(state);
+
+  const next = battleContinuation(state);
+  assert(next.kind !== "stalled", next.reason || "");
+  assertEqual(validateBattleState(state).valid, true, validateBattleState(state).errors.join(" | "));
+});
+
+/* ---------------------------------------------------------------
+ * PREVIEW AND CONTENT
+ * -------------------------------------------------------------*/
+
+test("Fixtures", "What placement offers is what placement does", () => {
+  const state = sapperBattle(109);
+  const sapper = unitByRef(state, "sapper");
+  activateForTest(state, sapper.id);
+
+  // A tile with somebody on it is not a placement tile, and the validator says
+  // so rather than the effect failing halfway.
+  const occupied = validateCommand(state, {
+    type: "useAbility",
+    unitId: sapper.id,
+    abilityId: "placeMine",
+    target: { x: sapper.x, y: sapper.y }
+  });
+  assertEqual(occupied.valid, false, "cannot place under a frame");
+
+  const tooFar = validateCommand(state, {
+    type: "useAbility",
+    unitId: sapper.id,
+    abilityId: "placeMine",
+    target: { x: sapper.x + 9, y: sapper.y }
+  });
+  assertEqual(tooFar.valid, false, "nor out of range");
+
+  const legal = { x: sapper.x + 2, y: sapper.y };
+  assert(
+    validateCommand(state, {
+      type: "useAbility",
+      unitId: sapper.id,
+      abilityId: "placeMine",
+      target: legal
+    }).valid,
+    "a clear tile in range is offered"
+  );
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: sapper.id,
+    abilityId: "placeMine",
+    target: legal
+  });
+  assertEqual(fixturesAtTile(state.fixtures, legal.x, legal.y).length, 1, "and taken");
+
+  // Two of the same device on one tile is a misclick, not a tactic.
+  activateForTest(state, sapper.id);
+  const dup = executeCommand(state, {
+    type: "useAbility",
+    unitId: sapper.id,
+    abilityId: "placeMine",
+    target: legal
+  });
+  assert(!dup.ok || state.errors.length > 0, "a duplicate is refused");
+});
+
+test("Fixtures", "An empty rack makes the action honestly unavailable", () => {
+  const state = sapperBattle(110);
+  const sapper = unitByRef(state, "sapper");
+  activateForTest(state, sapper.id);
+  unitResource(state, sapper.id, "ordnance").current = 0;
+
+  const model = createAbilityViewModel(state, sapper.id, "placeMine");
+  assertEqual(model.usable, false, model.unusableReason || "");
+  const validation = validateCommand(state, {
+    type: "useAbility",
+    unitId: sapper.id,
+    abilityId: "placeMine",
+    target: { x: sapper.x + 2, y: sapper.y }
+  });
+  assertEqual(validation.valid, false);
+
+  // And the launcher scavenges more, so an empty rack is a setback not a wall.
+  const target = unitByRef(state, "bravo");
+  target.currentHp = 9999;
+  target.x = sapper.x + 3;
+  target.y = sapper.y;
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: sapper.id,
+    abilityId: "demolitionShot",
+    target: { unitId: target.id, tile: { x: target.x, y: target.y } }
+  });
+  assert(unitResource(state, sapper.id, "ordnance").current > 0, "the launcher restocks");
+});
+
+test("Fixtures", "Nothing in the fixture engine knows what is sitting on the tile", () => {
+  const engineParts = [
+    createFixture,
+    findFixture,
+    fixturesAtTile,
+    pathContact,
+    setFixtureState,
+    consumeFixtureCharge,
+    fixtureVisibleTo,
+    fixtureDefinition,
+    fixtureTriggeredBy,
+    triggerFixturesAt,
+    firstFixtureContactOnPath,
+    resolveFixtureActivation,
+    resolvePlaceFixtureEffect,
+    fixtureTargetingRules,
+    fixtureActivationEligibility,
+    activatableFixtures,
+    fixtureActivationTargets
+  ];
+  const source = engineParts.map((fn) => fn.toString()).join("\n");
+  for (const name of [
+    "pressureMine",
+    "remoteCharge",
+    "placeMine",
+    "placeCharge",
+    "detonate",
+    "sapperFrame",
+    "ordnance",
+    "veteran",
+    "machStrike"
+  ]) {
+    assert(!new RegExp("\\b" + name + "\\b", "i").test(source), "the engine names " + name);
+  }
+
+  const audited = new Set(Object.values(ENGINE_FUNCTIONS));
+  for (const fn of engineParts) {
+    if ([createFixture, findFixture, fixturesAtTile, pathContact, setFixtureState,
+         consumeFixtureCharge, fixtureVisibleTo].includes(fn)) {
+      continue;
+    }
+    assert(audited.has(fn), fn.name + " is outside the architecture audit");
+  }
+
+  // And the devices really are content built from registered parts.
+  for (const fixtureId of Object.keys(CONTENT.fixtures)) {
+    for (const effect of CONTENT.fixtures[fixtureId].effects || []) {
+      assert(EFFECT_HANDLERS[effect.type], fixtureId + " uses registered effect " + effect.type);
+    }
+  }
+});
+
+test("Fixtures", "Scanning for devices stays cheap at realistic counts", () => {
+  const state = sapperBattle(111);
+  const walker = unitByRef(state, "walker");
+  const path = [];
+  for (let x = 20; x >= 1; x -= 1) path.push({ x, y: 15 });
+
+  const timings = {};
+  for (const count of [5, 20, 50]) {
+    const probe = sapperBattle(111);
+    for (let index = 0; index < count; index += 1) {
+      createFixture(probe.fixtures, {
+        definitionId: "pressureMine",
+        x: 1 + (index % 20),
+        y: 1 + Math.floor(index / 20),
+        ownerTeamId: "sectionSeven",
+        state: "armed"
+      });
+    }
+    const started = Date.now();
+    const runs = 400;
+    for (let index = 0; index < runs; index += 1) {
+      firstFixtureContactOnPath(probe, walker.id, path);
+    }
+    timings[count] = (Date.now() - started) / runs;
+  }
+  // A movement scan runs once per move; anything near a millisecond would be
+  // visible, and this is nowhere near it.
+  for (const count of Object.keys(timings)) {
+    assert(timings[count] < 2, count + " devices took " + timings[count].toFixed(3) + "ms per scan");
+  }
+});
+
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
   const audit = auditArchitecture();
   assert(audit.pass, audit.failures.join(" | "));
@@ -30666,6 +32146,129 @@ test("Mission authoring", "The shipped Grayfield fixture validates cleanly", () 
   assertEqual(script.phases.length, 3);
   assertEqual(script.beats.length, 5);
   assertEqual(script.objectives.length, 3);
+});
+
+/* ---------------------------------------------------------------
+ * REGION MEMBERSHIP
+ *
+ * A region is its tiles. That was already true for objectives and for the
+ * scripting layer's conditions, and false for the mid-battle trigger, which
+ * tested the bounding box — the same answer only for rectangles. These tests
+ * pin the exact behaviour down now that standing on a tile can hurt you.
+ * -------------------------------------------------------------*/
+
+/** An L: the full 3×3 block minus its north-east corner tile. */
+function lShapedRegion() {
+  const tiles = [];
+  for (let y = 0; y < 3; y += 1) {
+    for (let x = 0; x < 3; x += 1) {
+      if (x === 2 && y === 0) continue;
+      tiles.push({ x, y });
+    }
+  }
+  return tiles;
+}
+
+test("Mission authoring", "A rectangle behaves exactly as it always did", () => {
+  const tiles = [];
+  for (let y = 2; y <= 4; y += 1) {
+    for (let x = 5; x <= 7; x += 1) tiles.push({ x, y });
+  }
+  assert(isRectangular(tiles), "the fixture really is a rectangle");
+  for (const tile of tiles) {
+    assert(regionContains(tiles, tile.x, tile.y), "every authored tile is inside");
+  }
+  assertEqual(regionContains(tiles, 4, 3), false, "and everything outside is outside");
+  assertEqual(regionContains(tiles, 8, 3), false);
+  assertEqual(regionContains(tiles, 6, 1), false);
+
+  const box = boundingBoxOf(tiles);
+  assertEqual(box.xMin + "," + box.xMax + "," + box.yMin + "," + box.yMax, "5,7,2,4");
+});
+
+test("Mission authoring", "An irregular region excludes the hole in its own bounding box", () => {
+  const tiles = lShapedRegion();
+  assertEqual(isRectangular(tiles), false, "the fixture is not a rectangle");
+
+  // The tile the old bounding-box test got wrong: inside the box, outside the
+  // region. This is the whole reason the fix exists.
+  const box = boundingBoxOf(tiles);
+  assert(
+    2 >= box.xMin && 2 <= box.xMax && 0 >= box.yMin && 0 <= box.yMax,
+    "the notch really is inside the bounding box"
+  );
+  assertEqual(regionContains(tiles, 2, 0), false, "but it is not inside the region");
+
+  assertEqual(regionContains(tiles, 0, 0), true);
+  assertEqual(regionContains(tiles, 2, 2), true);
+  assertEqual(regionContains(tiles, 3, 0), false, "and outside the box is still outside");
+});
+
+test("Mission authoring", "Entering, leaving and re-entering an irregular region all read exactly", () => {
+  const tiles = lShapedRegion();
+  const walk = [
+    { tile: { x: 3, y: 0 }, inside: false, note: "outside, east of the region" },
+    { tile: { x: 2, y: 0 }, inside: false, note: "the notch — inside the box, not the region" },
+    { tile: { x: 2, y: 1 }, inside: true, note: "entered" },
+    { tile: { x: 2, y: 0 }, inside: false, note: "left, back through the notch" },
+    { tile: { x: 2, y: 1 }, inside: true, note: "re-entered" },
+    { tile: { x: 1, y: 1 }, inside: true, note: "still inside, moving through" },
+    { tile: { x: 1, y: 3 }, inside: false, note: "left to the south" }
+  ];
+  for (const step of walk) {
+    assertEqual(
+      regionContains(tiles, step.tile.x, step.tile.y),
+      step.inside,
+      step.note + " at " + step.tile.x + "," + step.tile.y
+    );
+  }
+
+  // And a path crossing the region is detected from its tiles, not its ends.
+  assertEqual(
+    pathEntersRegion(tiles, [{ x: 3, y: 0 }, { x: 2, y: 1 }, { x: 3, y: 2 }]),
+    true,
+    "a path that only touches the middle still enters"
+  );
+  assertEqual(
+    pathEntersRegion(tiles, [{ x: 3, y: 0 }, { x: 4, y: 0 }, { x: 2, y: 0 }]),
+    false,
+    "a path that only clips the notch does not"
+  );
+});
+
+test("Mission authoring", "A compiled mid-battle trigger carries exact tiles, not a rectangle", () => {
+  const mission = normalizeMission({
+    id: "region-probe",
+    name: "Region Probe",
+    map: { name: "P", width: 6, height: 6, rows: ["......", "......", "......", "......", "......", "......"] },
+    units: [
+      { ref: "hero", definitionId: "assaultMech", teamId: "player", x: 0, y: 5 },
+      { ref: "foe", definitionId: "rifleGrunt", teamId: "foe", x: 5, y: 5 }
+    ],
+    regions: [{ id: "hook", name: "Hook", tiles: lShapedRegion() }],
+    objective: { type: "defeatAllEnemies", text: "x" },
+    midBattle: [
+      { id: "warn", trigger: { type: "unitEnteredZone", regionRef: "hook" }, speaker: "vale", text: "In the hook." }
+    ]
+  });
+  const compiled = compileMission(mission);
+  const beat = compiled.script.midBattle.find((entry) => entry.id === "warn");
+  assert(beat, "the beat compiled");
+  assertEqual(beat.trigger.zone, undefined, "no bounding box is produced any more");
+  assertEqual(beat.trigger.tiles.length, lShapedRegion().length, "the exact tile set is carried");
+  assertEqual(
+    beat.trigger.tiles.some((tile) => tile.x === 2 && tile.y === 0),
+    false,
+    "and the notch is not in it"
+  );
+
+  // The validator no longer warns about a shape it now handles correctly.
+  const report = validateMissionFile(mission);
+  assertEqual(
+    report.warnings.filter((message) => /bounding box/i.test(message)).length,
+    0,
+    report.warnings.join(" | ")
+  );
 });
 
 /* =========================================================================
@@ -39361,6 +40964,7 @@ if (typeof window !== "undefined") {
     chooseAiCommands,
     validateCommand,
     executeCommand,
+    abilityModel: (state, unitId, abilityId) => createAbilityViewModel(state, unitId, abilityId),
     isHostile,
     isFriendly,
     relationshipBetween: (state, a, b) => relationshipBetween(state.factions, a, b),
@@ -39458,6 +41062,23 @@ if (typeof window !== "undefined") {
     },
     // The chain surface. `plan` and `preview` are the same two calls execution
     // makes, so a harness asking them is asking the player's question.
+    // The fixture surface. Everything a harness needs to place, inspect,
+    // command and defuse a device, through the same calls the game makes.
+    fixtures: {
+      all: (state) => allFixtures(state.fixtures),
+      at: (state, x, y) => fixturesAtTile(state.fixtures, x, y),
+      find: (state, fixtureId) => findFixture(state.fixtures, fixtureId),
+      visibleTo: (state, teamId) => visibleFixturesFor(state, teamId),
+      activatable: (state, unitId, abilityId) => activatableFixtures(state, unitId, abilityId),
+      targets: (state, fixtureId) =>
+        fixtureActivationTargets(state, findFixture(state.fixtures, fixtureId)),
+      definitions: () => CONTENT.fixtures,
+      states: FIXTURE_STATES,
+      describe: (state, fixtureId) => describeFixture(findFixture(state.fixtures, fixtureId)),
+      // The engine's own occupancy rule, so a harness asking "is that tile
+      // still walkable" is asking the question movement asks.
+      tileIsFree: (state, x, y, unitId) => isTileFree(state, x, y, unitId)
+    },
     propagation: {
       plan: (state, sourceUnitId, abilityId, targetUnitId) =>
         planUnitPropagation(state, sourceUnitId, abilityId, targetUnitId),

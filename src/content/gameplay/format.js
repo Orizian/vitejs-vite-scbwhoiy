@@ -247,6 +247,34 @@ export const REGISTRY_KINDS = {
       "blocksLineOfSight",
       "modifiers"
     ]
+  },
+  fixtures: {
+    id: "fixtures",
+    label: "Fixtures",
+    singular: "fixture",
+    path: "src/content/gameplay/fixtures.json",
+    summary:
+      "Things that sit on a tile and are not units: mines, charges, beacons, " +
+      "deployables. A fixture belongs to somebody, remembers what state it is " +
+      "in, normally does not block its tile, and disappears when it is spent. " +
+      "What it does when it goes off is an ordinary effect list.",
+    fieldOrder: [
+      "name",
+      "glyph",
+      "description",
+      "tags",
+      "visibility",
+      "initialState",
+      "trigger",
+      "area",
+      "affects",
+      "effects",
+      "charges",
+      "consumedOnTrigger",
+      "blocksMovement",
+      "stacks",
+      "triggerTiles"
+    ]
   }
 };
 

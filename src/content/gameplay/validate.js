@@ -14,6 +14,10 @@ import { REGISTRY_IDS, REGISTRY_KINDS } from "./format.js";
 import { validateResourceDefinition } from "../../combat/resources.js";
 import { REDIRECT_IDS } from "../../combat/trajectory.js";
 import { SELECTION_POLICY_IDS, MAX_PROPAGATION_HOPS } from "../../combat/propagation.js";
+import { FIXTURE_STATES, FIXTURE_VISIBILITY } from "../../combat/fixtures.js";
+
+/** Trigger kinds the fixture runtime understands. */
+const FIXTURE_TRIGGER_TYPES = ["unitEnters", "command"];
 import { REACTION_EVENT_TYPE_IDS } from "../../reactions/events.js";
 import { validateReactionEffect } from "../../reactions/effects.js";
 import { validateReactionCondition } from "../../reactions/conditions.js";
@@ -42,7 +46,7 @@ export function validateGameplayData(data, context) {
 
   const {
     units, abilities, equipment, statuses, aiProfiles, operators, perks, terrain,
-    resources, reactions, combatLinks
+    resources, reactions, combatLinks, fixtures
   } = registries;
   const external = context || {};
 
@@ -134,7 +138,16 @@ export function validateGameplayData(data, context) {
       if (effect.abilityId && !has(abilities, effect.abilityId)) {
         errors.push(label("abilities", id) + ' references unknown ability "' + effect.abilityId + '".');
       }
-      if (effect.definitionId && !has(units, effect.definitionId)) {
+      // `definitionId` names whichever registry the effect draws from. A
+      // fixture is not a unit, and saying "summons unknown unit" about a mine
+      // sends the author looking in the wrong file.
+      if (effect.definitionId && effect.type === "placeFixture") {
+        if (!has(fixtures, effect.definitionId)) {
+          errors.push(
+            label("abilities", id) + ' places unknown fixture "' + effect.definitionId + '".'
+          );
+        }
+      } else if (effect.definitionId && !has(units, effect.definitionId)) {
         errors.push(label("abilities", id) + ' summons unknown unit "' + effect.definitionId + '".');
       }
       if (effect.resourceId && !has(resources, effect.resourceId)) {
@@ -203,6 +216,42 @@ export function validateGameplayData(data, context) {
       }
     }
 
+    /* ---- fixture targeting ----
+     *
+     * An ability that commands a device selects by tag, so the check is that
+     * some fixture actually carries the tag — a detonator wired to a tag
+     * nothing has is a button that is always greyed out. */
+    const fixtureTargeting = ability.fixtureTargeting;
+    if (fixtureTargeting) {
+      if (fixtureTargeting.tag) {
+        const carriers = Object.keys(fixtures).filter((fixtureId) =>
+          ((fixtures[fixtureId] || {}).tags || []).includes(fixtureTargeting.tag)
+        );
+        if (!carriers.length) {
+          errors.push(
+            label("abilities", id) + ' commands fixtures tagged "' + fixtureTargeting.tag +
+              '", which no fixture carries.'
+          );
+        }
+      }
+      for (const stateId of fixtureTargeting.states || []) {
+        if (!FIXTURE_STATES.includes(stateId)) {
+          errors.push(label("abilities", id) + ' targets unknown fixture state "' + stateId + '".');
+        }
+      }
+      if (!["own", "team", "any"].includes(fixtureTargeting.ownership || "own")) {
+        errors.push(
+          label("abilities", id) + ' uses unknown fixture ownership "' + fixtureTargeting.ownership + '".'
+        );
+      }
+      if (fixtureTargeting.rangeMax != null && fixtureTargeting.rangeMax < 0) {
+        errors.push(label("abilities", id) + " commands fixtures at a negative range.");
+      }
+    }
+    if (ability.fixtureAction && !["disarm", "arm", "remove"].includes(ability.fixtureAction)) {
+      errors.push(label("abilities", id) + ' uses unknown fixture action "' + ability.fixtureAction + '".');
+    }
+
     /* ---- propagation ----
      *
      * A chain is bounded by numbers an author types. Every one of them can be
@@ -269,6 +318,71 @@ export function validateGameplayData(data, context) {
         errors.push(
           label("abilities", id) + ' costs "' + resourceId + '" but no unit that has it carries that resource.'
         );
+      }
+    }
+  }
+
+  /* ---- fixtures ----
+   *
+   * A fixture is a thing an author can leave on the map for the rest of a
+   * battle. Every way of authoring one wrong ends with either a device that
+   * does nothing or one that cannot be cleared, and both are worse than an
+   * export that refuses. */
+  for (const id of Object.keys(fixtures)) {
+    const fixture = fixtures[id] || {};
+    if (!fixture.name) warnings.push(label("fixtures", id) + " has no display name.");
+
+    if (fixture.visibility && !FIXTURE_VISIBILITY.includes(fixture.visibility)) {
+      errors.push(label("fixtures", id) + ' has unknown visibility "' + fixture.visibility + '".');
+    }
+    if (fixture.initialState && !FIXTURE_STATES.includes(fixture.initialState)) {
+      errors.push(label("fixtures", id) + ' starts in unknown state "' + fixture.initialState + '".');
+    }
+    if (fixture.initialState === "removed" || fixture.initialState === "triggered") {
+      errors.push(label("fixtures", id) + " starts in a state it can never act from.");
+    }
+    if (fixture.charges != null && fixture.charges < 0) {
+      errors.push(label("fixtures", id) + " has a negative number of charges.");
+    }
+    if (fixture.charges === 0) {
+      warnings.push(label("fixtures", id) + " has no charges and can never activate.");
+    }
+
+    const trigger = fixture.trigger || {};
+    if (!FIXTURE_TRIGGER_TYPES.includes(trigger.type)) {
+      errors.push(label("fixtures", id) + ' has unknown trigger type "' + trigger.type + '".');
+    }
+    if (trigger.triggeredBy && !["enemy", "ally", "any"].includes(trigger.triggeredBy)) {
+      errors.push(
+        label("fixtures", id) + ' triggers on unknown relationship "' + trigger.triggeredBy + '".'
+      );
+    }
+    // A device that goes off under its own owner and then damages its own
+    // side is authorable, but it is almost never what someone meant.
+    if (trigger.includesOwner && fixture.affects === "ally") {
+      warnings.push(
+        label("fixtures", id) + " triggers under its owner and affects allies, which will hit the owner."
+      );
+    }
+    if (fixture.affects && !["enemy", "ally", "any"].includes(fixture.affects)) {
+      errors.push(label("fixtures", id) + ' affects unknown relationship "' + fixture.affects + '".');
+    }
+    if (!(fixture.effects || []).length) {
+      warnings.push(label("fixtures", id) + " does nothing when it activates.");
+    }
+    // A blocking fixture placed on the tile the placer is standing on would
+    // trap them; a blocking fixture that is also invisible to its enemies is
+    // an invisible wall. Neither is a thing anybody wants shipped.
+    if (fixture.blocksMovement && fixture.visibility !== "everyone") {
+      errors.push(
+        label("fixtures", id) + " blocks movement but is not visible to everyone, which is an invisible wall."
+      );
+    }
+    checkEffectRefs(fixture.effects, id);
+    for (const effect of fixture.effects || []) {
+      // The obvious way to write a device that sets itself off forever.
+      if (effect && effect.type === "placeFixture" && effect.definitionId === id) {
+        errors.push(label("fixtures", id) + " places itself, which would never stop.");
       }
     }
   }

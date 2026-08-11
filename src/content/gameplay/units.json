@@ -420,6 +420,53 @@
       "defaultAbilityId": "handCannon",
       "aiProfile": "aggressive"
     },
+    "sapperFrame": {
+      "name": "Sapper Frame",
+      "classId": "sapper",
+      "role": "Preparation frame: turns tiles the enemy has not reached yet into places they will regret reaching.",
+      "glyph": "S",
+      "description": "Carrying rack, placement arms, and a launcher chosen because it was light. She does not win the fight she is standing in; she wins the one that happens two activations later, on ground she picked.",
+      "tags": [
+        "mech",
+        "deployable"
+      ],
+      "baseStats": {
+        "accuracy": 88,
+        "attack": 62,
+        "defense": 44,
+        "displacementResistance": 0,
+        "evasion": 14,
+        "magic": 25,
+        "maxClimb": 1,
+        "maxDrop": 2,
+        "maxHp": 92,
+        "movement": 4,
+        "propagationRadiusBonus": 0,
+        "resistance": 35,
+        "speed": 100
+      },
+      "resources": {
+        "ordnance": {
+          "max": 4,
+          "startsAt": 3
+        }
+      },
+      "abilities": [
+        "placeMine",
+        "placeCharge",
+        "detonate",
+        "defuse",
+        "demolitionShot"
+      ],
+      "defaultAbilityId": "demolitionShot",
+      "aiProfile": "cautious",
+      "defaultEquipment": {
+        "armor": "plateArmor",
+        "coreSystem": "standardCore",
+        "primaryWeapon": "closeShotgun",
+        "utilitySystem": "repairKit"
+      }
+    },
     "securityTurret": {
       "name": "Security Turret",
       "classId": "turret",

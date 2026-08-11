@@ -28,6 +28,7 @@ import terrain from "./terrain.json";
 import resources from "./resources.json";
 import reactions from "./reactions.json";
 import combatLinks from "./combat-links.json";
+import fixtures from "./fixtures.json";
 
 export const GAMEPLAY_DRAFT_STORAGE_KEY = "statuszero.gameplay.draft";
 
@@ -42,7 +43,8 @@ const CANONICAL_FILES = {
   terrain,
   resources,
   reactions,
-  combatLinks
+  combatLinks,
+  fixtures
 };
 
 /** The data exactly as it ships, before any draft. */

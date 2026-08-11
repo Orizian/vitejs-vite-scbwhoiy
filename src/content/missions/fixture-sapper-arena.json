@@ -1,0 +1,198 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-sapper-arena",
+  "name": "Sapper Bench",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. Open ground with one irregular region, laid out so a mine can be placed on a tile nobody is standing on and an enemy can be shoved onto it from exactly one direction. The L-shaped yard is here so exact region membership has something to be exact about.",
+  "map": {
+    "name": "Bench",
+    "width": 22,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................"
+    ],
+    "elevationRows": [
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000"
+    ]
+  },
+  "teams": [
+    { "id": "sectionSeven", "name": "Section Seven", "controller": "human", "marker": "▲", "accent": "emerald" },
+    { "id": "loyalist", "name": "Loyalists", "controller": "ai", "marker": "■", "accent": "rose" }
+  ],
+  "units": [
+    {
+      "ref": "sapper",
+      "definitionId": "sapperFrame",
+      "teamId": "sectionSeven",
+      "x": 4,
+      "y": 8,
+      "facing": "southeast",
+      "note": "Close enough to place on the tiles the shove will use, far enough to survive doing it."
+    },
+    {
+      "ref": "veteran",
+      "definitionId": "interdictorFrame",
+      "teamId": "sectionSeven",
+      "x": 12,
+      "y": 8,
+      "facing": "southeast",
+      "note": "East of Bravo with one tile of runway. One route west and one two-tile shove puts Bravo on the mine."
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 3,
+      "facing": "southeast",
+      "note": "Holds row 3. The blast is what puts something into his lane."
+    },
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 12,
+      "facing": "southeast",
+      "note": "Present so the Section Seven link is complete."
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 12,
+      "facing": "southeast",
+      "note": "Present for the link. Does nothing on its own."
+    },
+    {
+      "ref": "bravo",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 10,
+      "y": 8,
+      "facing": "northwest",
+      "note": "The one that gets shoved. Two tiles west of here is where the mine goes."
+    },
+    {
+      "ref": "walker",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 16,
+      "y": 2,
+      "facing": "northwest",
+      "note": "Has room to walk a long path west, which is how mid-path triggering is tested."
+    },
+    {
+      "ref": "packA",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 15,
+      "y": 12,
+      "facing": "northwest",
+      "note": "Stands with packB inside one charge radius. Deliberately."
+    },
+    {
+      "ref": "packB",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 16,
+      "y": 12,
+      "facing": "northwest",
+      "note": "See packA. A remote charge exists to wait for both of them."
+    },
+    {
+      "ref": "packC",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 15,
+      "y": 13,
+      "facing": "northwest",
+      "note": "See packA."
+    },
+    {
+      "ref": "elite",
+      "definitionId": "heavyEnforcer",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 6,
+      "facing": "northwest",
+      "note": "Survives a mine and keeps walking. The counterplay, standing up."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 15,
+      "facing": "northwest",
+      "note": "Keeps the battle from ending while a fixture test is mid-flight."
+    }
+  ],
+  "regions": [
+    {
+      "id": "yard",
+      "name": "The Yard",
+      "tiles": [
+        { "x": 6, "y": 4 },
+        { "x": 7, "y": 4 },
+        { "x": 6, "y": 5 },
+        { "x": 7, "y": 5 },
+        { "x": 8, "y": 5 },
+        { "x": 6, "y": 6 },
+        { "x": 7, "y": 6 },
+        { "x": 8, "y": 6 }
+      ]
+    }
+  ],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Exercise the ground",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "factions": { "relationships": [] },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": { "briefing": [], "victory": [], "defeat": [] },
+  "midBattle": []
+}

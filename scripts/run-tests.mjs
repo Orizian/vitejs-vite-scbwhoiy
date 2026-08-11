@@ -68,7 +68,16 @@ const FORBIDDEN_NAMES = [
   "ioniseTarget",
   "cascade",
   "cascadeFrame",
-  "conductive"
+  "conductive",
+  "pressureMine",
+  "remoteCharge",
+  "placeMine",
+  "placeCharge",
+  "detonate",
+  "defuse",
+  "ordnance",
+  "sapper",
+  "sapperFrame"
 ];
 
 function sourceFiles(dir) {

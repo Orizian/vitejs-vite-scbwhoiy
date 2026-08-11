@@ -45,6 +45,17 @@
         "on": "ownerActivation"
       }
     },
+    "ordnance": {
+      "name": "Ordnance",
+      "scope": "unit",
+      "description": "Devices on hand. Placing one spends it; firing the launcher scavenges another. A preparation operator who has emptied her rack is a mediocre rifleman standing in a place she chose for other reasons.",
+      "tags": [
+        "operator",
+        "utility"
+      ],
+      "max": 4,
+      "startsAt": 3
+    },
     "reactionCapacity": {
       "name": "Reaction capacity",
       "scope": "unit",

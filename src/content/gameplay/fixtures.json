@@ -1,0 +1,80 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "fixtures",
+  "description": "Things that sit on a tile and are not units: mines, charges, beacons, deployables. A fixture belongs to somebody, remembers what state it is in, normally does not block its tile, and disappears when it is spent. What it does when it goes off is an ordinary effect list.",
+  "entries": {
+    "pressureMine": {
+      "name": "Pressure Mine",
+      "glyph": "◈",
+      "description": "A plate, a charge, and enough patience to wait for someone to be careless. It does not care whether the frame that steps on it chose to walk there.",
+      "tags": [
+        "explosive",
+        "trap"
+      ],
+      "visibility": "ownerTeam",
+      "initialState": "armed",
+      "trigger": {
+        "triggeredBy": "enemy",
+        "type": "unitEnters"
+      },
+      "area": {
+        "radius": 1,
+        "shape": "diamond"
+      },
+      "affects": "enemy",
+      "effects": [
+        {
+          "canMiss": false,
+          "formula": "physical",
+          "power": 130,
+          "type": "damage"
+        },
+        {
+          "chance": 0.5,
+          "statusId": "stun",
+          "type": "applyStatus"
+        }
+      ],
+      "charges": 1,
+      "consumedOnTrigger": true,
+      "blocksMovement": false,
+      "stacks": false
+    },
+    "remoteCharge": {
+      "name": "Remote Charge",
+      "glyph": "◇",
+      "description": "Inert until told otherwise. The hard part is not the charge, it is waiting long enough for the second and third frame to walk into the blast.",
+      "tags": [
+        "explosive",
+        "commandable"
+      ],
+      "visibility": "ownerTeam",
+      "initialState": "armed",
+      "trigger": {
+        "type": "command"
+      },
+      "area": {
+        "radius": 2,
+        "shape": "diamond"
+      },
+      "affects": "enemy",
+      "effects": [
+        {
+          "canMiss": false,
+          "formula": "physical",
+          "power": 120,
+          "type": "damage"
+        },
+        {
+          "distance": 1,
+          "type": "push"
+        }
+      ],
+      "charges": 1,
+      "consumedOnTrigger": true,
+      "blocksMovement": false,
+      "stacks": false
+    }
+  }
+}
