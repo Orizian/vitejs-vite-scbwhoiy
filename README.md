@@ -14,6 +14,7 @@ npm run check:orchestration  # browser acceptance: the reaction chain, Command P
 npm run check:trajectory  # browser acceptance: routes, precise displacement, the synergy chain
 npm run check:cascade     # browser acceptance: arc propagation and the grouping payoff
 npm run check:fixtures    # browser acceptance: mines, charges, and shoving someone onto one
+npm run check:duel        # browser acceptance: vetoing, redirecting and intercepting an action
 npm run check:grayfield   # browser acceptance: mission scripting end to end
 npm run check:reactions   # browser acceptance: Section Seven + Grayfield link restore
 npm run check:knowledge   # browser acceptance: the contact lifecycle, unseen to cold
@@ -57,6 +58,7 @@ npm run lint
 - **[`docs/TRAJECTORY.md`](docs/TRAJECTORY.md)** — routes, redirects and their price, precise displacement the player aims, approach-distance scaling, and the interdictor frame authored on top of it.
 - **[`docs/PROPAGATION.md`](docs/PROPAGATION.md)** — chains that walk from target to target over live positions, hop scaling and the kill cascade, and why moving one enemy two tiles creates a chain that did not exist.
 - **[`docs/FIXTURES.md`](docs/FIXTURES.md)** — mines, charges and beacons: things on a tile that are not units, exact region membership, mid-path triggering, and why shoving someone onto a mine needs no combo code.
+- **[`docs/INTERVENTION.md`](docs/INTERVENTION.md)** — the moment between choosing an action and it being true: cancelling, redirecting and intercepting a declared action, what it costs to be stopped, and the duelist authored on top of it.
 
 ## Starting the game
 

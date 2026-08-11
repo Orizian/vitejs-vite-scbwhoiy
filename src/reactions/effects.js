@@ -380,6 +380,15 @@ export const REACTION_EFFECT_REGISTRY = {
 
 export const REACTION_EFFECT_IDS = Object.keys(REACTION_EFFECT_REGISTRY);
 
+/** The effects that change the triggering action rather than responding to it.
+ *  Declared here, next to the implementations, so the validator and the
+ *  prompt cannot drift from the list. */
+export const INTERVENTION_EFFECT_TYPES = [
+  "cancelTriggeringAction",
+  "redirectTriggeringAction",
+  "interceptAction"
+];
+
 export function reactionEffectById(id) {
   return REACTION_EFFECT_REGISTRY[id] || null;
 }

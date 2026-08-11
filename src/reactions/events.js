@@ -249,6 +249,10 @@ export function deriveReactionEvents(simEvent, stage, view) {
         sourceUnitId: simEvent.sourceUnitId,
         actionKind: simEvent.kind,
         abilityId: simEvent.abilityId || null,
+        // The engine's own phrase for what was declared. Carried rather than
+        // reconstructed, because this layer has no ability table and a prompt
+        // that says "carbineBurst" is a prompt written for a programmer.
+        actionName: simEvent.actionName || null,
         targetRefs: targetIds.map(ref),
         targetUnitIds: targetIds.slice(),
         // The handle an intervention effect needs. Carried on the event rather
@@ -277,6 +281,7 @@ export function deriveReactionEvents(simEvent, stage, view) {
           sourceRef: ref(simEvent.sourceUnitId),
           sourceUnitId: simEvent.sourceUnitId || null,
           abilityId: simEvent.abilityId || null,
+          actionName: simEvent.actionName || null,
           reason: simEvent.reason || null
         });
       }

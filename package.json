@@ -19,6 +19,7 @@
     "check:trajectory": "node scripts/trajectory-check.mjs",
     "check:cascade": "node scripts/cascade-check.mjs",
     "check:fixtures": "node scripts/fixtures-check.mjs",
+    "check:duel": "node scripts/duel-check.mjs",
     "check:reactions": "node scripts/reaction-check.mjs",
     "check:knowledge": "node scripts/knowledge-check.mjs",
     "check:questions": "node scripts/knowledge-questions.mjs",

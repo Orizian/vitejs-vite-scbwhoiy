@@ -19,7 +19,7 @@ import { FIXTURE_STATES, FIXTURE_VISIBILITY } from "../../combat/fixtures.js";
 /** Trigger kinds the fixture runtime understands. */
 const FIXTURE_TRIGGER_TYPES = ["unitEnters", "command"];
 import { REACTION_EVENT_TYPE_IDS } from "../../reactions/events.js";
-import { validateReactionEffect } from "../../reactions/effects.js";
+import { validateReactionEffect, INTERVENTION_EFFECT_TYPES } from "../../reactions/effects.js";
 import { validateReactionCondition } from "../../reactions/conditions.js";
 
 const EQUIPMENT_SLOTS = ["primaryWeapon", "armor", "utilitySystem", "coreSystem"];
@@ -567,6 +567,44 @@ export function validateGameplayData(data, context) {
       }
       if (effect.resourceId && !has(resources, effect.resourceId)) {
         errors.push(label("reactions", id) + ' restores unknown resource "' + effect.resourceId + '".');
+      }
+
+      /* Interventions are only meaningful before their action resolves.
+       *
+       * These are the failure modes that would otherwise be silent. A cancel
+       * hung on `unitDestroyed` never has an action to cancel and simply does
+       * nothing forever; the author's only clue would be that their duelist
+       * never fires. The runtime cannot warn about it, because from the
+       * runtime's point of view a reaction whose effect returns `ok: false` is
+       * behaving normally. */
+      if (INTERVENTION_EFFECT_TYPES.includes(effect.type)) {
+        if (reaction.trigger !== "actionDeclared") {
+          errors.push(
+            label("reactions", id) + " uses " + effect.type + ' but triggers on "' +
+              reaction.trigger + '". An action can only be changed before it resolves, ' +
+              'so an intervention must trigger on "actionDeclared".'
+          );
+        }
+        if (!reaction.mandatory && !(reaction.cost && (reaction.cost.resources || []).length)) {
+          warnings.push(
+            label("reactions", id) +
+              " changes what an enemy is allowed to do and costs nothing, so nothing limits how often."
+          );
+        }
+        const limits = reaction.limits || {};
+        if (limits.perActivation == null && limits.perChain == null && limits.perEvent == null) {
+          warnings.push(
+            label("reactions", id) + " is an intervention with no per-activation or per-chain limit."
+          );
+        }
+      }
+      /* The counterpart mistake: answering a prevention that can never occur
+       * for the reactor, because it triggers somewhere the reason is unknown. */
+      if (reaction.trigger === "actionPrevented" && effect.type === "cancelTriggeringAction") {
+        errors.push(
+          label("reactions", id) +
+            " cancels an action that has already been prevented, which is nothing to cancel."
+        );
       }
     }
 

@@ -802,7 +802,10 @@ export const REGISTRY_SCHEMAS = {
         label: "THEN",
         note:
           "One registered effect primitive. `type` selects engine behaviour; the values " +
-          "beside it are authored.",
+          "beside it are authored. Three of them — cancel, redirect and intercept — change " +
+          "the action that triggered the reaction rather than responding to it, and only " +
+          'work on the "actionDeclared" trigger, because an action can only be changed ' +
+          "before it resolves.",
         fields: [
           { key: "effect", label: "Effect", kind: "objectList", typeKey: "type", single: true, behaviour: true }
         ]

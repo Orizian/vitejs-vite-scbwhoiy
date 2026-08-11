@@ -50,6 +50,7 @@ import {
   gainResource,
   describeResources
 } from "../combat/resources.js";
+import { describeIntervention } from "../combat/interventions.js";
 
 export const REACTION_LIMITS = {
   /** How deep a cascade may go. A reaction that triggers a reaction that
@@ -258,6 +259,33 @@ function offerableWhenUnaffordable(reaction) {
   return !reaction.mandatory && !reaction.automatic;
 }
 
+/**
+ * Which reaction effects change the action that triggered them.
+ *
+ * The runtime does not implement interventions and does not want to. It only
+ * needs to know that these three do something a prompt must explain: "Intercept
+ * — 1 Poise" and nothing else is asking the player to gamble, and the
+ * consequence is the entire decision.
+ */
+const INTERVENTION_EFFECT_KINDS = {
+  cancelTriggeringAction: "cancel",
+  redirectTriggeringAction: "redirect",
+  interceptAction: "replace"
+};
+
+function interventionPreview(reaction, event, reactorRef) {
+  const kind = INTERVENTION_EFFECT_KINDS[reaction.effect && reaction.effect.type];
+  if (!kind) return null;
+  return {
+    kind,
+    text: describeIntervention(kind, {
+      actionName: event.actionName || event.abilityId || "the action",
+      actorName: event.unitRef || "the attacker",
+      targetName: reactorRef
+    })
+  };
+}
+
 function costContext(state, deps, reactorId, event) {
   const unit = state.units[reactorId];
   return {
@@ -347,14 +375,18 @@ export function discoverReactions(state, deps, event) {
         ? "automatic"
         : view.teamController(state.units[reactorId].teamId);
 
+      const reactorRef = view.unitRefById(reactorId);
       offers.push({
         id: reaction.id + ":" + reactorId + ":" + event.__seq,
         reactionId: reaction.id,
         reactorId,
-        reactorRef: view.unitRefById(reactorId),
+        reactorRef,
         linkId: linkId || null,
         name: reaction.name || reaction.id,
         description: reaction.description || "",
+        // What accepting this does to the action that triggered it, in words,
+        // before it is taken. Null for every reaction that only responds.
+        intervention: interventionPreview(reaction, event, reactorRef),
         trigger: event.type,
         cost: reaction.cost || {},
         mandatory: !!reaction.mandatory,
@@ -811,6 +843,7 @@ export function describeReactions(state, deps) {
             description: offer.description,
             reactorRef: offer.reactorRef,
             reactorUnitId: offer.reactorId,
+            intervention: offer.intervention || null,
             costText: describeCost(offer.cost, resourceById),
             affordable: offer.affordable !== false,
             blockedReason: offer.blockedReason || null,
@@ -833,6 +866,12 @@ function playerTeamId(state) {
 function describeTrigger(state, event) {
   const subject = event.unitRef || "something";
   switch (event.type) {
+    case "actionDeclared":
+      // Present tense and unfinished on purpose. The whole point of this
+      // window is that the thing has not happened yet.
+      return subject + " is about to use " + (event.actionName || event.abilityId || "something");
+    case "actionPrevented":
+      return subject + " was stopped";
     case "targetMarked":
       return (event.sourceRef || "an ally") + " marked " + subject;
     case "unitDestroyed":

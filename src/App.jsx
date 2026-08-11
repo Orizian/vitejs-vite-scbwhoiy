@@ -5500,6 +5500,9 @@ function declareAction(state, declaration) {
     abilityId: declaration.abilityId || null,
     target: declaration.target || null,
     targetUnitIds: (declaration.targetUnitIds || []).slice(),
+    // The engine's own phrase for what is about to happen, carried so the
+    // reaction layer and the prompt never have to reconstruct it from an id.
+    actionName: declaration.actionName || null,
     tiles: declaration.tiles || [],
     path: declaration.path || null,
     from: declaration.from || null,
@@ -5811,6 +5814,7 @@ const EVENT_HANDLERS = {
         unitId: event.sourceUnitId,
         sourceUnitId: outcome.byUnitId || null,
         abilityId: event.abilityId || null,
+        actionName: event.actionName || what,
         targetUnitIds: event.targetUnitIds || [],
         reactionId: outcome.reactionId || null,
         reason: outcome.reason
@@ -8241,6 +8245,7 @@ const COMMAND_HANDLERS = {
     );
     declareAction(state, {
       kind: "movement",
+      actionName: "the move",
       unitId: command.unitId,
       from: { x: path[0].x, y: path[0].y },
       target: { x: path[path.length - 1].x, y: path[path.length - 1].y },
@@ -8277,6 +8282,7 @@ const COMMAND_HANDLERS = {
     const actor = state.units[command.unitId];
     declareAction(state, {
       kind: "ability",
+      actionName: abilityDefinition.name,
       unitId: command.unitId,
       abilityId: command.abilityId,
       target: targeting.tile,
@@ -13921,7 +13927,15 @@ const LOG_FILTERS = {
   statuses: (entry) => entry.type.startsWith("status"),
   timeline: (entry) => entry.type === "timelineModified" || entry.type === "turnEnded",
   movement: (entry) => entry.type === "unitMoved",
-  defeats: (entry) => entry.type === "unitDefeated"
+  defeats: (entry) => entry.type === "unitDefeated",
+  // Every moment somebody changed what was about to happen. Worth its own
+  // filter because these are the lines that explain an outcome the player
+  // cannot otherwise account for: an attack that produced no damage entry at
+  // all reads as a bug until you can see the line that says why.
+  vetoes: (entry) =>
+    entry.type === "actionPrevented" ||
+    entry.type === "actionRedirected" ||
+    entry.type === "interventionFailed"
 };
 
 function createBattleLogViewModel(state, filterId) {
@@ -37318,7 +37332,7 @@ function DestinationForecastPanel({ destination, entries, recovery }) {
 }
 
 function BattleLogPanel({ groups, filterId, onFilter }) {
-  const filters = ["all", "damage", "healing", "statuses", "timeline", "movement", "defeats"];
+  const filters = ["all", "damage", "healing", "statuses", "timeline", "movement", "defeats", "vetoes"];
   return (
     <div>
       <div className="flex flex-wrap gap-1 mb-2">
@@ -39250,6 +39264,14 @@ function ReactionPrompt({ model, onChoose, onDecline }) {
                 <span className="block text-[11px] text-slate-400">
                   {offer.affordable ? offer.description : offer.blockedReason}
                 </span>
+                {/* What accepting does to the action that is still pending.
+                 *  A prompt that names a price and not a consequence is
+                 *  asking the player to gamble on their own kit. */}
+                {offer.affordable && offer.intervention ? (
+                  <span className="mt-0.5 block text-[11px] font-semibold text-emerald-300">
+                    {offer.intervention.text}
+                  </span>
+                ) : null}
               </span>
               <span className="text-right">
                 <span className="block text-[11px] uppercase tracking-wider text-sky-300">{offer.reactorRef}</span>
