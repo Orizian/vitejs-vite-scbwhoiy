@@ -44543,6 +44543,11 @@ if (typeof window !== "undefined") {
       modes: INPUT_MODES
     },
     battleLogFilters: Object.keys(LOG_FILTERS),
+    // What a unit can currently do, and why something it normally carries is
+    // missing. The authority itself, not a copy: a damaged system is only
+    // observable through the same call the engine asks.
+    unitAbilities: (state, unitId) => getUnitAbilities(state, unitId),
+    abilityImpairment: (state, unitId, abilityId) => abilityImpairment(state, unitId, abilityId),
     // The sequencing surface. `plan` is the authority the preview, the
     // validator and the executor all share — a harness asking it is asking the
     // player's question, which is the whole point of there being only one.

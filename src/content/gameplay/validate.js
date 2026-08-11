@@ -326,6 +326,70 @@ export function validateGameplayData(data, context) {
       }
     }
 
+    /* ---- resource transfer ----
+     *
+     * A transfer is two resource ids and three numbers, so every way of
+     * authoring it wrong is silent: it simply moves nothing, forever, and the
+     * only symptom is a support operator who appears to do nothing. */
+    for (const effect of ability.effects || []) {
+      if (effect.type !== "transferResource") continue;
+      const source = effect.resourceId;
+      const destination = effect.intoResourceId || effect.resourceId;
+      const sourceDefinition = resources[source];
+      const destinationDefinition = resources[destination];
+
+      if (!source) errors.push(label("abilities", id) + " transfers with no source resource.");
+      else if (!sourceDefinition) {
+        errors.push(label("abilities", id) + ' transfers unknown resource "' + source + '".');
+      }
+      if (!destinationDefinition) {
+        errors.push(label("abilities", id) + ' transfers into unknown resource "' + destination + '".');
+      }
+      for (const key of ["from", "to"]) {
+        if (effect[key] && !["source", "target"].includes(effect[key])) {
+          errors.push(label("abilities", id) + " transfers " + key + ' an unknown side "' + effect[key] + '".');
+        }
+      }
+      for (const key of ["cost", "gain", "maxTransfers"]) {
+        if (effect[key] == null) continue;
+        if (!Number.isFinite(effect[key]) || effect[key] < 1) {
+          errors.push(label("abilities", id) + " needs a positive whole " + key + ".");
+        }
+      }
+      // Same resource, same side: the points would come straight back.
+      if (source === destination && (effect.from || "source") === (effect.to || "target")) {
+        errors.push(
+          label("abilities", id) + " transfers a resource to the balance it came from, which does nothing."
+        );
+      }
+      if (sourceDefinition && destinationDefinition) {
+        // A faction resource has one balance for the whole side, so "from the
+        // source's pool to the target's pool" is the same pool twice.
+        const bothFaction =
+          sourceDefinition.scope === "faction" && destinationDefinition.scope === "faction";
+        if (bothFaction && source === destination) {
+          errors.push(
+            label("abilities", id) +
+              " transfers a shared resource into itself, which is one pool twice."
+          );
+        }
+      }
+      const cost = effect.cost == null ? 1 : effect.cost;
+      const gain = effect.gain == null ? cost : effect.gain;
+      if (destinationDefinition && destinationDefinition.max != null && gain > destinationDefinition.max) {
+        errors.push(
+          label("abilities", id) + " delivers " + gain + ' "' + destination +
+            '" at a time, more than the resource can ever hold.'
+        );
+      }
+      if (sourceDefinition && sourceDefinition.max != null && cost > sourceDefinition.max) {
+        errors.push(
+          label("abilities", id) + " costs " + cost + ' "' + source +
+            '" per transfer, more than the resource can ever hold.'
+        );
+      }
+    }
+
     /* ---- activation window ----
      *
      * A command that sequences turns is authored entirely as numbers, so it
@@ -540,6 +604,31 @@ export function validateGameplayData(data, context) {
       errors.push(
         label("resources", id) + " is faction-scoped, so `everyUnit` means nothing — remove it."
       );
+    }
+  }
+
+  /* ---- status-driven impairment ----
+   *
+   * A status that takes a capability away is this project's whole subsystem
+   * model, so the references in it are worth checking: an id typo produces a
+   * status that reads as damage and removes nothing. */
+  for (const id of Object.keys(statuses)) {
+    const status = statuses[id] || {};
+    for (const abilityId of status.removesAbilities || []) {
+      if (!has(abilities, abilityId)) {
+        errors.push(label("statuses", id) + ' takes unknown ability "' + abilityId + '" offline.');
+      }
+    }
+    const tags = status.blocksAbilityTags || [];
+    for (const tag of tags) {
+      const carried = Object.keys(abilities).some((abilityId) =>
+        (((abilities[abilityId] || {}).ui || {}).tags || []).includes(tag)
+      );
+      if (!carried) {
+        errors.push(
+          label("statuses", id) + ' blocks ability tag "' + tag + '", which no ability carries.'
+        );
+      }
     }
   }
 
