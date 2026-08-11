@@ -100,6 +100,24 @@
         "resistanceFlat": -8
       }
     },
+    "fieldReady": {
+      "name": "Field Ready",
+      "category": "positive",
+      "glyph": "+",
+      "description": "Rack open, clamps out. She is watching for somebody to need her rather than looking for a shot.",
+      "tags": [
+        "stance",
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 3,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "defenseFlat": 5
+      },
+      "triggers": []
+    },
     "grounding": {
       "name": "Grounding",
       "category": "debuff",
@@ -229,6 +247,34 @@
       },
       "triggers": []
     },
+    "sensorsImpaired": {
+      "name": "Sensors Impaired",
+      "category": "negative",
+      "glyph": "x",
+      "description": "Optics cracked and the thermal bus is down. The frame fights on what it can see from here.",
+      "tags": [
+        "mechanical",
+        "systemDamage"
+      ],
+      "duration": {
+        "amount": 6,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "accuracyFlat": -15
+      },
+      "triggers": [],
+      "perception": {
+        "sensors": {
+          "optical": {
+            "range": 4
+          },
+          "thermal": {
+            "range": 0
+          }
+        }
+      }
+    },
     "slow": {
       "name": "Slow",
       "category": "negative",
@@ -308,6 +354,28 @@
         "speedMultiplier": 0.85
       },
       "triggers": []
+    },
+    "thrustersImpaired": {
+      "name": "Thrusters Impaired",
+      "category": "negative",
+      "glyph": "x",
+      "description": "Drive nacelles venting. The frame still walks; it no longer runs, and nothing that needs a running start is available.",
+      "tags": [
+        "mechanical",
+        "systemDamage"
+      ],
+      "duration": {
+        "amount": 6,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "movementFlat": -3,
+        "speedMultiplier": 0.85
+      },
+      "triggers": [],
+      "blocksAbilityTags": [
+        "route"
+      ]
     }
   }
 }

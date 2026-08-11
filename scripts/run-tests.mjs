@@ -93,7 +93,20 @@ const FORBIDDEN_NAMES = [
   "duelPunish",
   "battlePlan",
   "assaultMech",
-  "commandSequence"
+  "commandSequence",
+  "reyes",
+  "supportMech",
+  "supportCharge",
+  "powerTransfer",
+  "coolantTransfer",
+  "tacticalRelay",
+  "systemRepair",
+  "fieldRepair",
+  "arcWelder",
+  "emergencyPatch",
+  "fieldReady",
+  "thrustersImpaired",
+  "sensorsImpaired"
 ];
 
 function sourceFiles(dir) {

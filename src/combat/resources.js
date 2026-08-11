@@ -188,6 +188,114 @@ export function spendResource(state, definition, owner, amount) {
   return true;
 }
 
+/* ---------------------------------------------------------------
+ * TRANSFER
+ *
+ * Moving points from one balance to another, instead of conjuring them.
+ *
+ * Everything before this line either creates value (`gain`) or destroys it
+ * (`spend`). A support operator does neither: she takes something finite from
+ * one place and puts it somewhere else, and the interesting decisions come
+ * entirely from that being a real trade.
+ *
+ * ONE OPERATION, FOUR SHAPES
+ *
+ * The same arithmetic covers a straight hand-off, a conversion between two
+ * different resources, and a contribution that crosses scope, because none of
+ * those are actually different sums:
+ *
+ *   unit → unit,    same resource        hand a frame two charges of yours
+ *   unit → unit,    different resource   coolant becomes somebody's burst
+ *   unit → faction, different resource   your capacity becomes squad tempo
+ *   faction → unit                       falls out for free; nothing uses it yet
+ *
+ * Scope is never named at a call site: it comes from the resource definition,
+ * and the *owner* comes from whichever side the caller nominated. That is why
+ * crossing scope needs no special case.
+ *
+ * EXCHANGES, NOT AMOUNTS
+ *
+ * A transfer is expressed as whole exchanges of `cost` source points for
+ * `gain` destination points, up to `maxTransfers` of them. Counting whole
+ * exchanges rather than scaling a single amount is what makes partial
+ * transfers exact: three points offered into one point of headroom moves one
+ * point and spends one, instead of burning three to deliver one. Integer in,
+ * integer out, nothing rounded and nothing wasted.
+ * -------------------------------------------------------------*/
+
+/**
+ * How much of a transfer could actually happen, without performing it.
+ *
+ * Pure. The forecast, the ability model and the executor all call this, so a
+ * preview cannot promise points that the transfer would not move.
+ *
+ * @returns { transfers, spent, gained, limitedBy, ok }
+ */
+export function planTransfer(state, plan) {
+  const cost = Math.max(1, Math.round(plan.cost == null ? 1 : plan.cost));
+  const gain = Math.max(1, Math.round(plan.gain == null ? cost : plan.gain));
+  const maxTransfers = Math.max(1, Math.round(plan.maxTransfers == null ? 1 : plan.maxTransfers));
+
+  const from = resourceEntry(state, plan.fromDefinition, plan.fromOwner);
+  const to = resourceEntry(state, plan.toDefinition, plan.toOwner);
+  const empty = { transfers: 0, cost, gain, spent: 0, gained: 0, ok: false };
+
+  if (!from) return { ...empty, limitedBy: "noSource" };
+  if (!to) return { ...empty, limitedBy: "noDestination" };
+  if (from.available === false) return { ...empty, limitedBy: "sourceUnavailable" };
+  if (to.available === false) return { ...empty, limitedBy: "destinationUnavailable" };
+
+  // Same balance on both sides: the points would come straight back, so the
+  // whole operation is a no-op dressed as a decision.
+  const sameBalance =
+    plan.fromDefinition.id === plan.toDefinition.id &&
+    sameOwnerKey(plan.fromDefinition, plan.fromOwner) === sameOwnerKey(plan.toDefinition, plan.toOwner);
+  if (sameBalance) return { ...empty, limitedBy: "sameBalance" };
+
+  const affordable = Math.floor(from.current / cost);
+  const headroom = Math.floor(Math.max(0, to.max - to.current) / gain);
+  const possible = Math.min(maxTransfers, affordable, headroom);
+
+  const limitedBy =
+    possible >= maxTransfers ? null : affordable <= headroom ? "source" : "destination";
+  const partial = plan.partial !== false;
+  const transfers = partial ? possible : possible >= maxTransfers ? maxTransfers : 0;
+
+  return {
+    transfers,
+    cost,
+    gain,
+    spent: transfers * cost,
+    gained: transfers * gain,
+    limitedBy: transfers ? limitedBy : limitedBy || (possible ? "allOrNothing" : "source"),
+    ok: transfers > 0
+  };
+}
+
+function sameOwnerKey(definition, owner) {
+  if (!owner) return "";
+  if (definition.scope === "faction") return "team:" + (owner.teamId !== undefined ? owner.teamId : owner);
+  return "unit:" + (owner.unitId !== undefined ? owner.unitId : owner);
+}
+
+/**
+ * Performs the transfer `planTransfer` described.
+ *
+ * Re-plans rather than trusting a plan handed in, because the two calls are
+ * different moments and points may have moved between them. Nothing is spent
+ * unless something lands: the source is debited and the destination credited
+ * in one step, so there is no window in which the points exist nowhere.
+ */
+export function applyTransfer(state, plan) {
+  const result = planTransfer(state, plan);
+  if (!result.ok) return result;
+  const from = resourceEntry(state, plan.fromDefinition, plan.fromOwner);
+  const to = resourceEntry(state, plan.toDefinition, plan.toOwner);
+  from.current -= result.spent;
+  to.current = clamp(to.current + result.gained, 0, to.max);
+  return result;
+}
+
 /** Adds points, capped at max. Returns how many actually landed. */
 export function gainResource(state, definition, owner, amount) {
   const entry = resourceEntry(state, definition, owner);

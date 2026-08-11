@@ -209,6 +209,56 @@
         "type": "redirectTriggeringAction"
       }
     },
+    "emergencyPatch": {
+      "name": "Emergency Patch",
+      "description": "A frame in front of her drops below the line and she is already moving. Costs her own stock, not the squad's.",
+      "trigger": "unitDamaged",
+      "priority": 85,
+      "requires": {
+        "status": "fieldReady"
+      },
+      "conditions": [
+        {
+          "reactorHasStatus": "fieldReady"
+        },
+        {
+          "subjectRelation": "allied"
+        },
+        {
+          "subjectIsReactor": false
+        },
+        {
+          "subjectAlive": true
+        },
+        {
+          "withinRange": 4
+        },
+        {
+          "amountAtLeast": 20
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "supportCharge"
+          },
+          {
+            "amount": 1,
+            "id": "reactionCapacity"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1,
+        "perChain": 1
+      },
+      "effect": {
+        "amount": 45,
+        "targetFrom": "subject",
+        "type": "reactionRepair"
+      }
+    },
     "heldFiringLane": {
       "name": "Held Firing Lane",
       "description": "A frame holding overwatch fires the moment a hostile it can see steps into the lane — or is put there by someone else.",

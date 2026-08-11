@@ -1,0 +1,156 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-support-arena",
+  "name": "Support Bench",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. The support frame stands between two operators who run on entirely different economies, so the same transfer architecture has two different things to prove. An enemy sits in arc-welder range because a support frame that cannot fight is not the design.",
+  "map": {
+    "name": "Bench",
+    "width": 22,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................"
+    ],
+    "elevationRows": [
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000"
+    ]
+  },
+  "teams": [
+    { "id": "sectionSeven", "name": "Section Seven", "controller": "human", "marker": "▲", "accent": "emerald" },
+    { "id": "loyalist", "name": "Loyalists", "controller": "ai", "marker": "■", "accent": "rose" }
+  ],
+  "units": [
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 8,
+      "y": 8,
+      "facing": "east",
+      "note": "Adjacent to the veteran, one tile from the arc specialist, and in welder range of the target. Every case starts from this tile."
+    },
+    {
+      "ref": "veteran",
+      "definitionId": "interdictorFrame",
+      "teamId": "sectionSeven",
+      "x": 7,
+      "y": 8,
+      "facing": "east",
+      "note": "Runs on stored thrust. Starts nearly empty so a route is unaffordable until somebody funds it."
+    },
+    {
+      "ref": "arcSpecialist",
+      "definitionId": "cascadeFrame",
+      "teamId": "sectionSeven",
+      "x": 8,
+      "y": 7,
+      "facing": "east",
+      "note": "Runs on stored charge — a different resource entirely, which is exactly why it is here. Same transfer, different economy."
+    },
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 6,
+      "y": 10,
+      "facing": "east",
+      "note": "Spends Command Points. Whether the squad has any is now partly a support question."
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 4,
+      "y": 12,
+      "facing": "east",
+      "note": "Present so the Section Seven link is complete and the command window has a fourth ally in it."
+    },
+    {
+      "ref": "target",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 9,
+      "y": 8,
+      "facing": "west",
+      "note": "Adjacent to the support frame. The welder is a weapon at this distance."
+    },
+    {
+      "ref": "shooter",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 13,
+      "y": 8,
+      "facing": "west",
+      "note": "Far enough to hurt an ally without being in welder range, so an emergency reaction has something to answer."
+    },
+    {
+      "ref": "heavy",
+      "definitionId": "heavyEnforcer",
+      "teamId": "loyalist",
+      "x": 18,
+      "y": 4,
+      "facing": "west",
+      "note": "Out of the way, and alive enough to keep the battle running while support is tested."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 15,
+      "facing": "west",
+      "note": "Keeps the battle from ending while a support test is mid-flight."
+    }
+  ],
+  "regions": [],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Exercise the rack",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "factions": { "relationships": [] },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": { "briefing": [], "victory": [], "defeat": [] },
+  "midBattle": []
+}

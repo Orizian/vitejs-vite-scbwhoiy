@@ -101,6 +101,21 @@
         "amount": 1,
         "on": "ownerActivation"
       }
+    },
+    "supportCharge": {
+      "name": "Support Charge",
+      "scope": "unit",
+      "description": "Cells, coolant and patch stock, carried in a finite rack. Everything she does for somebody else comes out of this, which is what makes choosing between them a decision rather than a rotation.",
+      "tags": [
+        "support",
+        "logistics"
+      ],
+      "max": 4,
+      "startsAt": 3,
+      "regen": {
+        "amount": 1,
+        "on": "selfActivation"
+      }
     }
   }
 }

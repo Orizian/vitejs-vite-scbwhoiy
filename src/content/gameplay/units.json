@@ -696,9 +696,9 @@
     "supportMech": {
       "name": "Support Mech",
       "classId": "support",
-      "role": "Repair and utility: keeps the lance running.",
+      "role": "Sustainment: lets the rest of the squad operate past the limits it is built for.",
       "glyph": "R",
-      "description": "Field engineering frame carrying an arc welder and drone bay.",
+      "description": "Field engineering frame carrying an arc welder, a drone bay and a rack of charges. The same machine that rebuilds a combat frame takes one apart at arm's length.",
       "tags": [
         "mech",
         "deployable"
@@ -716,9 +716,19 @@
         "resistance": 55,
         "speed": 115
       },
+      "resources": {
+        "supportCharge": {
+          "max": 4,
+          "startsAt": 3
+        }
+      },
       "abilities": [
         "arcWelder",
         "fieldRepair",
+        "systemRepair",
+        "powerTransfer",
+        "coolantTransfer",
+        "tacticalRelay",
         "reinforce",
         "repairDrone"
       ],

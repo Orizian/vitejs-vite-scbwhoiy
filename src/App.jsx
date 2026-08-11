@@ -43,6 +43,8 @@ import {
   resourceBalance,
   resourceIsAvailable,
   canSpendResource,
+  planTransfer,
+  applyTransfer,
   spendResource as spendCombatResource,
   gainResource as gainCombatResource,
   setResource as setCombatResource,
@@ -608,6 +610,11 @@ const FIXTURE_DEFINITIONS = GAMEPLAY_CONTENT.fixtures;
  * battle state; unit balances live on the unit, where they already did.
  * =============================================================*/
 const COMBAT_RESOURCE_DEFINITIONS = RESOURCE_DEFINITIONS;
+/** The same definitions by id, for anything that looks one up rather than
+ *  walking them all. */
+const RESOURCES_BY_ID = Object.fromEntries(
+  RESOURCE_DEFINITIONS.map((entry) => [entry.id, entry])
+);
 
 /* ===============================================================
  * EQUIPMENT
@@ -2267,6 +2274,16 @@ function normalizePerceptionProfile(authored) {
 }
 
 function buildContentRegistry(sources) {
+  // Resource definitions are authored alongside everything else, so the
+  // content registry carries them too. Without this an effect that names a
+  // resource had nothing to be validated against, and a typo was only
+  // discoverable by watching a transfer move nothing.
+  const resources = deriveIds(sources.resources || {}, (entry) => {
+    entry.scope = entry.scope === "faction" ? "faction" : "unit";
+    entry.tags = entry.tags || [];
+    return entry;
+  });
+
   const units = deriveIds(sources.units, (entry) => {
     entry.baseStats = { ...DEFAULT_BASE_STATS, ...(entry.baseStats || {}) };
     entry.abilities = entry.abilities ? entry.abilities.slice() : [];
@@ -2325,6 +2342,10 @@ function buildContentRegistry(sources) {
     entry.modifiers = entry.modifiers || {};
     entry.triggers = entry.triggers ? entry.triggers.map((t) => ({ ...t })) : [];
     entry.preventsAction = entry.preventsAction === true;
+    // A damaged frame loses capability, not just numbers. Defaulted here so
+    // nothing downstream has to check whether the lists exist.
+    entry.removesAbilities = entry.removesAbilities || [];
+    entry.blocksAbilityTags = entry.blocksAbilityTags || [];
     entry.glyph = entry.glyph || "•";
     entry.assets = entry.assets || {};
     entry.perception = normalizePerceptionProfile(entry.perception);
@@ -2450,6 +2471,7 @@ function buildContentRegistry(sources) {
     units,
     abilities,
     statuses,
+    resources,
     terrains,
     maps,
     encounters,
@@ -2566,19 +2588,100 @@ function equipmentCompatibilityReason(definitionId, equipmentId) {
  * Every ability a unit can use: its chassis list plus anything granted by
  * equipment, minus anything a part removes.
  */
+/**
+ * Everything a unit can currently do.
+ *
+ * Chassis, plus what equipment grants, minus what equipment or a *status*
+ * takes away.
+ *
+ * The status half is the whole of this project's subsystem-damage model, and
+ * it is deliberately this small. Statuses could already express a damaged
+ * frame in every way that matters — a stat modifier is a mobility hit, a
+ * perception profile is a wrecked sensor array — with exactly one gap: they
+ * could not take a weapon offline, because only equipment could remove an
+ * ability and equipment does not change mid-battle.
+ *
+ * Closing that gap here rather than building a subsystem model means an
+ * impairment inherits the entire status lifecycle for free: duration, stacking,
+ * display, save/load, and repair as an ordinary `cleanse` or `removeStatus`.
+ * A separate model would have had to reimplement all of it to gain nothing.
+ *
+ * `blocksAbilityTags` covers the case an id list cannot: "your weapons are
+ * offline" should apply to whatever this frame happens to be carrying, not to
+ * a list the author has to keep in step with every chassis.
+ */
 function getUnitAbilities(state, unitId) {
   const unit = state.units[unitId];
   if (!unit) return [];
   const definition = definitionFrom(state, "units", unit.definitionId);
   const abilities = definition.abilities.slice();
   const removed = new Set();
+  const blockedTags = new Set();
   for (const item of equippedItems(state, unitId)) {
     for (const abilityId of item.grantsAbilities) {
       if (!abilities.includes(abilityId)) abilities.push(abilityId);
     }
     for (const abilityId of item.removesAbilities) removed.add(abilityId);
   }
-  return abilities.filter((abilityId) => !removed.has(abilityId));
+  for (const applied of unit.statuses || []) {
+    const status = definitionFrom(state, "statuses", applied.statusId);
+    if (!status) continue;
+    for (const abilityId of status.removesAbilities || []) removed.add(abilityId);
+    for (const tag of status.blocksAbilityTags || []) blockedTags.add(tag);
+  }
+  return abilities.filter((abilityId) => {
+    if (removed.has(abilityId)) return false;
+    if (!blockedTags.size) return true;
+    const ability = CONTENT.abilities[abilityId];
+    const tags = (ability && ability.ui && ability.ui.tags) || [];
+    return !tags.some((tag) => blockedTags.has(tag));
+  });
+}
+
+/**
+ * Whether an ability made entirely of transfers would move anything.
+ *
+ * Deliberately only an opinion about abilities that are *nothing but*
+ * transfers. One that also heals or damages still has work to do when a pool
+ * happens to be full, and greying it out would be a lie in the other
+ * direction; one whose whole purpose is to move points and cannot move any is
+ * an action the player would spend a turn regretting.
+ *
+ * The judgement comes from `planTransfer` — the same call the forecast and the
+ * executor make — so an ability is never offered on terms the transfer would
+ * then refuse.
+ */
+function transferAbilityIsIdle(state, unitId, abilityId, targetUnitId) {
+  const ability = CONTENT.abilities[abilityId];
+  const effects = (ability && ability.effects) || [];
+  if (!effects.length) return false;
+  if (!effects.every((effect) => effect.type === "transferResource")) return false;
+  return !effects.some((effect) => {
+    const plan = transferPlanFor(state, {
+      effect,
+      sourceUnitId: unitId,
+      targetUnitId: targetUnitId || unitId,
+      abilityId
+    });
+    return plan && planTransfer(state, plan).ok;
+  });
+}
+
+/** Why an ability a unit normally carries is currently unavailable, or null.
+ *  Presentation only — the authority is `getUnitAbilities`. */
+function abilityImpairment(state, unitId, abilityId) {
+  const unit = state.units[unitId];
+  if (!unit) return null;
+  const ability = CONTENT.abilities[abilityId];
+  const tags = (ability && ability.ui && ability.ui.tags) || [];
+  for (const applied of unit.statuses || []) {
+    const status = definitionFrom(state, "statuses", applied.statusId);
+    if (!status) continue;
+    const byId = (status.removesAbilities || []).includes(abilityId);
+    const byTag = (status.blocksAbilityTags || []).some((tag) => tags.includes(tag));
+    if (byId || byTag) return { statusId: applied.statusId, name: status.name || applied.statusId };
+  }
+  return null;
 }
 
 const STAT_LAYERS = [
@@ -2717,6 +2820,7 @@ function composeUnitPreview(request) {
           encounters: {},
           aiProfiles: supplied.aiProfiles || CONTENT.aiProfiles,
           equipment: supplied.equipment || {},
+          resources: supplied.resources || RESOURCES_BY_ID,
           presentationAssets: {}
         });
         return {
@@ -4029,6 +4133,31 @@ function describeAbilityCosts(state, unitId, ability) {
   return parts.join(", ");
 }
 
+/** Why a transfer moved less than it was asked to. Stable phrasing, because
+ *  the log, the forecast and the ability model all render it. */
+function transferRefusalText(limitedBy) {
+  switch (limitedBy) {
+    case "source":
+      return "not enough to give";
+    case "destination":
+      return "no room to receive";
+    case "noSource":
+      return "nothing there to draw from";
+    case "noDestination":
+      return "nowhere to put it";
+    case "sourceUnavailable":
+      return "that supply is unavailable";
+    case "destinationUnavailable":
+      return "that pool is unavailable";
+    case "sameBalance":
+      return "that would put it back where it came from";
+    case "allOrNothing":
+      return "not enough for a full transfer";
+    default:
+      return "nothing to move";
+  }
+}
+
 /** Whether two id sequences are the same list in the same order. */
 function sameOrder(a, b) {
   const left = a || [];
@@ -4745,6 +4874,83 @@ function resolveSpendResourceEffect(state, context) {
   });
 }
 
+/**
+ * Moving a resource instead of conjuring one.
+ *
+ * The one effect behind every kind of support this game has: handing a frame
+ * some of your own capacity, converting one resource into another, and
+ * contributing a personal resource to the squad's shared pool are all the same
+ * sum, so they are all this.
+ *
+ * `from` and `to` nominate an *owner* — the ability's source or its target.
+ * Which pool that owner actually touches is decided by the resource
+ * definition's own scope, which is why crossing from a unit resource to a
+ * faction one needs no special case anywhere.
+ *
+ * Applied directly rather than queued as a spend and a gain. Two independent
+ * events would be two independent clamps, and the pair could disagree: the
+ * source debited for points the destination had no room to accept. Here the
+ * arithmetic happens once and the event reports what actually moved.
+ */
+function resolveTransferResourceEffect(state, context) {
+  const effect = context.effect;
+  const plan = transferPlanFor(state, context);
+  if (!plan) return;
+  const result = applyTransfer(state, plan);
+  queueEvent(state, {
+    type: "resourceTransferred",
+    sourceUnitId: context.sourceUnitId,
+    targetUnitId: context.targetUnitId,
+    abilityId: context.abilityId || null,
+    fromUnitId: plan.fromUnitId,
+    toUnitId: plan.toUnitId,
+    fromResourceId: plan.fromDefinition.id,
+    toResourceId: plan.toDefinition.id,
+    fromScope: plan.fromDefinition.scope,
+    toScope: plan.toDefinition.scope,
+    requested: (effect.maxTransfers == null ? 1 : effect.maxTransfers) * result.gain,
+    spent: result.spent,
+    gained: result.gained,
+    transfers: result.transfers,
+    limitedBy: result.limitedBy || null
+  });
+}
+
+/**
+ * Resolves an authored transfer against the live battle.
+ *
+ * Null when either side names a resource nobody involved carries — which is a
+ * content mistake the validator catches, but a mid-battle transform or a
+ * summoned unit can also produce it, and a support ability that throws is
+ * worse than one that does nothing.
+ */
+function transferPlanFor(state, context) {
+  const effect = context.effect;
+  const sourceId = context.sourceUnitId;
+  const targetId = context.targetUnitId || context.sourceUnitId;
+  const ownerOf = (which) => (which === "target" ? targetId : sourceId);
+  const fromUnitId = ownerOf(effect.from || "source");
+  const toUnitId = ownerOf(effect.to || "target");
+
+  const fromDefinition = combatResourceDefinition(effect.resourceId);
+  const toDefinition = combatResourceDefinition(effect.intoResourceId || effect.resourceId);
+  if (!fromDefinition || !toDefinition) return null;
+  if (!state.units[fromUnitId] || !state.units[toUnitId]) return null;
+
+  return {
+    fromUnitId,
+    toUnitId,
+    fromDefinition,
+    toDefinition,
+    fromOwner: costOwnerFor(state, fromUnitId, fromDefinition),
+    toOwner: costOwnerFor(state, toUnitId, toDefinition),
+    cost: effect.cost,
+    gain: effect.gain,
+    maxTransfers: effect.maxTransfers,
+    partial: effect.partial
+  };
+}
+
 function resolveCreateTerrainEffect(state, context) {
   const tile = context.targetTile;
   if (!tile) return;
@@ -5231,6 +5437,7 @@ const EFFECT_HANDLERS = {
   swapPositions: resolveSwapPositionsEffect,
   restoreResource: resolveRestoreResourceEffect,
   spendResource: resolveSpendResourceEffect,
+  transferResource: resolveTransferResourceEffect,
   createTerrain: resolveCreateTerrainEffect,
   removeTerrain: resolveRemoveTerrainEffect,
   spawnUnit: resolveSpawnUnitEffect,
@@ -5510,6 +5717,7 @@ const EFFECT_METADATA = {
   swapPositions: { applies: "unit" },
   restoreResource: { applies: "unit" },
   spendResource: { applies: "unit" },
+  transferResource: { applies: "unit" },
   createTerrain: { applies: "tile" },
   removeTerrain: { applies: "tile" },
   spawnUnit: { applies: "tile" },
@@ -6455,16 +6663,72 @@ const EVENT_HANDLERS = {
     });
   },
 
+  /**
+   * Putting points back into a resource.
+   *
+   * Scope-aware for the same reason spending is: this used to read
+   * `unit.resources[id]` and nothing else, so restoring a *faction*-scoped
+   * resource added nothing and said nothing. The spend side was fixed when
+   * squad-funded abilities arrived; this is the other half of the same bug,
+   * and it is the half that has to work before a support operator can put
+   * anything back into the squad's budget.
+   */
+  /**
+   * Points moved from one balance to another.
+   *
+   * Its own event rather than a spend plus a gain, because the connection is
+   * the interesting part: a causal trace that shows capacity leaving one frame
+   * and arriving in another is what makes support legible, and two unrelated
+   * events would show the same battle as two coincidences.
+   */
+  resourceTransferred(state, event) {
+    const from = combatResourceDefinition(event.fromResourceId);
+    const to = combatResourceDefinition(event.toResourceId);
+    const fromName = (from && from.name) || event.fromResourceId;
+    const toName = (to && to.name) || event.toResourceId;
+    const receiver =
+      event.toScope === "faction"
+        ? teamLabel(state, state.units[event.toUnitId].teamId)
+        : unitLabel(state, event.toUnitId);
+    const text = event.transfers
+      ? unitLabel(state, event.fromUnitId) + " spends " + event.spent + " " + fromName +
+        ": " + receiver + " gains " + event.gained + " " + toName +
+        (event.limitedBy ? " (" + transferRefusalText(event.limitedBy) + ")" : "")
+      : unitLabel(state, event.fromUnitId) + " transfers nothing — " +
+        transferRefusalText(event.limitedBy);
+    logLine(state, "resourceTransferred", text, {
+      unitId: event.fromUnitId,
+      targetUnitId: event.toUnitId,
+      abilityId: event.abilityId,
+      fromResourceId: event.fromResourceId,
+      toResourceId: event.toResourceId,
+      spent: event.spent,
+      gained: event.gained,
+      requested: event.requested,
+      limitedBy: event.limitedBy
+    });
+  },
+
   resourceRestored(state, event) {
     const unit = state.units[event.targetUnitId];
-    if (!unit || !unit.resources[event.resourceId]) return;
-    const resource = unit.resources[event.resourceId];
-    resource.current = Math.min(resource.max, resource.current + event.amount);
+    if (!unit) return;
+    const definition = combatResourceDefinition(event.resourceId);
+    if (!definition) return;
+    const owner = definition.scope === "faction" ? { teamId: unit.teamId } : { unitId: unit.id };
+    if (!resourceEntry(state, definition, owner)) return;
+    const landed = gainCombatResource(state, definition, owner, event.amount);
     logLine(
       state,
       "resourceRestored",
-      unitLabel(state, unit.id) + " restores " + event.resourceId,
-      { unitId: unit.id, resourceId: event.resourceId, remaining: resource.current }
+      unitLabel(state, unit.id) + " restores " + landed + " " + (definition.name || event.resourceId),
+      {
+        unitId: unit.id,
+        resourceId: event.resourceId,
+        amount: landed,
+        requested: event.amount,
+        scope: definition.scope,
+        remaining: resourceBalance(state, definition, owner)
+      }
     );
   },
 
@@ -7827,6 +8091,17 @@ const COMMAND_VALIDATORS = {
     // Every scope, through one helper: a squad-wide cost is checked against
     // the squad's pool rather than looked for on the unit and not found.
     if (ability) errors.push(...abilityCostProblems(state, command.unitId, ability));
+    if (
+      ability &&
+      transferAbilityIsIdle(
+        state,
+        command.unitId,
+        command.abilityId,
+        (command.target && command.target.unitId) || command.unitId
+      )
+    ) {
+      errors.push("There is nothing to transfer there.");
+    }
     let targeting = { targetUnitIds: [], tiles: [] };
     if (!errors.length) {
       targeting = evaluateTargeting(
@@ -7963,6 +8238,49 @@ const EFFECT_FORECASTERS = {
         attackerDirection: flank.attackerDirection,
         accuracyBonus: flank.accuracyBonus,
         damageMultiplier: flank.damageMultiplier
+      }
+    ];
+  },
+
+  /**
+   * What a transfer would actually move, asked of the live balances.
+   *
+   * The whole point of forecasting a transfer is the cap: an ability that
+   * says "restores 2" and delivers 1 because the target is nearly full has
+   * lied to the player, and this is the only place that can be prevented.
+   */
+  transferResource(state, options) {
+    const plan = transferPlanFor(state, {
+      effect: options.effect,
+      sourceUnitId: options.sourceUnitId,
+      targetUnitId: options.targetUnitId,
+      abilityId: options.abilityId
+    });
+    if (!plan) return [];
+    const result = planTransfer(state, plan);
+    return [
+      {
+        targetUnitId: options.targetUnitId,
+        effectType: "transferResource",
+        fromUnitId: plan.fromUnitId,
+        toUnitId: plan.toUnitId,
+        fromResourceId: plan.fromDefinition.id,
+        toResourceId: plan.toDefinition.id,
+        fromResourceName: plan.fromDefinition.name || plan.fromDefinition.id,
+        toResourceName: plan.toDefinition.name || plan.toDefinition.id,
+        toScope: plan.toDefinition.scope,
+        spent: result.spent,
+        gained: result.gained,
+        amount: result.gained,
+        transfers: result.transfers,
+        limitedBy: result.limitedBy || null,
+        display: {
+          kind: "resource",
+          label: result.ok ? "TRANSFERS" : "NOTHING TO MOVE",
+          value: result.ok
+            ? "+" + result.gained + " " + (plan.toDefinition.name || plan.toDefinition.id)
+            : transferRefusalText(result.limitedBy)
+        }
       }
     ];
   },
@@ -11557,6 +11875,26 @@ const EFFECT_AI_SCORERS = {
 
   spendResource: () => 0,
 
+  /**
+   * Worth exactly what it actually moves.
+   *
+   * Zero when the destination is full, which is the whole reason this is not
+   * a flat value: a support AI that tops up a full pool has spent its turn
+   * and its finite capacity to accomplish nothing, and would keep doing it.
+   */
+  transferResource(state, context) {
+    const plan = transferPlanFor(state, {
+      effect: context.effect,
+      sourceUnitId: context.unitId,
+      targetUnitId: context.target ? context.target.id : context.unitId,
+      abilityId: context.abilityId
+    });
+    if (!plan) return 0;
+    const result = planTransfer(state, plan);
+    if (!result.ok) return -GAME_CONFIG.ai.redundantHealPenalty;
+    return result.gained * GAME_CONFIG.ai.statusValue * 0.5;
+  },
+
   createTerrain: () => GAME_CONFIG.ai.statusValue / 3,
   removeTerrain: () => 0,
 
@@ -12088,6 +12426,39 @@ const EFFECT_VALIDATORS = {
     if (typeof effect.value !== "number") errors.push(label + " needs a numeric value.");
     return errors;
   },
+  /* A transfer is entirely numbers and two resource ids, so every way of
+   * getting it wrong is silent at runtime: it simply moves nothing. */
+  transferResource: (registry, effect, label) => {
+    const errors = [];
+    const source = effect.resourceId;
+    const destination = effect.intoResourceId || effect.resourceId;
+    if (!source) errors.push(label + " needs a source resourceId.");
+    else if (!registry.resources[source]) {
+      errors.push(label + ' transfers unknown resource "' + source + '".');
+    }
+    if (!registry.resources[destination]) {
+      errors.push(label + ' transfers into unknown resource "' + destination + '".');
+    }
+    for (const key of ["from", "to"]) {
+      if (effect[key] && !["source", "target"].includes(effect[key])) {
+        errors.push(label + " " + key + ' must be "source" or "target".');
+      }
+    }
+    for (const key of ["cost", "gain", "maxTransfers"]) {
+      if (effect[key] == null) continue;
+      if (!Number.isFinite(effect[key]) || effect[key] < 1) {
+        errors.push(label + " needs a positive whole " + key + ".");
+      }
+    }
+    // Same resource, same owner: the points would come straight back.
+    const fromSide = effect.from || "source";
+    const toSide = effect.to || "target";
+    if (source === destination && fromSide === toSide) {
+      errors.push(label + " transfers a resource to the balance it came from, which does nothing.");
+    }
+    return errors;
+  },
+
   moveUnit: (registry, effect, label) => requireDistance(effect, label),
   displace: (registry, effect, label) => {
     const errors = requireDistance(effect, label);
@@ -13439,6 +13810,7 @@ const CONTENT = buildContentRegistry(prepareAssetAwareContentSources({
   aiProfiles: AI_PROFILES,
   equipment: EQUIPMENT,
   fixtures: FIXTURE_DEFINITIONS,
+  resources: RESOURCES_BY_ID,
   presentationAssets: ASSETS
 }));
 /* =========================================================================
@@ -13793,7 +14165,12 @@ function createAbilityViewModel(state, unitId, abilityId, options) {
   const unit = state.units[unitId];
   const origin = opts.origin || { x: unit.x, y: unit.y };
   const cooldownRemaining = unit.cooldowns[abilityId] || 0;
-  const targets = enumerateValidAbilityTargets(state, unitId, abilityId, origin);
+  // A frame with a full rack is not a target for something that only fills
+  // racks. Filtering here rather than reporting it afterwards means the
+  // existing "no valid targets" path says it, in the words it already uses.
+  const targets = enumerateValidAbilityTargets(state, unitId, abilityId, origin).filter(
+    (target) => !transferAbilityIsIdle(state, unitId, abilityId, target.unitId || unitId)
+  );
 
   const reasons = [];
   if (!abilityConditionsMet(state, unitId, abilityId)) {
@@ -29529,6 +29906,506 @@ test("Sequencing", "Planning a window stays cheap", () => {
   }
   const per = (Date.now() - started) / runs;
   assert(per < 2, "planning took " + per.toFixed(4) + "ms");
+});
+
+/* =========================================================================
+ * SUPPORT AND RESOURCE TRANSFER
+ *
+ * Everything before this phase either created value or destroyed it. A
+ * support operator does neither — she moves something finite from one place
+ * to another, and the whole design lives in that being a real trade.
+ * =======================================================================*/
+
+const SUPPORT_ENCOUNTER = "file:fixture-support-arena";
+
+function supportBattle(seed, options) {
+  return createBattle(SUPPORT_ENCOUNTER, seed == null ? 5 : seed, {
+    autoResolveScenes: true,
+    autoResolveReactions: true,
+    ...options
+  });
+}
+
+/** Activates the support frame with everyone parked out of its way. */
+function stageSupport(state) {
+  const reyes = unitByRef(state, "reyes");
+  activateForTest(state, reyes.id);
+  return reyes;
+}
+
+/** A unit-scoped balance, by ref and resource id. */
+function poolOfRef(state, ref, resourceId) {
+  const unit = unitByRef(state, ref);
+  return (unit.resources || {})[resourceId] || null;
+}
+
+function setPool(state, ref, resourceId, current) {
+  const pool = poolOfRef(state, ref, resourceId);
+  if (pool) pool.current = current;
+  return pool;
+}
+
+/** Runs one ability through the real command path, as the player would. */
+function useSupport(state, actorRef, abilityId, targetRef) {
+  const actor = unitByRef(state, actorRef);
+  return executeCommand(state, {
+    type: "useAbility",
+    unitId: actor.id,
+    abilityId,
+    target: targetRef ? { unitId: unitByRef(state, targetRef).id } : { unitId: actor.id }
+  });
+}
+
+function transferEntries(state) {
+  return state.battleLog.filter((entry) => entry.type === "resourceTransferred");
+}
+
+/* ---- the arithmetic, on its own ---- */
+
+test("Support", "A transfer moves points rather than creating them", () => {
+  const state = supportBattle(600);
+  const reyes = stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  setPool(state, "veteran", "burst", 1);
+
+  const result = useSupport(state, "reyes", "powerTransfer", "veteran");
+  assert(result.ok, result.errors.join(" | "));
+
+  // The example from the specification, exactly: 4 and 1 become 2 and 3.
+  assertEqual(poolOfRef(state, "reyes", "supportCharge").current, 2, "she paid for it");
+  assertEqual(poolOfRef(state, "veteran", "burst").current, 3, "and it arrived");
+  void reyes;
+
+  const logged = transferEntries(state);
+  assertEqual(logged.length, 1);
+  assertEqual(logged[0].data.spent, 2);
+  assertEqual(logged[0].data.gained, 2);
+});
+
+test("Support", "A partial transfer spends only what it manages to deliver", () => {
+  const state = supportBattle(601);
+  stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  // One point of headroom, against an ability offering two.
+  const burst = poolOfRef(state, "veteran", "burst");
+  burst.current = burst.max - 1;
+
+  assert(useSupport(state, "reyes", "powerTransfer", "veteran").ok);
+  assertEqual(burst.current, burst.max, "the room that existed was filled");
+  assertEqual(
+    poolOfRef(state, "reyes", "supportCharge").current,
+    3,
+    "and exactly one charge paid for it — burning two to deliver one is the bug this rules out"
+  );
+  assertEqual(transferEntries(state)[0].data.limitedBy, "destination");
+});
+
+test("Support", "A full destination is refused rather than drained into", () => {
+  const state = supportBattle(602);
+  stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  const burst = poolOfRef(state, "veteran", "burst");
+  burst.current = burst.max;
+
+  const result = useSupport(state, "reyes", "powerTransfer", "veteran");
+  assertEqual(result.ok, false, "there is nothing to do");
+  assertEqual(poolOfRef(state, "reyes", "supportCharge").current, 4, "and nothing was spent finding out");
+  assertEqual(burst.current, burst.max);
+});
+
+test("Support", "An empty source transfers nothing", () => {
+  const state = supportBattle(603);
+  stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 0);
+  setPool(state, "veteran", "burst", 1);
+
+  const result = useSupport(state, "reyes", "powerTransfer", "veteran");
+  assertEqual(result.ok, false);
+  assertEqual(poolOfRef(state, "veteran", "burst").current, 1, "nothing appeared out of nowhere");
+});
+
+test("Support", "The same architecture funds an entirely different economy", () => {
+  const state = supportBattle(604);
+  stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  setPool(state, "arcSpecialist", "capacitor", 0);
+
+  assert(useSupport(state, "reyes", "coolantTransfer", "arcSpecialist").ok);
+
+  // Two charges out, four capacitor in: the exchange rate is authored per
+  // ability, and the engine never learns which resource is which.
+  assertEqual(poolOfRef(state, "reyes", "supportCharge").current, 2);
+  assertEqual(poolOfRef(state, "arcSpecialist", "capacitor").current, 4);
+
+  const powerEffect = CONTENT.abilities.powerTransfer.effects[0];
+  const coolantEffect = CONTENT.abilities.coolantTransfer.effects[0];
+  assertEqual(powerEffect.type, coolantEffect.type, "one effect type serves both");
+  assert(powerEffect.intoResourceId !== coolantEffect.intoResourceId, "and only the data differs");
+});
+
+/* ---- crossing scope ---- */
+
+test("Support", "A personal resource can become a squad one", () => {
+  const state = supportBattle(605);
+  const reyes = stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  const cp = factionResource(state, "commandPoints", reyes.teamId);
+  cp.current = 1;
+
+  assert(useSupport(state, "reyes", "tacticalRelay").ok);
+  assertEqual(poolOfRef(state, "reyes", "supportCharge").current, 2, "two of hers");
+  assertEqual(
+    factionResource(state, "commandPoints", reyes.teamId).current,
+    2,
+    "became one of the squad's"
+  );
+  const entry = transferEntries(state)[0];
+  assertEqual(entry.data.toResourceId, "commandPoints");
+  assertEqual(entry.data.spent, 2);
+  assertEqual(entry.data.gained, 1);
+});
+
+test("Support", "A capped squad pool is not paid into", () => {
+  const state = supportBattle(606);
+  const reyes = stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  const cp = factionResource(state, "commandPoints", reyes.teamId);
+  cp.current = cp.max;
+
+  const result = useSupport(state, "reyes", "tacticalRelay");
+  assertEqual(result.ok, false, "a full pool is not a target");
+  assertEqual(poolOfRef(state, "reyes", "supportCharge").current, 4, "and her charges are still hers");
+  assertEqual(factionResource(state, "commandPoints", reyes.teamId).current, cp.max);
+});
+
+test("Support", "An all-or-nothing transfer does not half-happen", () => {
+  const state = supportBattle(607);
+  const reyes = stageSupport(state);
+  // One charge, against an exchange that costs two.
+  setPool(state, "reyes", "supportCharge", 1);
+  factionResource(state, "commandPoints", reyes.teamId).current = 0;
+
+  const result = useSupport(state, "reyes", "tacticalRelay");
+  assertEqual(result.ok, false);
+  assertEqual(poolOfRef(state, "reyes", "supportCharge").current, 1, "the odd charge is untouched");
+  assertEqual(factionResource(state, "commandPoints", reyes.teamId).current, 0);
+});
+
+/* ---- the economy, end to end ---- */
+
+test("Support", "Support feeds the squad's economy, and the squad spends it", () => {
+  const state = supportBattle(608);
+  const reyes = stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  // One short of what the command costs: without her, the plan is unaffordable.
+  factionResource(state, "commandPoints", reyes.teamId).current = 1;
+
+  const vale = unitByRef(state, "vale");
+  assertEqual(
+    createAbilityViewModel(state, vale.id, "battlePlan").usable,
+    false,
+    "the commander cannot afford the plan"
+  );
+
+  assert(useSupport(state, "reyes", "tacticalRelay").ok);
+  assertEqual(factionResource(state, "commandPoints", reyes.teamId).current, 2);
+  executeCommand(state, { type: "endTurn", unitId: reyes.id });
+
+  const commander = stageCommand(state, "vale", ["kell", "veteran", "arcSpecialist"]);
+  assert(
+    createAbilityViewModel(state, commander.id, "battlePlan").usable,
+    "and now she can, funded by somebody else's rack"
+  );
+  // Read after staging: activating a unit regenerates the squad pool, so the
+  // meaningful measurement is what the command costs, not an absolute.
+  const budget = factionResource(state, "commandPoints", reyes.teamId).current;
+  assert(issueCommand(state, "vale", ["veteran", "kell", "arcSpecialist"]).ok);
+  assertEqual(
+    factionResource(state, "commandPoints", reyes.teamId).current,
+    budget - 2,
+    "the generated point was spent like any other"
+  );
+  assertOwnsOneActivationEach(state, "after support funded a command");
+});
+
+test("Support", "A funded frame can afford what it could not a moment ago", () => {
+  const state = supportBattle(609);
+  stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  setPool(state, "veteran", "burst", 0);
+
+  const veteran = unitByRef(state, "veteran");
+  const cost = CONTENT.abilities.impactChain.costs.burst;
+  assert(cost > 0, "the route costs stored thrust");
+  assertEqual(
+    createAbilityViewModel(state, veteran.id, "impactChain").usable,
+    false,
+    "an empty rack is an unavailable action"
+  );
+
+  assert(useSupport(state, "reyes", "powerTransfer", "veteran").ok);
+  assertEqual(poolOfRef(state, "veteran", "burst").current, 2);
+  assert(
+    poolOfRef(state, "veteran", "burst").current >= cost,
+    "and it is now affordable — with no code connecting the two frames"
+  );
+});
+
+/* ---- repair, and what a damaged frame is ---- */
+
+test("Support", "Repair uses the ordinary healing pipeline", () => {
+  const state = supportBattle(610);
+  stageSupport(state);
+  const veteran = unitByRef(state, "veteran");
+  const max = calculateUnitStats(state, veteran.id).maxHp;
+  veteran.currentHp = 20;
+
+  assert(useSupport(state, "reyes", "fieldRepair", "veteran").ok);
+  assert(veteran.currentHp > 20, "it healed");
+  assert(veteran.currentHp <= max, "and respected the ceiling");
+  assert(
+    state.battleLog.some((entry) => entry.type === "healResolved"),
+    "through the same event ordinary healing produces"
+  );
+});
+
+test("Support", "A damaged system takes capability away, not just numbers", () => {
+  const state = supportBattle(611);
+  stageSupport(state);
+  const veteran = unitByRef(state, "veteran");
+  const before = calculateUnitStats(state, veteran.id).movement;
+  assert(getUnitAbilities(state, veteran.id).includes("impactChain"), "the route is there to lose");
+
+  applyStatusForTest(state, veteran.id, "thrustersImpaired");
+  assert(
+    calculateUnitStats(state, veteran.id).movement < before,
+    "the frame is slower"
+  );
+  assert(
+    !getUnitAbilities(state, veteran.id).includes("impactChain"),
+    "and the route is offline entirely — the thing statuses could not do before"
+  );
+  const why = abilityImpairment(state, veteran.id, "impactChain");
+  assert(why && why.statusId === "thrustersImpaired", "and it says which system");
+});
+
+test("Support", "Repairing the system gives the capability back", () => {
+  const state = supportBattle(612);
+  stageSupport(state);
+  const veteran = unitByRef(state, "veteran");
+  applyStatusForTest(state, veteran.id, "thrustersImpaired");
+  const impaired = calculateUnitStats(state, veteran.id).movement;
+
+  // Measured after activation: her rack regenerates when she activates, so a
+  // baseline read before that would be a different number entirely.
+  const rackBefore = poolOfRef(state, "reyes", "supportCharge").current;
+  assert(useSupport(state, "reyes", "systemRepair", "veteran").ok);
+  assert(
+    getUnitAbilities(state, veteran.id).includes("impactChain"),
+    "the route is available again"
+  );
+  assert(calculateUnitStats(state, veteran.id).movement > impaired, "and the frame moves properly");
+  assertEqual(
+    poolOfRef(state, "reyes", "supportCharge").current,
+    rackBefore - 1,
+    "at the ordinary price of one charge"
+  );
+});
+
+test("Support", "Two different impairments use the same generic machinery", () => {
+  const state = supportBattle(613);
+  stageSupport(state);
+  const specialist = unitByRef(state, "arcSpecialist");
+  const accuracyBefore = calculateUnitStats(state, specialist.id).accuracy;
+
+  applyStatusForTest(state, specialist.id, "sensorsImpaired");
+  assert(calculateUnitStats(state, specialist.id).accuracy < accuracyBefore, "sensors matter");
+
+  // A different tag, a different consequence, and the same repair.
+  assert(useSupport(state, "reyes", "systemRepair", "arcSpecialist").ok);
+  assertEqual(
+    calculateUnitStats(state, specialist.id).accuracy,
+    accuracyBefore,
+    "one repair, authored against a tag, serves both"
+  );
+});
+
+test("Support", "Impairment survives a save exactly", () => {
+  const state = supportBattle(614);
+  stageSupport(state);
+  const veteran = unitByRef(state, "veteran");
+  applyStatusForTest(state, veteran.id, "thrustersImpaired");
+  setPool(state, "reyes", "supportCharge", 2);
+  setPool(state, "veteran", "burst", 3);
+  factionResource(state, "commandPoints", veteran.teamId).current = 1;
+
+  const restored = deserializeBattle(serializeBattle(state));
+  assertEqual(poolOfRef(restored, "reyes", "supportCharge").current, 2);
+  assertEqual(poolOfRef(restored, "veteran", "burst").current, 3);
+  assertEqual(factionResource(restored, "commandPoints", veteran.teamId).current, 1);
+  assert(
+    !getUnitAbilities(restored, unitByRef(restored, "veteran").id).includes("impactChain"),
+    "and the frame is still missing what it was missing"
+  );
+});
+
+/* ---- reacting, and fighting ---- */
+
+test("Support", "She can keep a frame standing out of turn", () => {
+  const state = supportBattle(615, { autoResolveReactions: true });
+  const reyes = stageSupport(state);
+  applyStatusForTest(state, reyes.id, "fieldReady");
+  setPool(state, "reyes", "supportCharge", 3);
+
+  const veteran = unitByRef(state, "veteran");
+  veteran.currentHp = 40;
+  const shooter = unitByRef(state, "shooter");
+  MISSION_ENGINE.scriptedAttack(state, {
+    sourceUnitId: shooter.id,
+    targetUnitIds: [veteran.id],
+    power: 90,
+    formula: "physical"
+  });
+  processAllEvents(state);
+  settleCommand(state);
+
+  const fired = state.reactions.log.filter((entry) => entry.ok).map((entry) => entry.reactionId);
+  assert(fired.includes("emergencyPatch"), fired.join(", ") || "no reaction fired");
+  assertEqual(poolOfRef(state, "reyes", "supportCharge").current, 2, "out of her own rack");
+  assertContinuationIsLive(state, "after an emergency patch");
+});
+
+test("Support", "The welder is still a weapon", () => {
+  const state = supportBattle(616);
+  stageSupport(state);
+  const target = unitByRef(state, "target");
+  const before = target.currentHp;
+
+  const result = useSupport(state, "reyes", "arcWelder", "target");
+  assert(result.ok, result.errors.join(" | "));
+  assert(target.currentHp < before, "the same machine takes one apart at arm's length");
+});
+
+/* ---- what the player is told ---- */
+
+test("Support", "The forecast promises exactly what the transfer delivers", () => {
+  const state = supportBattle(617);
+  stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  const burst = poolOfRef(state, "veteran", "burst");
+  burst.current = burst.max - 1;
+
+  const reyes = unitByRef(state, "reyes");
+  const preview = validateCommand(state, {
+    type: "useAbility",
+    unitId: reyes.id,
+    abilityId: "powerTransfer",
+    target: { unitId: unitByRef(state, "veteran").id }
+  }).preview;
+  const outcome = preview.outcomes.find((entry) => entry.effectType === "transferResource");
+  assert(outcome, "the transfer is forecast at all");
+  assertEqual(outcome.gained, 1, "and the cap is in the number, not a surprise");
+  assertEqual(outcome.spent, 1);
+
+  assert(useSupport(state, "reyes", "powerTransfer", "veteran").ok);
+  const actual = transferEntries(state)[0].data;
+  assertEqual(actual.gained, outcome.gained, "prediction and outcome agree");
+  assertEqual(actual.spent, outcome.spent);
+});
+
+test("Support", "A support action with nothing to do says so before it is taken", () => {
+  const state = supportBattle(618);
+  const reyes = stageSupport(state);
+  const burst = poolOfRef(state, "veteran", "burst");
+  burst.current = burst.max;
+  factionResource(state, "commandPoints", reyes.teamId).current = factionResource(
+    state,
+    "commandPoints",
+    reyes.teamId
+  ).max;
+
+  const transfer = createAbilityViewModel(state, reyes.id, "powerTransfer");
+  assertEqual(transfer.usable, false, "a full frame is not a target");
+  const relay = createAbilityViewModel(state, reyes.id, "tacticalRelay");
+  assertEqual(relay.usable, false, "and a full squad pool is not either");
+  assert(relay.unusableReason, relay.unusableReason || "no reason given");
+
+  setPool(state, "reyes", "supportCharge", 0);
+  const broke = createAbilityViewModel(state, reyes.id, "systemRepair");
+  assertEqual(broke.usable, false, "an empty rack disables what it pays for");
+});
+
+/* ---- the AI ---- */
+
+test("Support", "The AI does not spend support on a target that needs none", () => {
+  const state = supportBattle(619);
+  stageSupport(state);
+  const reyes = unitByRef(state, "reyes");
+  const veteran = unitByRef(state, "veteran");
+  const burst = poolOfRef(state, "veteran", "burst");
+  const weights = aiProfileFor(state, reyes.id);
+
+  burst.current = burst.max;
+  const full = scoreEffectList(
+    state,
+    { unitId: reyes.id, target: veteran, weights, abilityId: "powerTransfer" },
+    CONTENT.abilities.powerTransfer.effects
+  );
+  burst.current = 0;
+  const empty = scoreEffectList(
+    state,
+    { unitId: reyes.id, target: veteran, weights, abilityId: "powerTransfer" },
+    CONTENT.abilities.powerTransfer.effects
+  );
+  assert(full < 0, "topping up a full rack is worse than doing nothing: " + full);
+  assert(empty > full, "and funding an empty one is worth something: " + empty);
+});
+
+/* ---- genericity ---- */
+
+test("Support", "Nothing in the transfer engine knows what it is moving", () => {
+  const sources = [
+    resolveTransferResourceEffect.toString(),
+    transferPlanFor.toString(),
+    transferRefusalText.toString(),
+    EFFECT_HANDLERS.transferResource.toString(),
+    EFFECT_FORECASTERS.transferResource.toString(),
+    EVENT_HANDLERS.resourceTransferred.toString(),
+    getUnitAbilities.toString()
+  ].join("\n");
+  for (const id of [
+    "reyes",
+    "supportCharge",
+    "burst",
+    "capacitor",
+    "commandPoints",
+    "powerTransfer",
+    "tacticalRelay",
+    "thrustersImpaired"
+  ]) {
+    assert(!new RegExp('"' + id + '"').test(sources), "the engine names " + id);
+  }
+});
+
+test("Support", "Transferring is free, and so is asking about it", () => {
+  const state = supportBattle(620);
+  stageSupport(state);
+  const reyes = unitByRef(state, "reyes");
+  const veteran = unitByRef(state, "veteran");
+  const context = {
+    effect: CONTENT.abilities.powerTransfer.effects[0],
+    sourceUnitId: reyes.id,
+    targetUnitId: veteran.id,
+    abilityId: "powerTransfer"
+  };
+
+  const runs = 400;
+  const started = Date.now();
+  for (let index = 0; index < runs; index += 1) {
+    planTransfer(state, transferPlanFor(state, context));
+  }
+  const per = (Date.now() - started) / runs;
+  assert(per < 1, "planning a transfer took " + per.toFixed(4) + "ms");
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {

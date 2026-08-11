@@ -547,6 +547,51 @@
         ]
       }
     },
+    "coolantTransfer": {
+      "name": "Coolant Transfer",
+      "description": "The same clamps, a different rack. Whether the frame on the other end runs on stored thrust or stored charge is a question about them, not about her.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "filters": [
+          {
+            "type": "excludeSource"
+          }
+        ],
+        "rangeMax": 2,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "ally"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 550
+      },
+      "effects": [
+        {
+          "cost": 1,
+          "from": "source",
+          "gain": 2,
+          "intoResourceId": "capacitor",
+          "maxTransfers": 2,
+          "partial": true,
+          "resourceId": "supportCharge",
+          "to": "target",
+          "type": "transferResource"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "=",
+        "order": 4,
+        "tags": [
+          "support"
+        ]
+      }
+    },
     "coverAlly": {
       "name": "Cover Ally",
       "description": "Shields a nearby ally for 35 and reinforces its plating for three activations.",
@@ -1255,7 +1300,8 @@
         "glyph": "✦",
         "order": 3,
         "tags": [
-          "melee"
+          "melee",
+          "route"
         ]
       }
     },
@@ -1390,8 +1436,9 @@
         "glyph": "➤",
         "order": 1,
         "tags": [
-          "trajectory",
-          "melee"
+          "melee",
+          "route",
+          "trajectory"
         ]
       }
     },
@@ -1538,6 +1585,51 @@
         "basic": true,
         "category": "attack",
         "order": 1
+      }
+    },
+    "powerTransfer": {
+      "name": "Power Transfer",
+      "description": "Hard line, two clamps, and a frame that is about to be able to afford something it could not a moment ago. What comes out of her rack goes into theirs; nothing is created.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "filters": [
+          {
+            "type": "excludeSource"
+          }
+        ],
+        "rangeMax": 2,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "ally"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 550
+      },
+      "effects": [
+        {
+          "cost": 1,
+          "from": "source",
+          "gain": 1,
+          "intoResourceId": "burst",
+          "maxTransfers": 2,
+          "partial": true,
+          "resourceId": "supportCharge",
+          "to": "target",
+          "type": "transferResource"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "=",
+        "order": 3,
+        "tags": [
+          "support"
+        ]
       }
     },
     "precisionShot": {
@@ -2031,6 +2123,90 @@
         ]
       }
     },
+    "systemRepair": {
+      "name": "System Repair",
+      "description": "Slower than a patch and worth it. Pulls a damaged system back to operational rather than putting integrity back into the hull.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 1,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "ally"
+      },
+      "timing": {
+        "cooldown": 1,
+        "recovery": 800
+      },
+      "costs": {
+        "supportCharge": 1
+      },
+      "effects": [
+        {
+          "count": 2,
+          "tag": "systemDamage",
+          "type": "cleanse"
+        },
+        {
+          "formula": "magical",
+          "power": 40,
+          "type": "heal"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "+",
+        "order": 6,
+        "tags": [
+          "support",
+          "repair"
+        ]
+      }
+    },
+    "tacticalRelay": {
+      "name": "Tactical Relay",
+      "description": "She stops fixing frames and starts fixing the plan: bandwidth, a relay mast and two charges of her own turned into something the whole squad can spend.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 0,
+        "rangeMin": 0,
+        "requiresLineOfSight": false,
+        "type": "self"
+      },
+      "timing": {
+        "cooldown": 1,
+        "recovery": 700
+      },
+      "effects": [
+        {
+          "cost": 2,
+          "from": "source",
+          "gain": 1,
+          "intoResourceId": "commandPoints",
+          "maxTransfers": 1,
+          "partial": false,
+          "resourceId": "supportCharge",
+          "to": "source",
+          "type": "transferResource"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "support",
+        "glyph": "#",
+        "order": 5,
+        "tags": [
+          "support",
+          "command"
+        ]
+      }
+    },
     "tacticalWithdrawal": {
       "name": "Tactical Withdrawal",
       "description": "Boosts away from a target by two tiles and raises Speed for two activations.",
@@ -2208,6 +2384,7 @@
         "glyph": "⇝",
         "order": 2,
         "tags": [
+          "route",
           "trajectory"
         ]
       }

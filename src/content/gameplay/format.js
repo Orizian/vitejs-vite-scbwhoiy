@@ -127,6 +127,8 @@ export const REGISTRY_KINDS = {
       "hidden",
       "removedOnHostileAction",
       "removedOnMovement",
+      "removesAbilities",
+      "blocksAbilityTags",
       "perception"
     ]
   },

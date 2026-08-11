@@ -601,6 +601,26 @@ export const REGISTRY_SCHEMAS = {
           { key: "hidden", label: "Hidden from opponents", kind: "boolean", behaviour: true },
           { key: "removedOnHostileAction", label: "Drops on hostile action", kind: "boolean", behaviour: true },
           { key: "removedOnMovement", label: "Drops on movement", kind: "boolean", behaviour: true },
+          {
+            key: "removesAbilities",
+            label: "Takes these offline",
+            kind: "refList",
+            registry: "abilities",
+            behaviour: true,
+            help:
+              "Abilities this condition removes while it lasts. How a damaged system " +
+              "stops being usable rather than merely being worse at its job."
+          },
+          {
+            key: "blocksAbilityTags",
+            label: "Takes tagged actions offline",
+            kind: "tags",
+            behaviour: true,
+            help:
+              "Any ability carrying one of these tags is unavailable while this holds. " +
+              "Prefer it to a list of ids when the impairment is about a kind of " +
+              "capability rather than one particular action."
+          },
           { key: "triggers", label: "Triggers", kind: "objectList", typeKey: "event", behaviour: true }
         ]
       },
