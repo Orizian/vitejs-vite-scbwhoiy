@@ -90,7 +90,10 @@ const FORBIDDEN_NAMES = [
   "duelIntercept",
   "duelHoldTheLine",
   "duelTakeTheHit",
-  "duelPunish"
+  "duelPunish",
+  "battlePlan",
+  "assaultMech",
+  "commandSequence"
 ];
 
 function sourceFiles(dir) {

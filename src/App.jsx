@@ -13805,16 +13805,10 @@ function createAbilityViewModel(state, unitId, abilityId, options) {
   // What it costs is part of whether it can be used. The command validator has
   // always refused an unaffordable action; without this the model that draws
   // the button disagreed with it, and the player found out by clicking.
-  for (const resourceId of Object.keys(ability.costs || {})) {
-    const pool = unit.resources[resourceId];
-    const price = ability.costs[resourceId];
-    const definition = REACTION_INDEX.resourceById[resourceId];
-    const name = (definition && definition.name) || resourceId;
-    if (!pool) reasons.push("This frame carries no " + name + ".");
-    else if (pool.current < price) {
-      reasons.push("Needs " + price + " " + name + " (" + pool.current + " banked)");
-    }
-  }
+  // Every scope, through the same helper the validator uses. Reading only the
+  // unit's own pools greyed out a squad-funded action for a frame that was
+  // never going to carry the resource privately.
+  reasons.push(...abilityCostProblems(state, unitId, ability));
   if (!targets.length) {
     // A route ability reaches by travelling. Judging it on who is standing next
     // to the frame right now would grey out the charge in exactly the situation
@@ -14393,7 +14387,12 @@ const LOG_FILTERS = {
   vetoes: (entry) =>
     entry.type === "actionPrevented" ||
     entry.type === "actionRedirected" ||
-    entry.type === "interventionFailed"
+    entry.type === "interventionFailed",
+  // Who decided the order, and what happened to it afterwards. Worth its own
+  // filter for the same reason: a turn arriving out of its natural place is
+  // unexplainable from the rest of the log.
+  orders: (entry) =>
+    entry.type === "activationOrderChanged" || entry.type === "activationOrderDropped"
 };
 
 function createBattleLogViewModel(state, filterId) {
@@ -15319,6 +15318,7 @@ const INPUT_MODES = [
   "planningMove",
   "planningTarget",
   "planningRoute",
+  "planningOrder",
   "confirmingAction",
   "presentingEvents",
   "battleFinished"
@@ -15341,6 +15341,10 @@ function createInputState(overrides) {
      *  Null when no route is being drawn; an empty array means "drawing, but
      *  nothing chosen yet", which is a different thing the panel must say. */
     routeSegments: null,
+    /** Units picked for a commanded order, in the order they were picked.
+     *  Null when no command is being planned; an empty array means "planning,
+     *  nothing chosen", which the panel says differently. */
+    plannedOrder: null,
     forecast: null,
     contextOptions: null,
     contextTargetUnitId: null,
@@ -15377,6 +15381,7 @@ function clearPlan(input, overrides) {
     selectedAbilityId: null,
     selectedTarget: null,
     routeSegments: null,
+    plannedOrder: null,
     forecast: null,
     contextOptions: null,
     contextTargetUnitId: null,
@@ -15620,14 +15625,19 @@ function inputReducer(input, action, state) {
       // A route is drawn, not aimed. Which one an ability is comes from its
       // content, so a new trajectory ability needs no UI change at all.
       const route = !!trajectoryAbility(action.abilityId);
+      // Likewise an order is arranged, not aimed. Which kind of planning an
+      // ability needs is read from its authored block, so a second commander
+      // with a different reach needs no UI change either.
+      const orders = !!activationWindowRules(CONTENT.abilities[action.abilityId]);
       return result({
         ...input,
-        mode: route ? "planningRoute" : "planningTarget",
+        mode: route ? "planningRoute" : orders ? "planningOrder" : "planningTarget",
         threatUnitId: null,
         threatPinned: false,
         selectedAbilityId: action.abilityId,
         selectedTarget: null,
         routeSegments: route ? [] : null,
+        plannedOrder: orders ? [] : null,
         plannedSequence: null,
         plannedPath: null,
         plannedMoveDestination: null,
@@ -15635,6 +15645,67 @@ function inputReducer(input, action, state) {
         commandMenuOpen: false,
         errorMessage: ""
       });
+    }
+
+    /* ---- order planning ----
+     *
+     * Three actions and no drag-and-drop: clicking an eligible unit appends it
+     * to the order, clicking it again removes it, and undo pops the last one.
+     * Click-to-sequence is unambiguous about *what number this unit is*, which
+     * dragging portraits around a rail is not.
+     */
+
+    case "toggleOrderPick": {
+      if (input.mode !== "planningOrder" || !input.plannedOrder) return result(input);
+      const plan = createCommandPlanModel(state, activeId, input.selectedAbilityId, input.plannedOrder);
+      if (!plan) return fail(input, "That action does not command the timeline.");
+      const already = input.plannedOrder.indexOf(action.unitId);
+      if (already >= 0) {
+        // Removing from the middle renumbers the rest, which is what the
+        // player means: they are editing a sequence, not clearing a checkbox.
+        return result({
+          ...input,
+          plannedOrder: input.plannedOrder.filter((id) => id !== action.unitId),
+          errorMessage: ""
+        });
+      }
+      const entry = plan.entries.find((record) => record.unitId === action.unitId);
+      if (!entry) return fail(input, "That unit is not in the command window.");
+      if (!entry.eligible) return fail(input, entry.reason || "That unit cannot be commanded.");
+      if (input.plannedOrder.length >= plan.maxUnits) {
+        return fail(input, "This command can sequence " + plan.maxUnits + ".");
+      }
+      return result({
+        ...input,
+        plannedOrder: input.plannedOrder.concat(action.unitId),
+        errorMessage: ""
+      });
+    }
+
+    case "undoOrderPick": {
+      if (input.mode !== "planningOrder" || !input.plannedOrder) return result(input);
+      if (!input.plannedOrder.length) return result(clearPlan(input));
+      return result({ ...input, plannedOrder: input.plannedOrder.slice(0, -1), errorMessage: "" });
+    }
+
+    case "confirmOrder": {
+      if (input.mode !== "planningOrder" || !input.plannedOrder) return result(input);
+      if (!isActive) return fail(input, "No active unit.");
+      // The same model the panel rendered, asked again at the moment of
+      // commitment. If it now refuses, the refusal is the honest answer.
+      const plan = createCommandPlanModel(state, activeId, input.selectedAbilityId, input.plannedOrder);
+      if (!plan || !plan.ok) return fail(input, (plan && plan.reason) || "That order cannot be issued.");
+      return result(
+        { ...input, mode: "presentingEvents", resumeMode: "unitReady" },
+        [
+          {
+            type: "reorderActivations",
+            unitId: activeId,
+            abilityId: input.selectedAbilityId,
+            order: input.plannedOrder.slice()
+          }
+        ]
+      );
     }
 
     /* ---- route planning ---- */
@@ -16818,6 +16889,38 @@ function createContextCommandModel(state, input, options) {
         route,
         lines,
         actions
+      };
+    }
+  }
+
+  // An order being arranged. Same contract as the route panel: everything
+  // shown comes from the planner that will run it, so the panel cannot promise
+  // a sequence the engine then refuses.
+  if (input.mode === "planningOrder") {
+    const plan = createCommandPlanModel(state, input.selectedUnitId, input.selectedAbilityId, input.plannedOrder || []);
+    if (plan) {
+      const lines = [
+        { label: "Sequencing", value: (input.plannedOrder || []).length + " / " + plan.maxUnits },
+        { label: "Cost", value: plan.costText }
+      ];
+      if (plan.barrier) lines.push({ label: "Blocked by", value: plan.barrier.name });
+      return {
+        ...base,
+        kind: "order",
+        title: plan.abilityName,
+        order: plan,
+        lines,
+        actions: [
+          action(
+            "confirmOrder",
+            "Issue the order",
+            "Enter",
+            plan.ok,
+            plan.reason || "Pick the units in the order you want them."
+          ),
+          action("undoOrderPick", "Undo pick", "Backspace", (input.plannedOrder || []).length > 0),
+          action("cancel", "Cancel", "Esc")
+        ]
       };
     }
   }
@@ -38372,7 +38475,7 @@ function DestinationForecastPanel({ destination, entries, recovery }) {
 }
 
 function BattleLogPanel({ groups, filterId, onFilter }) {
-  const filters = ["all", "damage", "healing", "statuses", "timeline", "movement", "defeats", "vetoes"];
+  const filters = ["all", "damage", "healing", "statuses", "timeline", "movement", "defeats", "vetoes", "orders"];
   return (
     <div>
       <div className="flex flex-wrap gap-1 mb-2">
@@ -38988,6 +39091,86 @@ function HoverBadge({ badge, position }) {
  * The route breakdown: every leg, what each turn cost, who gets hit, and where
  * exactly they end up. The numbers are the planner's, not the panel's.
  */
+/**
+ * The command panel: who is coming, who may be moved, and what order results.
+ *
+ * The mechanic lives or dies on this being readable. A player who has to
+ * decode timestamps to know what they just bought has not been given a
+ * commander, they have been given a spreadsheet — so nothing here shows a
+ * number that is not a position.
+ */
+function OrderSummary({ order, onPick }) {
+  const chip = (label, tone) => (
+    <span className={"px-1 py-0.5 text-[9px] uppercase tracking-wider rounded-sm " + tone}>
+      {label}
+    </span>
+  );
+  const resulting = order.resultingOrder
+    .map((unitId) => order.entries.find((entry) => entry.unitId === unitId))
+    .filter(Boolean);
+
+  return (
+    <div className="px-2 py-2 space-y-2 border-b border-slate-800">
+      <div>
+        <p className="text-[9px] uppercase tracking-[0.2em] text-slate-500 mb-1">Upcoming</p>
+        <ul className="space-y-0.5">
+          {order.entries.map((entry) => (
+            <li key={entry.unitId}>
+              <button
+                onClick={() => (entry.eligible ? onPick(entry.unitId) : null)}
+                disabled={!entry.eligible}
+                title={entry.reason || ""}
+                className={
+                  "flex w-full items-center gap-2 px-1.5 py-1 text-left text-[11px] transition border " +
+                  (entry.selected
+                    ? "border-amber-300/60 bg-amber-950/40 text-amber-100"
+                    : entry.eligible
+                    ? "border-slate-800 hover:border-amber-300/40 hover:bg-slate-900 text-slate-200"
+                    : "border-transparent text-slate-600 cursor-not-allowed")
+                }
+              >
+                <span className="w-4 text-center tabular-nums text-[10px]">
+                  {entry.selected ? entry.selectedIndex : entry.eligible ? "·" : "—"}
+                </span>
+                <span className="w-4 text-center">{entry.glyph}</span>
+                <span className="flex-1 truncate">{entry.name}</span>
+                {entry.hostile ? chip("enemy", "bg-rose-500/15 text-rose-200") : null}
+                {!entry.eligible && entry.reason ? (
+                  <span className="text-[9px] text-slate-600 truncate max-w-[150px]">{entry.reason}</span>
+                ) : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {order.selectedOrder.length ? (
+        <div>
+          <p className="text-[9px] uppercase tracking-[0.2em] text-emerald-400/80 mb-1">
+            Resulting order
+          </p>
+          <ol className="flex flex-wrap gap-1">
+            {resulting.map((entry, index) => (
+              <li
+                key={entry.unitId}
+                className={
+                  "px-1.5 py-0.5 text-[10px] border " +
+                  (entry.selected
+                    ? "border-emerald-400/50 bg-emerald-950/40 text-emerald-100"
+                    : "border-slate-800 text-slate-500")
+                }
+              >
+                <span className="tabular-nums text-slate-500 mr-1">{index + 1}</span>
+                {entry.name}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function RouteSummary({ route, onDisplace }) {
   return (
     <div className="px-2 py-1 space-y-1 border-b border-slate-800">
@@ -39170,7 +39353,7 @@ function ChainSummary({ chain }) {
   );
 }
 
-function FloatingPanel({ model, position, abilities, onAction, onAbility, onContextOption, onRouteDisplace, width }) {
+function FloatingPanel({ model, position, abilities, onAction, onAbility, onContextOption, onRouteDisplace, onOrderPick, width }) {
   if (!model.visible) return null;
   const forecast = model.forecast;
   return (
@@ -39206,7 +39389,7 @@ function FloatingPanel({ model, position, abilities, onAction, onAbility, onCont
         </div>
       ) : null}
 
-      {model.kind === "movePlan" || model.kind === "route" ? (
+      {model.kind === "movePlan" || model.kind === "route" || model.kind === "order" ? (
         <div className="px-2 py-1 space-y-0.5">
           {model.lines.map((line) => (
             <p key={line.label} className="flex justify-between text-[11px] text-slate-400">
@@ -39219,6 +39402,10 @@ function FloatingPanel({ model, position, abilities, onAction, onAbility, onCont
 
       {model.kind === "route" && model.route ? (
         <RouteSummary route={model.route} onDisplace={onRouteDisplace} />
+      ) : null}
+
+      {model.kind === "order" && model.order ? (
+        <OrderSummary order={model.order} onPick={onOrderPick} />
       ) : null}
 
       {model.chain ? <ChainSummary chain={model.chain} /> : null}
@@ -41884,6 +42071,8 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
           (input.mode === "planningRoute" && input.routeSegments && input.routeSegments.length)
         ) {
           dispatch({ type: "confirm" });
+        } else if (input.mode === "planningOrder") {
+          dispatch({ type: "confirmOrder" });
         } else {
           dispatch({ type: "clickTile", tile: cursor });
         }
@@ -41892,6 +42081,11 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
       if (key === "Backspace" && input.mode === "planningRoute") {
         event.preventDefault();
         dispatch({ type: "undoRouteSegment" });
+        return;
+      }
+      if (key === "Backspace" && input.mode === "planningOrder") {
+        event.preventDefault();
+        dispatch({ type: "undoOrderPick" });
         return;
       }
       const moves = {
@@ -42073,6 +42267,9 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
         route.contacts.length * 74
       );
     }
+    if (contextModel.kind === "order") {
+      return 130 + contextModel.actions.length * 26 + contextModel.order.entries.length * 30;
+    }
     if (contextModel.forecast) {
       return 250 + (contextModel.chain ? 40 + contextModel.chain.nodes.length * 16 : 0);
     }
@@ -42167,6 +42364,13 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
         return;
       case "undoRouteSegment":
         dispatch({ type: "undoRouteSegment" });
+        return;
+      case "confirmOrder":
+        setAbilityMenuOpen(false);
+        dispatch({ type: "confirmOrder" });
+        return;
+      case "undoOrderPick":
+        dispatch({ type: "undoOrderPick" });
         return;
       case "cancel":
         setAbilityMenuOpen(false);
@@ -42611,6 +42815,7 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
           onRouteDisplace={(segment, change) =>
             dispatch({ type: "setRouteDisplacement", segment, ...change })
           }
+          onOrderPick={(unitId) => dispatch({ type: "toggleOrderPick", unitId })}
           onContextOption={(option) =>
             dispatch({ type: "chooseContextOption", abilityId: option.abilityId })
           }
@@ -43452,6 +43657,15 @@ if (typeof window !== "undefined") {
       // still walkable" is asking the question movement asks.
       tileIsFree: (state, x, y, unitId) => isTileFree(state, x, y, unitId)
     },
+    // The input state machine, so an acceptance run drives the panel through
+    // exactly the reducer a click goes through rather than around it.
+    input: {
+      create: (overrides) => createInputState(overrides),
+      dispatch: (input, action, state) => inputReducer(input, action, state),
+      panel: (state, input, options) => createContextCommandModel(state, input, options || {}),
+      modes: INPUT_MODES
+    },
+    battleLogFilters: Object.keys(LOG_FILTERS),
     // The sequencing surface. `plan` is the authority the preview, the
     // validator and the executor all share — a harness asking it is asking the
     // player's question, which is the whole point of there being only one.
