@@ -115,6 +115,52 @@
       "defaultAbilityId": null,
       "aiProfile": "cautious"
     },
+    "duelistFrame": {
+      "name": "Duelist Frame",
+      "classId": "duelist",
+      "role": "Denial frame: decides what the enemy in front of her is allowed to do.",
+      "glyph": "D",
+      "description": "Light plating, a short blade and reflex gear tuned past the point of comfort. She does not out-damage anything and cannot hold a line by absorbing it. What she does is answer one enemy's decisions, one at a time, until they stop making any.",
+      "tags": [
+        "mech",
+        "melee"
+      ],
+      "baseStats": {
+        "accuracy": 96,
+        "attack": 70,
+        "defense": 42,
+        "displacementResistance": 2,
+        "evasion": 30,
+        "magic": 18,
+        "maxClimb": 1,
+        "maxDrop": 3,
+        "maxHp": 96,
+        "movement": 5,
+        "propagationRadiusBonus": 0,
+        "resistance": 30,
+        "speed": 118
+      },
+      "resources": {
+        "poise": {
+          "max": 3,
+          "startsAt": 2
+        }
+      },
+      "abilities": [
+        "challenge",
+        "riposte",
+        "guardBreak",
+        "brace"
+      ],
+      "defaultAbilityId": "riposte",
+      "aiProfile": "aggressive",
+      "defaultEquipment": {
+        "armor": "lightPlating",
+        "coreSystem": "standardCore",
+        "primaryWeapon": "closeShotgun",
+        "utilitySystem": "jumpJets"
+      }
+    },
     "fieldMedic": {
       "name": "Field Medic",
       "classId": "support",
@@ -328,6 +374,51 @@
       ],
       "defaultAbilityId": "burstFire",
       "aiProfile": "aggressive"
+    },
+    "loyalistDuelist": {
+      "name": "Loyalist Bladeguard",
+      "classId": "duelist",
+      "role": "The other side's answer to the same problem, using exactly the same mechanic.",
+      "glyph": "D",
+      "description": "Heavier, slower and issued rather than chosen. Everything the player's duelist can do to an enemy activation, this frame can do to theirs — which is the point of it existing.",
+      "tags": [
+        "mech",
+        "melee"
+      ],
+      "baseStats": {
+        "accuracy": 92,
+        "attack": 66,
+        "defense": 42,
+        "displacementResistance": 2,
+        "evasion": 24,
+        "magic": 18,
+        "maxClimb": 1,
+        "maxDrop": 3,
+        "maxHp": 104,
+        "movement": 4,
+        "propagationRadiusBonus": 0,
+        "resistance": 30,
+        "speed": 108
+      },
+      "resources": {
+        "poise": {
+          "max": 3,
+          "startsAt": 2
+        }
+      },
+      "abilities": [
+        "challenge",
+        "riposte",
+        "guardBreak"
+      ],
+      "defaultAbilityId": "riposte",
+      "aiProfile": "aggressive",
+      "defaultEquipment": {
+        "armor": "reactiveArmor",
+        "coreSystem": "standardCore",
+        "primaryWeapon": "closeShotgun",
+        "utilitySystem": "repairKit"
+      }
     },
     "missileCarrier": {
       "name": "Missile Carrier",

@@ -23,6 +23,14 @@
         "valeVanguard"
       ]
     },
+    "duelist": {
+      "name": "Duelist",
+      "ref": "duelist",
+      "glyph": "D",
+      "role": "Denial",
+      "chassis": "duelistFrame",
+      "recruit": true
+    },
     "kell": {
       "name": "Kell",
       "glyph": "🧔‍♂️",

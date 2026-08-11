@@ -77,7 +77,20 @@ const FORBIDDEN_NAMES = [
   "defuse",
   "ordnance",
   "sapper",
-  "sapperFrame"
+  "sapperFrame",
+  "duelist",
+  "duelistFrame",
+  "loyalistDuelist",
+  "challenge",
+  "challenged",
+  "onGuard",
+  "riposte",
+  "guardBreak",
+  "poise",
+  "duelIntercept",
+  "duelHoldTheLine",
+  "duelTakeTheHit",
+  "duelPunish"
 ];
 
 function sourceFiles(dir) {

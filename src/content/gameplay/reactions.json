@@ -4,6 +4,211 @@
   "registry": "reactions",
   "description": "Out-of-turn responses, as WHEN / IF / THEN. `trigger` is a generic event, `conditions` a declarative vocabulary, `effect` a registered primitive. No reaction names an engine behaviour that does not already exist.",
   "entries": {
+    "duelHoldTheLine": {
+      "name": "Hold the Line",
+      "description": "Nobody walks past her. The move is declared, and then it does not happen — and they have still spent it.",
+      "trigger": "actionDeclared",
+      "priority": 80,
+      "requires": {
+        "status": "onGuard"
+      },
+      "conditions": [
+        {
+          "reactorHasStatus": "onGuard"
+        },
+        {
+          "declaredActionKind": "movement"
+        },
+        {
+          "subjectRelation": "hostile"
+        },
+        {
+          "triggeringActorStillValid": true
+        },
+        {
+          "knowsSubject": "acquired"
+        },
+        {
+          "withinRange": 1
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "poise"
+          },
+          {
+            "amount": 1,
+            "id": "commandPoints"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1,
+        "perChain": 1
+      },
+      "effect": {
+        "type": "cancelTriggeringAction"
+      }
+    },
+    "duelIntercept": {
+      "name": "Intercept",
+      "description": "The enemy she called out picks an action. She gets there first, and it never happens.",
+      "trigger": "actionDeclared",
+      "priority": 90,
+      "requires": {
+        "status": "onGuard"
+      },
+      "conditions": [
+        {
+          "reactorHasStatus": "onGuard"
+        },
+        {
+          "declaredActionKind": "ability"
+        },
+        {
+          "subjectHasStatus": "challenged"
+        },
+        {
+          "subjectRelation": "hostile"
+        },
+        {
+          "triggeringActorStillValid": true
+        },
+        {
+          "knowsSubject": "acquired"
+        },
+        {
+          "withinRange": 1
+        },
+        {
+          "any": [
+            {
+              "declaredTargetRelation": "self"
+            },
+            {
+              "declaredTargetRelation": "allied"
+            }
+          ]
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "poise"
+          },
+          {
+            "amount": 1,
+            "id": "reactionCapacity"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1,
+        "perChain": 1
+      },
+      "effect": {
+        "abilityId": "riposte",
+        "type": "interceptAction"
+      }
+    },
+    "duelPunish": {
+      "name": "Punish",
+      "description": "Stopping them was the setup. An enemy who has just had an action taken away is standing still with nothing planned.",
+      "trigger": "actionPrevented",
+      "priority": 60,
+      "requires": {
+        "status": "onGuard"
+      },
+      "conditions": [
+        {
+          "sourceIsReactor": true
+        },
+        {
+          "preventionReason": "cancel"
+        },
+        {
+          "subjectRelation": "hostile"
+        },
+        {
+          "subjectAlive": true
+        },
+        {
+          "withinRange": 1
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "reactionCapacity"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1,
+        "perChain": 1
+      },
+      "effect": {
+        "formula": "physical",
+        "power": 75,
+        "targetFrom": "subject",
+        "type": "reactionAttack"
+      }
+    },
+    "duelTakeTheHit": {
+      "name": "Take the Hit",
+      "description": "Somebody aimed at the person she is standing next to. That was a mistake about who they were fighting.",
+      "trigger": "actionDeclared",
+      "priority": 70,
+      "requires": {
+        "status": "onGuard"
+      },
+      "conditions": [
+        {
+          "reactorHasStatus": "onGuard"
+        },
+        {
+          "declaredActionKind": "ability"
+        },
+        {
+          "actionIsRedirectable": true
+        },
+        {
+          "subjectRelation": "hostile"
+        },
+        {
+          "declaredTargetRelation": "allied"
+        },
+        {
+          "triggeringActorStillValid": true
+        },
+        {
+          "knowsSubject": "acquired"
+        },
+        {
+          "withinRange": 6
+        }
+      ],
+      "cost": {
+        "resources": [
+          {
+            "amount": 1,
+            "id": "poise"
+          }
+        ]
+      },
+      "limits": {
+        "perActivation": 1,
+        "perChain": 1
+      },
+      "effect": {
+        "target": "self",
+        "type": "redirectTriggeringAction"
+      }
+    },
     "heldFiringLane": {
       "name": "Held Firing Lane",
       "description": "A frame holding overwatch fires the moment a hostile it can see steps into the lane — or is put there by someone else.",

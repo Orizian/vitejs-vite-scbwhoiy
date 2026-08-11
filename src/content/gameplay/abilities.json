@@ -402,6 +402,46 @@
         ]
       }
     },
+    "challenge": {
+      "name": "Challenge",
+      "description": "Names an enemy and takes the guard. While the duel holds, that enemy's decisions are hers to answer.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 3,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 400
+      },
+      "effects": [
+        {
+          "chance": 1,
+          "statusId": "challenged",
+          "type": "applyStatus"
+        },
+        {
+          "applyTo": "source",
+          "chance": 1,
+          "statusId": "onGuard",
+          "type": "applyStatus"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "control",
+        "glyph": "!",
+        "order": 1,
+        "tags": [
+          "duel"
+        ]
+      }
+    },
     "cleanseAlly": {
       "name": "Cleanse",
       "description": "Removes negative statuses from an ally.",
@@ -957,6 +997,46 @@
         "order": 14,
         "tags": [
           "shape"
+        ]
+      }
+    },
+    "guardBreak": {
+      "name": "Guard Break",
+      "description": "Only worth swinging at somebody already committed to fighting her, which is exactly who she has been arranging to fight.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "filters": [
+          {
+            "statusId": "challenged",
+            "type": "hasStatus"
+          }
+        ],
+        "rangeMax": 1,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 1,
+        "recovery": 900
+      },
+      "effects": [
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 165,
+          "type": "damage"
+        }
+      ],
+      "ui": {
+        "basic": false,
+        "category": "attack",
+        "order": 3,
+        "tags": [
+          "duel"
         ]
       }
     },
@@ -1654,6 +1734,37 @@
         "tags": [
           "shape"
         ]
+      }
+    },
+    "riposte": {
+      "name": "Riposte",
+      "description": "A short swing with the weight already behind it. Cheap enough to be her ordinary answer, and the same swing she uses out of turn.",
+      "activation": "manual",
+      "targeting": {
+        "area": {
+          "shape": "single"
+        },
+        "rangeMax": 1,
+        "rangeMin": 1,
+        "requiresLineOfSight": true,
+        "type": "enemy"
+      },
+      "timing": {
+        "cooldown": 0,
+        "recovery": 620
+      },
+      "effects": [
+        {
+          "canMiss": true,
+          "formula": "physical",
+          "power": 105,
+          "type": "damage"
+        }
+      ],
+      "ui": {
+        "basic": true,
+        "category": "attack",
+        "order": 2
       }
     },
     "scatterShot": {

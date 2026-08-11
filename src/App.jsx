@@ -10557,35 +10557,225 @@ function reactionDeps() {
   return REACTION_DEPS;
 }
 
-/**
- * Deterministic AI reaction policy.
+/* ---------------------------------------------------------------
+ * AI REACTION POLICY
  *
- * Intentionally small: it exercises legality and ordering without pretending
- * to be tactical judgement. A real scorer replaces this when enemy reaction
- * rosters arrive; the important property is that it goes through exactly the
- * same legality path a player does.
+ * What replaced the placeholder, and why it had to.
+ *
+ * The old policy took anything affordable. That was honest about being a
+ * stand-in and useless the moment the other side had more than one reaction:
+ * an enemy squad with a taunt, a counter and a guard would fire whichever the
+ * ordering happened to reach first, forever, regardless of whether it
+ * accomplished anything. It also made an enemy duelist impossible to author,
+ * because intercepting is only interesting if the AI can tell a shot worth
+ * stopping from one worth ignoring.
+ *
+ * This is not a tactical genius and does not try to be. It answers the three
+ * questions that decide whether an out-of-turn response was worth taking, in
+ * one currency — expected HP:
+ *
+ *   what does it get me?    the reaction's own effect, forecast for real
+ *   what does it stop?      for an intervention, the damage it prevents
+ *   what does it cost me?   scarcity, not price — the last Command Point of
+ *                           a battle is worth more than the first
+ *
+ * Deterministic and side-effect free: it reads forecasts, never the RNG, so a
+ * replay from the same seed makes the same choices.
+ * -------------------------------------------------------------*/
+
+const REACTION_AI = {
+  /** Below this, decline. Deliberately above zero: a reaction worth almost
+   *  nothing is worth less than the resource it would spend. */
+  threshold: 6,
+  /** HP-equivalent value of the last point in a pool, versus the first. */
+  scarcityWeight: 24,
+  /** Losing a unit costs more than losing its remaining HP — the activation,
+   *  the position and everything it would have done. */
+  lethalBonus: 40,
+  /** A declared move has no forecastable damage, so a movement interception is
+   *  valued by denial rather than by prevention. Modest on purpose: stopping
+   *  someone walking is worth something, not everything. */
+  movementDenial: 14,
+  /** Nudge from the authored priority, so an author can still break a tie
+   *  without having to out-argue the arithmetic. */
+  priorityWeight: 0.5
+};
+
+/** Expected damage from a forecast, counted against what the target can
+ *  actually lose. Overkill is not extra value. */
+function expectedHarm(state, outcomes) {
+  let total = 0;
+  for (const outcome of outcomes) {
+    if (outcome.effectType !== "damage") continue;
+    const target = state.units[outcome.targetUnitId];
+    if (!target || !target.alive) continue;
+    const chance = outcome.hitChance == null ? 1 : outcome.hitChance;
+    total += Math.min(outcome.totalAmount || 0, target.currentHp) * chance;
+    if (outcome.lethal) total += REACTION_AI.lethalBonus * chance;
+  }
+  return total;
+}
+
+/** What the declared action would do to the reactor's own side. */
+function declaredThreatValue(state, event, reactorId) {
+  if (event.actionKind === "movement" || !event.abilityId) return REACTION_AI.movementDenial;
+  const ability = CONTENT.abilities[event.abilityId];
+  if (!ability) return 0;
+  let total = 0;
+  for (const targetId of event.targetUnitIds || []) {
+    const target = state.units[targetId];
+    if (!target || !target.alive) continue;
+    // Only harm to my own side counts. An enemy shooting another enemy is not
+    // a problem I need to spend a Command Point on.
+    if (isHostile(state, reactorId, targetId)) continue;
+    total += expectedHarm(
+      state,
+      forecastEffectList(state, {
+        sourceUnitId: event.sourceUnitId,
+        targetUnitId: targetId,
+        abilityId: event.abilityId,
+        targetTile: event.tile || null,
+        effects: ability.effects
+      })
+    );
+  }
+  return total;
+}
+
+/** What an out-of-turn attack by the reactor would achieve. */
+function reactionAttackValue(state, reactorId, targetId, effect) {
+  const target = state.units[targetId];
+  if (!target || !target.alive) return 0;
+  const ability = effect.abilityId ? CONTENT.abilities[effect.abilityId] : null;
+  const effects = ability
+    ? ability.effects
+    : [
+        {
+          type: "damage",
+          formula: effect.formula || "physical",
+          power: effect.power == null ? 999 : effect.power,
+          canMiss: false
+        }
+      ];
+  return expectedHarm(
+    state,
+    forecastEffectList(state, {
+      sourceUnitId: reactorId,
+      targetUnitId: targetId,
+      abilityId: effect.abilityId || null,
+      targetTile: { x: target.x, y: target.y },
+      effects
+    })
+  );
+}
+
+/**
+ * What spending this actually costs, in the same currency.
+ *
+ * Linear in what is left afterwards rather than in the price: taking the last
+ * point of a pool is four times as expensive as taking the first, which is the
+ * only reason an AI ever holds anything back.
  */
+function reactionScarcityCost(state, offer) {
+  const unit = state.units[offer.reactorId];
+  if (!unit) return 0;
+  let cost = 0;
+  for (const entry of (offer.cost && offer.cost.resources) || []) {
+    const raw = REACTION_INDEX.resourceById[entry.id];
+    if (!raw) continue;
+    const amount = entry.amount == null ? 1 : entry.amount;
+    const balance =
+      raw.scope === "faction"
+        ? (state.resources.faction[unit.teamId] || {})[entry.id]
+        : (unit.resources || {})[entry.id];
+    if (!balance || !balance.max) continue;
+    const shareLeft = Math.max(0, balance.current - amount) / balance.max;
+    cost += amount * REACTION_AI.scarcityWeight * (1 - shareLeft);
+  }
+  return cost;
+}
+
+/**
+ * The score, in expected HP. Positive means it was worth doing.
+ *
+ * Exposed rather than inlined because the acceptance run and the tests both
+ * need to see the number, not just the yes or no it collapses to.
+ */
+function scoreAiReaction(state, offer, event) {
+  const reaction = REACTION_INDEX.reactionById[offer.reactionId];
+  if (!reaction) return 0;
+  const effect = reaction.effect || {};
+  const reactorId = offer.reactorId;
+  let value = 0;
+
+  switch (effect.type) {
+    case "cancelTriggeringAction":
+      value = declaredThreatValue(state, event, reactorId);
+      break;
+
+    case "interceptAction": {
+      const actorId = event.sourceUnitId;
+      value = declaredThreatValue(state, event, reactorId);
+      if (actorId) value += reactionAttackValue(state, reactorId, actorId, effect);
+      break;
+    }
+
+    case "redirectTriggeringAction": {
+      // Taking a hit for somebody else is worth the difference between what it
+      // does to them and what it does to you. A bodyguard who is squishier
+      // than her charge is not being brave, she is being wrong.
+      const prevented = declaredThreatValue(state, event, reactorId);
+      const self = event.abilityId
+        ? expectedHarm(
+            state,
+            forecastEffectList(state, {
+              sourceUnitId: event.sourceUnitId,
+              targetUnitId: reactorId,
+              abilityId: event.abilityId,
+              targetTile: event.tile || null,
+              effects: (CONTENT.abilities[event.abilityId] || { effects: [] }).effects
+            })
+          )
+        : 0;
+      value = prevented - self;
+      break;
+    }
+
+    case "reactionAttack": {
+      const targetId = event[effect.targetFrom === "source" ? "sourceUnitId" : "unitId"];
+      value = targetId ? reactionAttackValue(state, reactorId, targetId, effect) : 0;
+      break;
+    }
+
+    case "reactionRepair": {
+      const targetId = event[effect.targetFrom === "source" ? "sourceUnitId" : "unitId"];
+      const target = targetId ? state.units[targetId] : null;
+      if (target && target.alive) {
+        const missing = calculateUnitStats(state, targetId).maxHp - target.currentHp;
+        value = Math.min(missing, effect.amount == null ? 30 : effect.amount);
+      }
+      break;
+    }
+
+    default:
+      // Everything else — statuses, advances, timeline pushes — is real but
+      // not forecastable in HP. A flat modest value keeps them in play without
+      // pretending to a precision this policy does not have.
+      value = GAME_CONFIG.ai.statusValue;
+      break;
+  }
+
+  value += (offer.priority - 50) * REACTION_AI.priorityWeight;
+  return value - reactionScarcityCost(state, offer);
+}
+
+/** Yes or no, from the score. Same legality path the player takes. */
 function chooseAiReaction(state, offer, event) {
   // Do not spend anything reacting to something that is already gone.
   if (event && event.unitId && state.units[event.unitId] && !state.units[event.unitId].alive) {
     return false;
   }
-  // Never burn the last point of a shared pool on a low-priority reaction:
-  // enough policy to be testable, not enough to be a design statement.
-  // Never burn the last point of a shared resource on a low-priority
-  // reaction: enough policy to be testable, not enough to be a design
-  // statement.
-  for (const entry of (offer.cost && offer.cost.resources) || []) {
-    const raw = REACTION_INDEX.resourceById[entry.id];
-    if (!raw || raw.scope !== "faction") continue;
-    const unit = state.units[offer.reactorId];
-    const balance = unit && state.resources.faction[unit.teamId]
-      ? state.resources.faction[unit.teamId][entry.id]
-      : null;
-    const amount = entry.amount == null ? 1 : entry.amount;
-    if (balance && balance.current <= amount && offer.priority < 50) return false;
-  }
-  return true;
+  return scoreAiReaction(state, offer, event) >= REACTION_AI.threshold;
 }
 
 function reactionsEnabled(state) {
@@ -27570,6 +27760,620 @@ test("Fixtures", "Scanning for devices stays cheap at realistic counts", () => {
   }
 });
 
+/* =========================================================================
+ * DEFENSIVE INTERCEPTION
+ *
+ * Reactions could already happen around an action. These are about changing
+ * one — and, just as importantly, about the battle still being playable
+ * afterwards. Half of what follows is the mechanic and half is the invariant.
+ * =======================================================================*/
+
+const DUEL_ENCOUNTER = "file:fixture-duel-arena";
+
+function duelBattle(seed, options) {
+  // Auto-resolving by default, unlike the other benches: nearly every test
+  // here is about what an intervention *does*, and parking on a prompt first
+  // would make each one three lines of window bookkeeping. The tests that are
+  // about the prompt pass `autoResolveReactions: false` explicitly.
+  return createBattle(DUEL_ENCOUNTER, seed == null ? 5 : seed, {
+    autoResolveScenes: true,
+    autoResolveReactions: true,
+    ...options
+  });
+}
+
+/** Puts the duelist on guard with a named enemy challenged, the way the
+ *  ability does, without spending her activation to get there. */
+function stageDuel(state, enemyRef) {
+  const duelist = unitByRef(state, "duelist");
+  const enemy = unitByRef(state, enemyRef || "bravo");
+  applyStatusForTest(state, duelist.id, "onGuard");
+  REACTION_ENGINE.applyStatus(state, duelist.id, [enemy.id], "challenged");
+  processAllEvents(state);
+  return { duelist, enemy };
+}
+
+/** The most recent declaration, whatever became of it. */
+function lastDeclaration(state) {
+  const order = state.interventions.order;
+  return order.length ? state.interventions.byId[order[order.length - 1]] : null;
+}
+
+function preventedEntries(state) {
+  return state.battleLog.filter((entry) => entry.type === "actionPrevented");
+}
+
+/* ---- the primitive, on its own ---- */
+
+test("Interception", "The intervention kinds are a closed list, and continue is not one of them", () => {
+  const collection = createInterventionState();
+  const record = openDeclaration(collection, { kind: "ability", actorUnitId: "a", chainId: "c1" });
+  assertEqual(record.verdict.kind, "continue", "an unintervened action continues");
+
+  for (const kind of ["explode", "delay", null, undefined, "CANCEL"]) {
+    const result = proposeIntervention(collection, record.id, { kind });
+    assertEqual(result.ok, false, String(kind) + " must not be an intervention");
+  }
+  // `continue` is a verdict but never a proposal: offering it as one would
+  // mean an author could "intervene" to do nothing and consume the single
+  // slot, which is a footgun with no upside.
+  assertEqual(proposeIntervention(collection, record.id, { kind: "continue" }).ok, false);
+  assertEqual(record.verdict.kind, "continue", "and none of that changed the verdict");
+  assertEqual(INTERVENTION_KINDS.length, 4);
+});
+
+test("Interception", "One intervention per declaration; the first in order wins", () => {
+  const collection = createInterventionState();
+  const record = openDeclaration(collection, { kind: "ability", actorUnitId: "a", chainId: "c1" });
+
+  assert(proposeIntervention(collection, record.id, { kind: "cancel", byUnitId: "first" }).ok);
+  const second = proposeIntervention(collection, record.id, { kind: "cancel", byUnitId: "second" });
+  assertEqual(second.ok, false, "a second intervention is refused");
+  assert(/already intervened/.test(second.reason), second.reason);
+
+  assertEqual(record.verdict.byUnitId, "first", "the first one holds");
+  // Both attempts are on the record. A refused intervention is exactly as
+  // interesting as an accepted one when somebody asks why nothing happened.
+  assertEqual(record.proposals.length, 2);
+  assertEqual(record.proposals[1].accepted, false);
+});
+
+test("Interception", "Interventions inside one chain are capped", () => {
+  const collection = createInterventionState();
+  const made = [];
+  for (let index = 0; index < 5; index += 1) {
+    const record = openDeclaration(collection, { kind: "ability", actorUnitId: "a", chainId: "c1" });
+    made.push(proposeIntervention(collection, record.id, { kind: "cancel", byUnitId: "u" }).ok);
+    resolveDeclaration(collection, record.id);
+  }
+  assertEqual(made.filter(Boolean).length, INTERVENTION_LIMITS.perChain, "the cap bites");
+  assertEqual(made[INTERVENTION_LIMITS.perChain], false, "and it bites at the right place");
+
+  // A different chain is a different fight.
+  const fresh = openDeclaration(collection, { kind: "ability", actorUnitId: "a", chainId: "c2" });
+  assert(proposeIntervention(collection, fresh.id, { kind: "cancel", byUnitId: "u" }).ok);
+});
+
+test("Interception", "Resolving twice reports continue rather than throwing", () => {
+  const collection = createInterventionState();
+  const record = openDeclaration(collection, { kind: "ability", actorUnitId: "a", chainId: "c1" });
+  proposeIntervention(collection, record.id, { kind: "cancel", byUnitId: "u" });
+  assertEqual(resolveDeclaration(collection, record.id).kind, "cancel");
+  // A double resolve is a bug. A bug that stops the battle is a worse bug.
+  assertEqual(resolveDeclaration(collection, record.id).kind, "continue");
+  assertEqual(proposeIntervention(collection, record.id, { kind: "cancel" }).ok, false);
+});
+
+/* ---- the default path is unchanged ---- */
+
+test("Interception", "An action nobody objects to resolves exactly as it always did", () => {
+  const state = duelBattle(200);
+  const kell = unitByRef(state, "kell");
+  const bravo = unitByRef(state, "bravo");
+  bravo.x = 5;
+  bravo.y = 4;
+  activateForTest(state, kell.id);
+  const hpBefore = bravo.currentHp;
+
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: kell.id,
+    abilityId: "handCannon",
+    target: { unitId: bravo.id }
+  });
+  assert(result.ok, result.errors.join(" | "));
+
+  const declaration = lastDeclaration(state);
+  assert(declaration, "a declaration was opened");
+  assertEqual(declaration.verdict.kind, "continue");
+  assert(declaration.resolved, "and closed");
+  assert(
+    state.battleLog.some((entry) => entry.type === "abilityUsed" && entry.data.abilityId === "handCannon"),
+    "the shot happened"
+  );
+  assert(bravo.currentHp < hpBefore, "and did damage");
+  assertEqual(preventedEntries(state).length, 0, "nothing was prevented");
+});
+
+/* ---- cancel ---- */
+
+/**
+ * The cost-commit rule, asserted where it is actually true.
+ *
+ * The rule is "a declared action is paid for whether or not it resolves", and
+ * the mechanism is ordering: the cost events are queued *ahead* of the
+ * declaration, so they have already resolved by the time any reaction is
+ * offered a chance to object. Asserting the ordering is stronger than
+ * asserting one ability's balance, because the ordering is what makes it true
+ * for every ability that will ever exist.
+ */
+test("Interception", "A prevented action is still paid for, because the cost went first", () => {
+  const state = duelBattle(201);
+  const { enemy } = stageDuel(state, "bravo");
+  const ward = unitByRef(state, "ward");
+  const hpBefore = ward.currentHp;
+
+  // The mechanism, on its own bench: cost events are queued ahead of the
+  // declaration, so they have resolved before any reaction is offered a say.
+  const ordering = duelBattle(2011);
+  const costed = unitByRef(ordering, "kell");
+  costed.resources = { ...(costed.resources || {}), mana: { current: 40, max: 40 } };
+  activateForTest(ordering, costed.id);
+  COMMAND_HANDLERS.useAbility(ordering, {
+    unitId: costed.id,
+    abilityId: "shieldAlly",
+    target: { unitId: unitByRef(ordering, "reyes").id }
+  });
+  const queued = ordering.resolutionQueue.map((event) => event.type);
+  assert(
+    queued.indexOf("resourceSpent") >= 0 &&
+      queued.indexOf("resourceSpent") < queued.indexOf("actionDeclared"),
+    "the cost is queued ahead of the declaration: " + queued.join(" then ")
+  );
+
+  // Padded so the intercept cannot finish them: a destroyed actor has no
+  // activation left to inspect, and what is being tested here is what the
+  // survivor still owes.
+  enemy.currentHp = 900;
+  activateForTest(state, enemy.id);
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: enemy.id,
+    abilityId: "handCannon",
+    target: { unitId: ward.id }
+  });
+  assert(result.ok, result.errors.join(" | "));
+
+  const declaration = lastDeclaration(state);
+  assert(declaration.verdict.kind !== "continue", "somebody intervened");
+  assertEqual(ward.currentHp, hpBefore, "the shot never landed");
+  assertEqual(state.activation.acted, true, "and the enemy has still spent its action");
+  assert(state.activation.actionRecovery > 0, "and is still recovering from it");
+  assert(preventedEntries(state).length >= 1, "and the log says so");
+});
+
+test("Interception", "A vetoed move goes nowhere and still costs the move", () => {
+  const state = duelBattle(202);
+  const { duelist } = stageDuel(state, "runner");
+  const runner = unitByRef(state, "runner");
+  // Adjacent, which is the whole condition for holding a line.
+  assertEqual(gridDistance(duelist, runner), 1);
+
+  activateForTest(state, runner.id);
+  const from = { x: runner.x, y: runner.y };
+  const result = executeCommand(state, {
+    type: "move",
+    unitId: runner.id,
+    path: [from, { x: from.x + 1, y: from.y }, { x: from.x + 2, y: from.y }]
+  });
+  assert(result.ok, result.errors.join(" | "));
+
+  assertEqual(runner.x, from.x, "the runner did not move");
+  assertEqual(runner.y, from.y);
+  assertEqual(state.activation.moved, true, "but the move is spent — being stopped is not a refund");
+  const prevented = preventedEntries(state);
+  assertEqual(prevented.length, 1);
+  assertEqual(prevented[0].data.reason, "cancel");
+  assertEqual(prevented[0].data.sourceUnitId, duelist.id, "and names who did it");
+});
+
+/* ---- redirect ---- */
+
+test("Interception", "A redirected shot lands on the defender instead", () => {
+  const state = duelBattle(203);
+  const duelist = unitByRef(state, "duelist");
+  const ward = unitByRef(state, "ward");
+  const shooter = unitByRef(state, "shooter");
+  applyStatusForTest(state, duelist.id, "onGuard");
+  const wardHp = ward.currentHp;
+  const duelistHp = duelist.currentHp;
+
+  activateForTest(state, shooter.id);
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: shooter.id,
+    abilityId: "handCannon",
+    target: { unitId: ward.id }
+  });
+  assert(result.ok, result.errors.join(" | "));
+
+  assertEqual(lastDeclaration(state).verdict.kind, "redirect");
+  assertEqual(ward.currentHp, wardHp, "the ally was not touched");
+  assert(duelist.currentHp < duelistHp, "the defender took it instead");
+  assert(
+    state.battleLog.some((entry) => entry.type === "actionRedirected"),
+    "and the log explains why the shot went somewhere else"
+  );
+});
+
+test("Interception", "A redirect that is not legal reverts to the declared action and says so", () => {
+  const state = duelBattle(204);
+  const collection = createInterventionState();
+  const shooter = unitByRef(state, "shooter");
+  const ward = unitByRef(state, "ward");
+
+  // Proposed directly, so the failure being tested is the engine's own
+  // revalidation rather than a reaction declining to offer.
+  const record = openDeclaration(collection, {
+    kind: "ability",
+    actorUnitId: shooter.id,
+    abilityId: "handCannon",
+    targetUnitIds: [ward.id],
+    chainId: "c1"
+  });
+  state.interventions = collection;
+  const faraway = unitByRef(state, "kell");
+  faraway.x = 0;
+  faraway.y = 0;
+  const refused = REACTION_ENGINE.proposeIntervention(state, record.id, {
+    kind: "redirect",
+    byUnitId: faraway.id,
+    targetUnitId: faraway.id
+  });
+  assertEqual(refused.ok, false, "a volunteer out of range is refused");
+  assert(/range/i.test(refused.reason), refused.reason);
+  assertEqual(record.verdict.kind, "continue", "and the declaration is untouched");
+});
+
+test("Interception", "An area effect cannot be dragged onto a volunteer", () => {
+  const state = duelBattle(205);
+  const shooter = unitByRef(state, "shooter");
+  const ward = unitByRef(state, "ward");
+  const duelist = unitByRef(state, "duelist");
+  applyStatusForTest(state, duelist.id, "onGuard");
+
+  const blast = evaluateTargeting(state, shooter.id, "ringNova", { unitId: ward.id });
+  assertEqual(
+    actionIsRedirectable(CONTENT.abilities.ringNova, blast),
+    false,
+    "a blast is not a thing one person can volunteer to receive"
+  );
+  const single = evaluateTargeting(state, shooter.id, "handCannon", { unitId: ward.id });
+  assertEqual(actionIsRedirectable(CONTENT.abilities.handCannon, single), true);
+});
+
+test("Interception", "A move is redirected by being cut short on its own route", () => {
+  const state = duelBattle(206);
+  const runner = unitByRef(state, "runner");
+  const duelist = unitByRef(state, "duelist");
+  activateForTest(state, runner.id);
+  const from = { x: runner.x, y: runner.y };
+  const path = [from, { x: from.x + 1, y: from.y }, { x: from.x + 2, y: from.y }, { x: from.x + 3, y: from.y }];
+
+  COMMAND_HANDLERS.move(state, { unitId: runner.id, path });
+  const record = lastDeclaration(state);
+  // Off the route entirely: refused, because a redirect chooses among the
+  // tiles the mover was already going to cross.
+  assertEqual(
+    proposeIntervention(state.interventions, record.id, {
+      kind: "redirect",
+      byUnitId: duelist.id,
+      tile: { x: from.x, y: from.y + 4 }
+    }).ok,
+    true,
+    "the collection accepts it; the handler is what revalidates a route"
+  );
+  processAllEvents(state);
+  assertEqual(runner.x, path[path.length - 1].x, "an unusable stop tile reverts to the declared move");
+  assert(
+    state.battleLog.some((entry) => entry.type === "interventionFailed"),
+    "and says why rather than silently doing nothing"
+  );
+
+  const second = duelBattle(206);
+  const runner2 = unitByRef(second, "runner");
+  activateForTest(second, runner2.id);
+  const start = { x: runner2.x, y: runner2.y };
+  const route = [start, { x: start.x + 1, y: start.y }, { x: start.x + 2, y: start.y }, { x: start.x + 3, y: start.y }];
+  COMMAND_HANDLERS.move(second, { unitId: runner2.id, path: route });
+  proposeIntervention(second.interventions, lastDeclaration(second).id, {
+    kind: "redirect",
+    byUnitId: unitByRef(second, "duelist").id,
+    tile: route[1]
+  });
+  processAllEvents(second);
+  assertEqual(runner2.x, route[1].x, "a tile on the route stops them there");
+  assertEqual(runner2.y, route[1].y);
+});
+
+/* ---- intercept ---- */
+
+test("Interception", "An intercept hits the actor and the action never resolves", () => {
+  const state = duelBattle(207);
+  const { duelist, enemy } = stageDuel(state, "bravo");
+  const ward = unitByRef(state, "ward");
+  const enemyHp = enemy.currentHp;
+  const wardHp = ward.currentHp;
+
+  activateForTest(state, enemy.id);
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: enemy.id,
+    abilityId: "handCannon",
+    target: { unitId: ward.id }
+  });
+
+  assertEqual(lastDeclaration(state).verdict.kind, "replace");
+  assertEqual(lastDeclaration(state).verdict.byUnitId, duelist.id);
+  assert(enemy.currentHp < enemyHp, "the enemy was hit");
+  assertEqual(ward.currentHp, wardHp, "and never got their shot off");
+});
+
+test("Interception", "An intercept that kills the actor stops the action without a second veto", () => {
+  const state = duelBattle(208);
+  const { enemy } = stageDuel(state, "bravo");
+  const ward = unitByRef(state, "ward");
+  enemy.currentHp = 1;
+  const wardHp = ward.currentHp;
+
+  activateForTest(state, enemy.id);
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: enemy.id,
+    abilityId: "handCannon",
+    target: { unitId: ward.id }
+  });
+
+  assertEqual(enemy.alive, false, "the intercept finished them");
+  assertEqual(ward.currentHp, wardHp, "and the shot never happened");
+  assertContinuationIsLive(state, "after an intercept killed the active unit");
+});
+
+test("Interception", "A dead actor's declaration is refused on its own merits", () => {
+  const state = duelBattle(209);
+  const shooter = unitByRef(state, "shooter");
+  const ward = unitByRef(state, "ward");
+  activateForTest(state, shooter.id);
+  COMMAND_HANDLERS.useAbility(state, {
+    unitId: shooter.id,
+    abilityId: "handCannon",
+    target: { unitId: ward.id }
+  });
+  // Nothing intervened. The actor simply stopped existing between choosing and
+  // acting, which the engine has to handle without an intervention at all.
+  shooter.alive = false;
+  shooter.currentHp = 0;
+  const wardHp = ward.currentHp;
+  processAllEvents(state);
+
+  assertEqual(ward.currentHp, wardHp, "the shot did not resolve");
+  const prevented = preventedEntries(state);
+  assertEqual(prevented.length, 1);
+  assertEqual(prevented[0].data.reason, "actorGone");
+});
+
+/* ---- what must not be interceptable ---- */
+
+test("Interception", "A shove is never declared, and so can never be vetoed", () => {
+  const state = duelBattle(210);
+  const { duelist } = stageDuel(state, "bravo");
+  const bravo = unitByRef(state, "bravo");
+  // Clear ground, so the only reason the shove could fail is the thing being
+  // tested rather than something standing in the landing tile.
+  duelist.x = 4;
+  duelist.y = 3;
+  bravo.x = 5;
+  bravo.y = 3;
+  const before = state.interventions.order.length;
+  const logBefore = state.battleLog.length;
+
+  pushUnit(state, duelist.id, bravo.id, 1);
+  processAllEvents(state);
+
+  assertEqual(bravo.x, 6, "the shove landed");
+  assertEqual(state.interventions.order.length, before, "and opened no declaration");
+  assert(
+    state.battleLog.slice(logBefore).some((entry) => entry.type === "unitForcedMove"),
+    "a shove is movement, it just is not a decision"
+  );
+  assertEqual(
+    state.battleLog.slice(logBefore).filter((entry) => entry.type === "actionPrevented").length,
+    0,
+    "so nothing could have vetoed it"
+  );
+});
+
+/* ---- the follow-up, and the invariant ---- */
+
+test("Interception", "Stopping an action creates the opening for the next one", () => {
+  const state = duelBattle(211);
+  const { duelist, enemy } = stageDuel(state, "runner");
+  const enemyHp = enemy.currentHp;
+
+  activateForTest(state, enemy.id);
+  const from = { x: enemy.x, y: enemy.y };
+  executeCommand(state, {
+    type: "move",
+    unitId: enemy.id,
+    path: [from, { x: from.x + 1, y: from.y }]
+  });
+
+  // Hold the Line cancels; Punish answers the cancellation. Two authored
+  // reactions, one causal chain, and no code anywhere that knows they go
+  // together.
+  const reactions = state.reactions.log.filter((entry) => entry.ok).map((entry) => entry.reactionId);
+  assert(reactions.includes("duelHoldTheLine"), reactions.join(", "));
+  assert(reactions.includes("duelPunish"), "the follow-up fired: " + reactions.join(", "));
+  assert(enemy.currentHp < enemyHp, "and it hurt");
+  assertEqual(enemy.x, from.x, "while the move still never happened");
+  void duelist;
+  assertContinuationIsLive(state, "after a veto and its punish");
+});
+
+test("Interception", "A whole battle of duelists still ends, and never stalls", () => {
+  const state = duelBattle(212, { autoResolveReactions: true });
+  let activations = 0;
+  while (!state.finished && activations < 300) {
+    const result = runActivation(state);
+    if (!result.unitId) break;
+    activations += 1;
+    assertContinuationIsLive(state, "activation " + activations);
+  }
+  assert(activations > 5, "the battle ran, got " + activations);
+  assert(
+    state.interventions.order.length > 0 || activations >= 300,
+    "and somebody intervened along the way"
+  );
+});
+
+test("Interception", "A save taken with an action pending resumes on the same verdict", () => {
+  const state = duelBattle(213);
+  const shooter = unitByRef(state, "shooter");
+  const ward = unitByRef(state, "ward");
+  activateForTest(state, shooter.id);
+  COMMAND_HANDLERS.useAbility(state, {
+    unitId: shooter.id,
+    abilityId: "handCannon",
+    target: { unitId: ward.id }
+  });
+  const record = lastDeclaration(state);
+  proposeIntervention(state.interventions, record.id, {
+    kind: "cancel",
+    byUnitId: unitByRef(state, "duelist").id
+  });
+
+  const restored = deserializeBattle(serializeBattle(state));
+  const carried = findDeclaration(restored.interventions, record.id);
+  assert(carried, "the declaration survived the save");
+  assertEqual(carried.verdict.kind, "cancel");
+  assertEqual(carried.resolved, false, "and is still waiting to be acted on");
+  assertEqual(restored.interventions.nextId, state.interventions.nextId, "ids do not restart");
+
+  processAllEvents(restored);
+  assertEqual(preventedEntries(restored).length, 1, "and it resolves after the reload");
+});
+
+/* ---- the AI ---- */
+
+test("Interception", "The AI values what an intervention prevents, not that it is affordable", () => {
+  const state = duelBattle(214, { autoResolveReactions: true });
+  const { duelist, enemy } = stageDuel(state, "bravo");
+  const ward = unitByRef(state, "ward");
+
+  const real = {
+    type: "actionDeclared",
+    actionKind: "ability",
+    unitId: enemy.id,
+    sourceUnitId: enemy.id,
+    abilityId: "handCannon",
+    targetUnitIds: [ward.id]
+  };
+  const pointless = { ...real, targetUnitIds: [] };
+  const offer = {
+    reactionId: "duelIntercept",
+    reactorId: duelist.id,
+    priority: 90,
+    cost: REACTION_INDEX.reactionById.duelIntercept.cost
+  };
+
+  const worthIt = scoreAiReaction(state, offer, real);
+  const isnt = scoreAiReaction(state, offer, pointless);
+  assert(worthIt > isnt, "a real threat scores above nothing: " + worthIt + " vs " + isnt);
+  assertEqual(chooseAiReaction(state, offer, real), true);
+
+  // Scarcity, not price: the same offer is worth less when it would empty the
+  // pool than when it would not.
+  const full = scoreAiReaction(state, offer, real);
+  duelist.resources.poise.current = 1;
+  const nearlyEmpty = scoreAiReaction(state, offer, real);
+  assert(nearlyEmpty < full, "the last point costs more: " + nearlyEmpty + " vs " + full);
+});
+
+test("Interception", "The enemy duelist uses the mechanic against the player", () => {
+  const state = duelBattle(215, { autoResolveReactions: true });
+  const bladeguard = unitByRef(state, "bladeguard");
+  const vale = unitByRef(state, "vale");
+  bladeguard.x = vale.x + 1;
+  bladeguard.y = vale.y;
+  applyStatusForTest(state, bladeguard.id, "onGuard");
+  REACTION_ENGINE.applyStatus(state, bladeguard.id, [vale.id], "challenged");
+  processAllEvents(state);
+
+  const valeHp = vale.currentHp;
+  activateForTest(state, vale.id);
+  const target = unitByRef(state, "heavy");
+  target.x = vale.x;
+  target.y = vale.y - 1;
+  executeCommand(state, {
+    type: "useAbility",
+    unitId: vale.id,
+    abilityId: "scatterShot",
+    target: { unitId: target.id }
+  });
+
+  assertEqual(lastDeclaration(state).verdict.kind, "replace", "the player's action was intercepted");
+  assertEqual(lastDeclaration(state).verdict.byUnitId, bladeguard.id);
+  assert(vale.currentHp < valeHp, "by an enemy using the player's own tool");
+  assertContinuationIsLive(state, "after the player was intercepted");
+});
+
+test("Interception", "Two runs of the same duel are identical", () => {
+  const runOne = duelBattle(216, { autoResolveReactions: true });
+  const runTwo = duelBattle(216, { autoResolveReactions: true });
+  runBattle(runOne, 200);
+  runBattle(runTwo, 200);
+  assertEqual(serializeBattle(runOne), serializeBattle(runTwo), "identical authoritative state");
+});
+
+test("Interception", "Nothing in the intervention model knows who is using it", () => {
+  const sources = [
+    resolveDeclaredAction.toString(),
+    declareAction.toString(),
+    EVENT_HANDLERS.actionDeclared.toString(),
+    EVENT_HANDLERS.actionPrevented.toString(),
+    scoreAiReaction.toString(),
+    REACTION_ENGINE.proposeIntervention.toString()
+  ].join("\n");
+  for (const id of ["duelist", "duelIntercept", "onGuard", "challenged", "poise", "riposte"]) {
+    assert(!new RegExp('"' + id + '"').test(sources), "the engine names " + id);
+  }
+});
+
+test("Interception", "Declaring an action stays cheap", () => {
+  const state = duelBattle(217, { autoResolveReactions: true });
+  const shooter = unitByRef(state, "shooter");
+  const ward = unitByRef(state, "ward");
+
+  const runs = 300;
+  const started = Date.now();
+  for (let index = 0; index < runs; index += 1) {
+    const record = openDeclaration(state.interventions, {
+      kind: "ability",
+      actorUnitId: shooter.id,
+      abilityId: "handCannon",
+      targetUnitIds: [ward.id],
+      chainId: "perf" + index
+    });
+    resolveDeclaration(state.interventions, record.id);
+  }
+  const per = (Date.now() - started) / runs;
+  assert(per < 1, "declaration overhead was " + per.toFixed(4) + "ms");
+  assert(
+    state.interventions.order.length <= INTERVENTION_LIMITS.retained,
+    "and the record stays bounded at " + state.interventions.order.length
+  );
+});
+
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
   const audit = auditArchitecture();
   assert(audit.pass, audit.failures.join(" | "));
@@ -41585,6 +42389,24 @@ if (typeof window !== "undefined") {
       // The engine's own occupancy rule, so a harness asking "is that tile
       // still walkable" is asking the question movement asks.
       tileIsFree: (state, x, y, unitId) => isTileFree(state, x, y, unitId)
+    },
+    // The interception surface. Everything a harness needs to see an action
+    // between being chosen and being true, and to change what it becomes —
+    // through exactly the calls a reaction makes.
+    interventions: {
+      all: (state) => (state.interventions ? state.interventions.order.map((id) => state.interventions.byId[id]) : []),
+      find: (state, declarationId) => findDeclaration(state.interventions, declarationId),
+      open: (state) => openDeclarationOf(state.interventions),
+      propose: (state, declarationId, proposal) =>
+        REACTION_ENGINE.proposeIntervention(state, declarationId, proposal),
+      describe: (kind, options) => describeIntervention(kind, options),
+      describeVerdict,
+      kinds: INTERVENTION_KINDS,
+      limits: INTERVENTION_LIMITS,
+      // The AI's actual number, not the yes/no it collapses to: a harness that
+      // can only see the decision cannot tell a good policy from a lucky one.
+      score: (state, offer, event) => scoreAiReaction(state, offer, event),
+      choose: (state, offer, event) => chooseAiReaction(state, offer, event)
     },
     propagation: {
       plan: (state, sourceUnitId, abilityId, targetUnitId) =>

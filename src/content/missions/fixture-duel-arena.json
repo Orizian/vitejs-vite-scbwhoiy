@@ -1,0 +1,192 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-duel-arena",
+  "name": "Duel Bench",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. Open ground laid out so every intervention has a clean case: an enemy adjacent to the duelist to intercept, a shooter at range aiming past her at an ally to redirect, a runner with somewhere to go so a movement veto has something to stop, and an enemy duelist standing next to the player's line so the same mechanic points both ways.",
+  "map": {
+    "name": "Bench",
+    "width": 22,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................"
+    ],
+    "elevationRows": [
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000"
+    ]
+  },
+  "teams": [
+    {
+      "id": "sectionSeven",
+      "name": "Section Seven",
+      "controller": "human",
+      "marker": "▲",
+      "accent": "emerald"
+    },
+    {
+      "id": "loyalist",
+      "name": "Loyalists",
+      "controller": "ai",
+      "marker": "■",
+      "accent": "rose"
+    }
+  ],
+  "units": [
+    {
+      "ref": "duelist",
+      "definitionId": "duelistFrame",
+      "teamId": "sectionSeven",
+      "x": 9,
+      "y": 8,
+      "facing": "southeast",
+      "note": "Adjacent to bravo, one tile from ward, and inside redirect range of the shooter. Every case starts from this tile."
+    },
+    {
+      "ref": "ward",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 8,
+      "y": 8,
+      "facing": "southeast",
+      "note": "The ally the shooter aims at. Fragile on purpose: taking the hit for this frame has to be obviously worth doing."
+    },
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 4,
+      "y": 12,
+      "facing": "southeast",
+      "note": "The tank, for the role comparison. She survives a hit; the duelist stops it happening."
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 3,
+      "facing": "southeast",
+      "note": "Present so the Section Seven link is complete and so a long-range action can be declared from the player's side."
+    },
+    {
+      "ref": "reyes",
+      "definitionId": "supportMech",
+      "teamId": "sectionSeven",
+      "x": 2,
+      "y": 12,
+      "facing": "southeast",
+      "note": "Present for the link. Does nothing on its own."
+    },
+    {
+      "ref": "bravo",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 10,
+      "y": 8,
+      "facing": "northwest",
+      "note": "Adjacent to the duelist. The one that gets challenged, intercepted and stopped."
+    },
+    {
+      "ref": "shooter",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 11,
+      "y": 8,
+      "facing": "northwest",
+      "note": "At range, with line of sight to ward and to the duelist. The redirect case."
+    },
+    {
+      "ref": "runner",
+      "definitionId": "lightPursuit",
+      "teamId": "loyalist",
+      "x": 9,
+      "y": 9,
+      "facing": "northwest",
+      "note": "Orthogonally adjacent to the duelist — distance is Manhattan, so a diagonal neighbour is two tiles away and holds no line at all. Open ground south and east so a movement veto has something to stop."
+    },
+    {
+      "ref": "bladeguard",
+      "definitionId": "loyalistDuelist",
+      "teamId": "loyalist",
+      "x": 5,
+      "y": 12,
+      "facing": "northwest",
+      "note": "The other side's duelist, standing next to Vale. Everything the player's frame does to an enemy activation, this does to theirs."
+    },
+    {
+      "ref": "heavy",
+      "definitionId": "heavyEnforcer",
+      "teamId": "loyalist",
+      "x": 18,
+      "y": 4,
+      "facing": "northwest",
+      "note": "Far enough away to be irrelevant to the duel and alive enough to keep the battle running while it is tested."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 15,
+      "facing": "northwest",
+      "note": "Keeps the battle from ending while an intervention test is mid-flight."
+    }
+  ],
+  "regions": [],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Exercise the guard",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "factions": {
+    "relationships": []
+  },
+  "groups": [],
+  "objectives": [],
+  "phases": [],
+  "beats": [],
+  "scenes": {},
+  "sequences": {
+    "briefing": [],
+    "victory": [],
+    "defeat": []
+  },
+  "midBattle": []
+}

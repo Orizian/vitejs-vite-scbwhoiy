@@ -56,6 +56,21 @@
       "max": 4,
       "startsAt": 3
     },
+    "poise": {
+      "name": "Poise",
+      "scope": "unit",
+      "description": "Her own budget for answering somebody else's turn. Separate from Command Points on purpose: a duelist who drained the squad every time she said no would be a tax on everyone else's options.",
+      "tags": [
+        "duel",
+        "tempo"
+      ],
+      "max": 3,
+      "startsAt": 2,
+      "regen": {
+        "amount": 1,
+        "on": "selfActivation"
+      }
+    },
     "reactionCapacity": {
       "name": "Reaction capacity",
       "scope": "unit",

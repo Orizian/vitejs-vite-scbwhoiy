@@ -300,6 +300,36 @@ export const REACTION_CONDITION_REGISTRY = {
   },
 
   /**
+   * Whether the declaration is an ability or a move.
+   *
+   * The two want genuinely different answers. A zone-of-control veto should
+   * never fire on somebody drinking a repair kit next to you, and an intercept
+   * that stops an attack has nothing to say about a walk.
+   */
+  declaredActionKind: {
+    fields: ["declaredActionKind"],
+    summary: 'The declared action is an "ability" or a "movement".',
+    evaluate: (condition, ctx) => ctx.event.actionKind === condition.declaredActionKind
+  },
+
+  /**
+   * Why an action did not resolve.
+   *
+   * The follow-up half of an intervention. A counter that costs nothing is
+   * fair after a veto that dealt no damage, and unfair after an intercept that
+   * already hit them — this is how content tells the two apart without the
+   * engine having an opinion about balance.
+   */
+  preventionReason: {
+    fields: ["preventionReason"],
+    summary: 'Why the action was prevented: "cancel", "replace" or "actorGone".',
+    evaluate: (condition, ctx) => {
+      const wanted = condition.preventionReason;
+      return Array.isArray(wanted) ? wanted.includes(ctx.event.reason) : ctx.event.reason === wanted;
+    }
+  },
+
+  /**
    * The declared action can be pointed at somebody else.
    *
    * Authored on the declaration, not guessed here: an area effect and a

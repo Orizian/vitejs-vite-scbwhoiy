@@ -125,6 +125,7 @@
       "description": "Standard close-quarters shotgun.",
       "compatibleClasses": [
         "assault",
+        "duelist",
         "sapper"
       ],
       "tags": [
@@ -198,6 +199,7 @@
       "description": "Minimal plating that keeps the frame nimble.",
       "compatibleClasses": [
         "cascade",
+        "duelist",
         "interdictor",
         "sniper",
         "stealth"
@@ -338,6 +340,7 @@
       "description": "Explosive-reactive plating for heavier frames.",
       "compatibleClasses": [
         "assault",
+        "duelist",
         "support"
       ],
       "tags": [

@@ -42,6 +42,24 @@
       "triggers": [],
       "removedOnMovement": true
     },
+    "challenged": {
+      "name": "Challenged",
+      "category": "negative",
+      "glyph": "!",
+      "tags": [
+        "duel",
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 3,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "accuracyFlat": -10,
+        "evasionFlat": -10
+      },
+      "triggers": []
+    },
     "cloaked": {
       "name": "Cloaked",
       "category": "positive",
@@ -129,6 +147,24 @@
       "modifiers": {
         "defenseFlat": -15,
         "evasionFlat": -25
+      },
+      "triggers": []
+    },
+    "onGuard": {
+      "name": "On Guard",
+      "category": "positive",
+      "glyph": "^",
+      "tags": [
+        "stance",
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 3,
+        "type": "targetActivations"
+      },
+      "modifiers": {
+        "defenseFlat": 10,
+        "evasionFlat": 5
       },
       "triggers": []
     },

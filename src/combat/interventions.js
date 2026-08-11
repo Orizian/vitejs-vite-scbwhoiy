@@ -228,12 +228,20 @@ export function proposeIntervention(collection, declarationId, proposal, validat
 
   if (kind === "redirect") {
     if (!record.redirectable) return refuse(record, REFUSAL_REASONS.notRedirectable, proposal);
-    if (!proposal.targetUnitId) return refuse(record, REFUSAL_REASONS.missingTarget, proposal);
-    if (
-      record.targetUnitIds.length === 1 &&
-      record.targetUnitIds[0] === proposal.targetUnitId
-    ) {
-      return refuse(record, REFUSAL_REASONS.sameTarget, proposal);
+    // The two kinds of declaration are redirected by naming different things.
+    // An ability is pointed at a different unit; a route is cut short at a
+    // tile. Demanding a unit for both was the first thing that broke when a
+    // movement veto was written.
+    if (record.kind === "movement") {
+      if (!proposal.tile) return refuse(record, REFUSAL_REASONS.missingTarget, proposal);
+    } else {
+      if (!proposal.targetUnitId) return refuse(record, REFUSAL_REASONS.missingTarget, proposal);
+      if (
+        record.targetUnitIds.length === 1 &&
+        record.targetUnitIds[0] === proposal.targetUnitId
+      ) {
+        return refuse(record, REFUSAL_REASONS.sameTarget, proposal);
+      }
     }
   }
 
