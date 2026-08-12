@@ -49,6 +49,7 @@ npm run lint
 
 ## Documentation
 
+- **[`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md)** — the canonical answer to what exists today: every feature classified from code and tests, the registries, the primitives a designer can compose without touching source, current-vs-target architecture, and the standing debt.
 - **[`docs/ENGINE_ANALYSIS.md`](docs/ENGINE_ANALYSIS.md)** — audit against the design bible: what is built, what is missing, what to build first, and why.
 - **[`docs/MISSION_FORMAT.md`](docs/MISSION_FORMAT.md)** — the mission file format and the authoring workflow.
 - **[`docs/MISSION_SCRIPTING.md`](docs/MISSION_SCRIPTING.md)** — phases, triggers, actions, factions and groups: how a battle changes shape mid-mission.
