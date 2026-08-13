@@ -1,6 +1,6 @@
 # STATUS ZERO — Canonical Project Status
 
-> **Last updated** 2026-08-13 · **Branch** `claude/tacrpg-engine-analysis-editors-mwjxzt` · **Commit** `2287389`
+> **Last updated** 2026-08-13 · **Branch** `claude/tacrpg-engine-analysis-editors-mwjxzt` · **Commit** `afec6f6`
 >
 > **CURRENT status in this document is derived from code, tests and runtime
 > registries — not from design documents or conversation.** Where a feature
@@ -93,6 +93,21 @@ gameplay data) that write canonical JSON the game loads directly.
 | Status-driven damage scaling | IMPLEMENTED | `targetStatus` scaling source, by id or tag, in power or multiplier mode; forecast and execution share one authority |
 | Status triggers (passives) | IMPLEMENTED | 6 moments — activation start/end, damaged, moved, kill, status applied — with counterpart targeting, causal attribution and a bounded recursion |
 
+## Rewards and Loot — IMPLEMENTED
+
+| Feature | Status | What actually exists |
+|---|---|---|
+| Loot tables | IMPLEMENTED | Canonical registry, guaranteed grants + weighted pools, nested table references with cycle detection |
+| Deterministic rolls | IMPLEMENTED | Rolls hash a key (mission · attempt · source · table · pool · index). No reward RNG is stored; the combat stream is deliberately not used |
+| Grant kinds | IMPLEMENTED | `currency` · `equipment` · `material`, one pipeline |
+| Claim policies | IMPLEMENTED | `repeatable` and `oncePerCampaign`, keyed by authored entry id |
+| Exactly-once application | IMPLEMENTED | Receipt id = `missionId#attempt`; five applications pay once |
+| Drop sources | IMPLEMENTED | Chassis default + placement override; eligibility requires actual defeat |
+| Materials | IMPLEMENTED | Registry + persistent quantities, distinct from equipment |
+| Provenance | IMPLEMENTED | Every receipt line names source, table and entry; reverse index derived from content |
+| Crafting / vendors / black market | **NOT IMPLEMENTED** | Materials exist so loot authored now survives their arrival. Nothing consumes a material. |
+| Failure salvage | **NOT IMPLEMENTED** | Deliberately undefined — see `docs/REWARDS.md` |
+
 ## Character / Operator Systems — PARTIAL
 
 8 operator entries and 10 player-capable chassis are authored. Four operators
@@ -183,6 +198,8 @@ export/import.
 | combatLinks | `.../combat-links.json` | 1 | ✅ | ✅ | ✅ | Narrative gate on reaction availability |
 | terrain | `.../terrain.json` | 4 | ✅ | ✅ | ✅ | Editor palette derives from this |
 | fixtures | `.../fixtures.json` | 2 | ✅ | ✅ | ✅ | Tile-anchored devices |
+| materials | `.../materials.json` | 3 | ✅ | ✅ | ✅ | Stackable salvage; persists as campaign quantities |
+| lootTables | `.../loot-tables.json` | 6 | ✅ | ✅ | ✅ | What a reward source pays |
 
 **Derived at runtime, not authored:** maps (23) and encounters (30) — mostly
 literals in `App.jsx` plus compiled mission files.
@@ -448,9 +465,12 @@ And the three rules the codebase already enforces:
 | Scene editor | IMPLEMENTED | 8 step types, preview-from-here, round trip | Camera, mid-battle choices | CIN-01 |
 | Gameplay Data Studio | IMPLEMENTED | 12 registries, schema-driven, test arena, export/import | Same + new registries as added | — |
 | Save / load | IMPLEMENTED | Campaign + mid-battle, versioned, migrating, byte-exact | Same | — |
-| Mission replay | PARTIAL | Battle-end replay same/new seed | Campaign-level re-run | No re-run from the board |
-| Loot | NOT IMPLEMENTED | — | Drop tables, mission rewards beyond currency | Nothing exists |
-| Salvage | NOT IMPLEMENTED | — | Recover parts from wrecks | Nothing exists |
+| Mission replay | PARTIAL | Battle-end replay same/new seed; the reward pipeline fully supports repeat clears and is tested through them | Campaign-level re-run | **No board UI offers a completed mission again** |
+| Loot / drops | IMPLEMENTED | Authored loot tables, guaranteed + weighted pools, nested references, chassis and placement drop sources, deterministic rolls, claim policies | Same + more content | Content breadth only |
+| Materials / salvage | IMPLEMENTED | `materials` registry, persistent quantities, save/load | Consumed by crafting | Nothing consumes them yet |
+| Mission rewards | IMPLEMENTED | Mission files own `clear` and `firstClear` tables; results screen shows sources | All missions migrated off the campaign literal | 13 Act One missions still use the legacy adapter |
+| First-clear vs repeat rewards | IMPLEMENTED | Separate sources, claim policies, exactly-once application | Same | No replay UI on the mission board |
+| Salvage from wrecks | NOT IMPLEMENTED | Defeated enemies drop authored loot; wrecks themselves are not a separate source | Recover parts from wrecks | Nothing exists |
 | Crafting | NOT IMPLEMENTED | — | Build/upgrade from parts | Nothing exists |
 | Shops / black market | NOT IMPLEMENTED | — | Vendors gated by contacts | Contacts exist; no vendor |
 | Recruitment | PARTIAL | `recruit: true` flags, roster structure | Recruit flow, procedural recruits | No screen, no flow, no generation |
@@ -518,7 +538,11 @@ phases have been removed.
 - No elite/ace phase behaviour — no retreat, loadout change or death refusal (BOS-01).
 
 ### Content / progression
-- No loot, salvage, crafting or vendors.
+- No crafting, vendors or black market. Materials exist and accumulate; nothing consumes them.
+- **No mission-board replay UI.** The reward architecture supports repeat clears end to end and is tested through them, but the board filters completed missions out of `available`, so nothing offers one again.
+- **13 Act One missions still author rewards in the `CAMPAIGN` literal**, adapted at one call site. Migration path documented in `docs/REWARDS.md`.
+- No failure salvage; deliberately undefined rather than unimplemented.
+- No difficulty concept anywhere, so no difficulty-scaled loot.
 - Perks are one choice per operator, not trees (PRG-01).
 - Facility capabilities are not attached to gameplay effects (HUB-01).
 - Recruitment is a flag with no flow.
@@ -532,7 +556,7 @@ phases have been removed.
 - No in-app documentation or onboarding.
 
 ### Architecture
-- **`App.jsx` is 45,698 lines** and holds the engine, all presentation, the whole campaign, map/encounter literals and every test.
+- **`App.jsx` is 46,682 lines** and holds the engine, all presentation, the whole campaign, map/encounter literals and every test.
 - The campaign is a source literal, not authored data.
 - No multi-project abstraction; `STATUS_ZERO` naming is baked into globals and storage keys.
 - No large-map sectoring, culling or pathfinding budget (MAP-02).
@@ -544,7 +568,7 @@ phases have been removed.
 - No theme layer.
 
 ### Testing / tooling
-- All 688 tests live inside `App.jsx`.
+- All 716 tests live inside `App.jsx`.
 - Browser acceptance requires a running dev server on :5173.
 - Mission fixtures emit 28 standing warnings (scale/briefing/victory), which is noise that could mask a real one.
 
@@ -552,15 +576,15 @@ phases have been removed.
 
 # Test / Quality Snapshot
 
-Measured on commit `2287389`.
+Measured on commit `afec6f6`.
 
 | | |
 |---|---|
-| **Unit tests** | **688 / 688 passing**, across 78 groups |
+| **Unit tests** | **716 / 716 passing**, across 79 groups |
 | **Architecture audit** | **PASS** — 36 checks, 0 failures |
-| **Character-name tripwire** | **clean** — 60 forbidden ids, 5 generic directories |
-| **Content validation** | **clean** — 0 errors (28 mission warnings) |
-| **Browser acceptance** | **14 suites, 623 checks, all passing** |
+| **Character-name tripwire** | **clean** — 71 forbidden ids, 6 generic directories |
+| **Content validation** | **clean** — 0 errors |
+| **Browser acceptance** | **15 suites, 668 checks, all passing** |
 
 | Suite | Checks | Suite | Checks |
 |---|---|---|---|
@@ -571,9 +595,10 @@ Measured on commit `2287389`.
 | `check:knowledge` | 21 | `check:command` | 76 |
 | `check:questions` | 3 | `check:support` | 87 |
 | `check:gameplay` | 41 | `check:orchestration` | 33 |
+| `check:reward` | 45 | | |
 
 Largest test groups: Trajectory 38 · Tactical language 33 · Reactions 28 ·
-Perception 28 · Propagation 27 · Sequencing 24 · Fixtures 23 ·
+Perception 28 · Rewards 28 · Propagation 27 · Sequencing 24 · Fixtures 23 ·
 Interception 23 · Orchestration 22 · Support 22.
 
 ---

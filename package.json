@@ -25,7 +25,8 @@
     "check:reactions": "node scripts/reaction-check.mjs",
     "check:knowledge": "node scripts/knowledge-check.mjs",
     "check:questions": "node scripts/knowledge-questions.mjs",
-    "bench:knowledge": "node scripts/knowledge-bench.mjs"
+    "bench:knowledge": "node scripts/knowledge-bench.mjs",
+    "check:reward": "node scripts/reward-check.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

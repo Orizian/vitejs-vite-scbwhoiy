@@ -22355,6 +22355,9 @@ function describeReceiptForDisplay(receipt) {
     name: nameOf(line),
     quantity: line.quantity,
     sourceKind: line.sourceKind,
+    // Both: the label is what a player reads, the id is the stable authored
+    // identity a debug view or a source index needs.
+    sourceId: line.sourceId,
     sourceLabel: line.sourceLabel || line.sourceId,
     tableId: line.tableId,
     entryId: line.entryId,
@@ -46473,8 +46476,22 @@ if (typeof window !== "undefined") {
       clear: clearCampaignSlot,
       load: loadCampaignSlot,
       has: hasCampaignSlot,
-      storageKey: CAMPAIGN_SAVE_KEY
+      storageKey: CAMPAIGN_SAVE_KEY,
+      beginMission,
+      resolveOutcome: resolveMissionOutcome,
+      // The reward surface. `plan` is the authority the results screen, the
+      // executor and a harness all share — asking it here asks exactly the
+      // question the player's results screen does.
+      planRewards: planMissionRewards,
+      applyRewards,
+      resultModel: createMissionResultModel,
+      lootTables: LOOT_TABLES,
+      materials: MATERIALS,
+      currencyIds: CAMPAIGN_CURRENCY_IDS,
+      sourcesGranting: (kind, itemId) => tablesGranting(LOOT_TABLES, kind, itemId)
     },
+    /** Who a finished battle left standing, as the reward layer reads it. */
+    defeatedSources: (state) => collectDefeatedSources(state),
     resolveStartupRoute,
     // The Studio's derived-values panel. Deliberately the engine's own stat
     // pipeline rather than an editor copy of it.
