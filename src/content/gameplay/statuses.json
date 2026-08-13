@@ -83,6 +83,33 @@
         }
       }
     },
+    "combatTrophy": {
+      "name": "Combat Trophy",
+      "category": "positive",
+      "glyph": "✦",
+      "description": "Momentum. A kill while this holds pays for the next move.",
+      "tags": [
+        "stance",
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 3,
+        "type": "targetActivations"
+      },
+      "modifiers": {},
+      "triggers": [
+        {
+          "effects": [
+            {
+              "amount": 2,
+              "resourceId": "burst",
+              "type": "restoreResource"
+            }
+          ],
+          "event": "killedUnit"
+        }
+      ]
+    },
     "conductive": {
       "name": "Conductive",
       "category": "debuff",
@@ -99,6 +126,60 @@
         "propagationRadiusBonusFlat": 1,
         "resistanceFlat": -8
       }
+    },
+    "coolantTrail": {
+      "name": "Coolant Trail",
+      "category": "negative",
+      "glyph": "≈",
+      "description": "A split line. Every move it makes costs it speed it will not get back this activation.",
+      "tags": [
+        "mechanical",
+        "systemDamage"
+      ],
+      "duration": {
+        "amount": 3,
+        "type": "targetActivations"
+      },
+      "modifiers": {},
+      "triggers": [
+        {
+          "effects": [
+            {
+              "chance": 1,
+              "statusId": "slow",
+              "type": "applyStatus"
+            }
+          ],
+          "event": "unitMoved"
+        }
+      ]
+    },
+    "coolingCycle": {
+      "name": "Cooling Cycle",
+      "category": "positive",
+      "glyph": "❄",
+      "description": "Vents between actions. Returns a charge to the rack whenever the activation closes, however it closed.",
+      "tags": [
+        "stance",
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 3,
+        "type": "targetActivations"
+      },
+      "modifiers": {},
+      "triggers": [
+        {
+          "effects": [
+            {
+              "amount": 1,
+              "resourceId": "burst",
+              "type": "restoreResource"
+            }
+          ],
+          "event": "activationEnd"
+        }
+      ]
     },
     "fieldReady": {
       "name": "Field Ready",
@@ -226,6 +307,34 @@
             }
           ],
           "event": "activationStart"
+        }
+      ]
+    },
+    "reactivePlating": {
+      "name": "Reactive Plating",
+      "category": "positive",
+      "glyph": "◈",
+      "description": "Charged plate. Anything that damages the frame and leaves it standing takes eight percent of its own hull back.",
+      "tags": [
+        "armor",
+        "mechanical"
+      ],
+      "duration": {
+        "amount": 3,
+        "type": "targetActivations"
+      },
+      "modifiers": {},
+      "triggers": [
+        {
+          "effects": [
+            {
+              "formula": "percentMaxHp",
+              "power": 8,
+              "type": "damage"
+            }
+          ],
+          "event": "unitDamaged",
+          "target": "counterpart"
         }
       ]
     },

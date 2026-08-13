@@ -1634,7 +1634,7 @@
     },
     "precisionShot": {
       "name": "Precision Shot",
-      "description": "Braced long-range shot. Requires Brace, consumes it, and needs two activations to cycle.",
+      "description": "Braced long-range shot. Requires Brace, consumes it, and needs two activations to cycle. Hits a marked target 15% harder.",
       "activation": "manual",
       "targeting": {
         "area": {
@@ -1662,6 +1662,12 @@
           "canMiss": true,
           "formula": "physical",
           "power": 145,
+          "scaling": {
+            "from": "targetStatus",
+            "mode": "multiplier",
+            "perUnit": 0.15,
+            "statusId": "marked"
+          },
           "type": "damage"
         },
         {
@@ -1991,6 +1997,16 @@
         "cooldown": 0,
         "recovery": 900
       },
+      "conditions": [
+        {
+          "compare": "atMost",
+          "of": "source",
+          "resourceId": "burst",
+          "type": "resourceBalance",
+          "value": 4
+        }
+      ],
+      "requirementText": "Requires room in the Burst rack.",
       "effects": [
         {
           "amount": 3,
@@ -2183,6 +2199,16 @@
         "cooldown": 1,
         "recovery": 700
       },
+      "conditions": [
+        {
+          "compare": "atMost",
+          "of": "source",
+          "resourceId": "commandPoints",
+          "type": "resourceBalance",
+          "value": 3
+        }
+      ],
+      "requirementText": "Requires room in the squad's Command Points.",
       "effects": [
         {
           "cost": 2,

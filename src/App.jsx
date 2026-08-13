@@ -60,6 +60,7 @@ import {
 } from "./combat/resources.js";
 import {
   EFFECT_SCALING_SOURCE_IDS,
+  EFFECT_CONDITION_IDS,
   EFFECT_SCALING_MODES,
   STATUS_SCALING_SOURCES,
   EFFECT_RESOURCE_OWNERS,
@@ -30658,6 +30659,778 @@ test("Support", "Transferring is free, and so is asking about it", () => {
   }
   const per = (Date.now() - started) / runs;
   assert(per < 1, "planning a transfer took " + per.toFixed(4) + "ms");
+});
+
+/* ---------------------------------------------------------------
+ * TACTICAL LANGUAGE
+ *
+ * The connective vocabulary: asking what a balance is, reading a mark as a
+ * number, and the moments a status is allowed to act on. Everything proved
+ * here is authored data driving generic machinery, and the last test in the
+ * group fails if any of it turns into engine knowledge about a particular
+ * resource, status or pilot.
+ * -------------------------------------------------------------*/
+
+/** The support arena, which carries a personal rack, a squad pool and a mark. */
+function languageBench(seed) {
+  return supportBattle(seed == null ? 900 : seed);
+}
+
+/** A balance question asked the way an effect would ask it. */
+function askBalance(state, sourceRef, condition, targetRef) {
+  return evaluateConditionsPure(
+    {
+      state,
+      sourceUnitId: unitByRef(state, sourceRef).id,
+      targetUnitId: targetRef ? unitByRef(state, targetRef).id : null
+    },
+    [{ type: "resourceBalance", ...condition }]
+  ).value;
+}
+
+/** The same question asked the way a reaction would ask it. */
+function askReactorBalance(state, reactorRef, condition, event) {
+  return evaluateReactionCondition(condition, {
+    event: event || {},
+    reactorId: unitByRef(state, reactorRef).id,
+    resourceReading: (unitId, resourceId) =>
+      REACTION_ENGINE.resourceReading(state, unitId, resourceId)
+  });
+}
+
+test("Tactical language", "A condition can ask what a unit-scoped balance is", () => {
+  const state = languageBench(901);
+  setPool(state, "veteran", "burst", 3);
+
+  const ask = (condition) => askBalance(state, "veteran", { resourceId: "burst", ...condition });
+  assert(ask({ compare: "atLeast", value: 3 }));
+  assert(!ask({ compare: "atLeast", value: 4 }));
+  assert(ask({ compare: "atMost", value: 3 }));
+  assert(ask({ compare: "equal", value: 3 }));
+  assert(ask({ compare: "notEqual", value: 2 }));
+  assert(!ask({ compare: "equal", value: 2 }));
+  // No comparison named is the common case, and the common case is a floor.
+  assert(ask({ value: 3 }), "atLeast is the default");
+});
+
+test("Tactical language", "The same condition reads a faction pool", () => {
+  const state = languageBench(902);
+  const definition = combatResourceDefinition("commandPoints");
+  assertEqual(definition.scope, "faction", "the proof is only worth anything if this is shared");
+  const vale = unitByRef(state, "vale");
+  setCombatResource(state, definition, costOwnerFor(state, vale.id, definition), 2);
+
+  assert(askBalance(state, "vale", { resourceId: "commandPoints", compare: "atLeast", value: 2 }));
+  assert(!askBalance(state, "vale", { resourceId: "commandPoints", compare: "atLeast", value: 3 }));
+
+  // The bug this exists to prevent: a lookup that only ever reads
+  // `unit.resources` answers zero for a shared pool and says nothing about why.
+  assertEqual(
+    (vale.resources || {}).commandPoints,
+    undefined,
+    "the balance is not on the unit at all, which is the whole point"
+  );
+
+  // And it is genuinely one balance: a squadmate reads the same number.
+  assert(
+    askBalance(state, "kell", { resourceId: "commandPoints", compare: "atLeast", value: 2 }),
+    "a faction balance is one balance, whoever asks"
+  );
+});
+
+test("Tactical language", "A resource question can be asked about the target", () => {
+  const state = languageBench(903);
+  setPool(state, "reyes", "supportCharge", 0);
+  setPool(state, "veteran", "burst", 2);
+
+  const carrying = (of, resourceId) =>
+    askBalance(state, "reyes", { of, resourceId, compare: "atLeast", value: 1 }, "veteran");
+
+  assert(!carrying("source", "supportCharge"), "the asker has nothing");
+  assert(carrying("target", "burst"), "the target does — what makes a steal worth offering");
+});
+
+test("Tactical language", "A threshold can be a share of the pool rather than a count", () => {
+  const state = languageBench(904);
+  const definition = combatResourceDefinition("burst");
+  assertEqual(definition.max, 5);
+
+  setPool(state, "veteran", "burst", 5);
+  assert(
+    askBalance(state, "veteran", {
+      resourceId: "burst", compare: "atLeast", value: 100, percentOfMax: true
+    }),
+    "a full rack is a hundred percent of itself"
+  );
+
+  setPool(state, "veteran", "burst", 1);
+  assert(
+    askBalance(state, "veteran", {
+      resourceId: "burst", compare: "atMost", value: 25, percentOfMax: true
+    }),
+    "one of five is at or under a quarter"
+  );
+  assert(
+    !askBalance(state, "veteran", {
+      resourceId: "burst", compare: "atLeast", value: 100, percentOfMax: true
+    })
+  );
+});
+
+test("Tactical language", "A shipped ability is offered or refused on a unit balance", () => {
+  const state = languageBench(905);
+  const veteran = unitByRef(state, "veteran");
+  activateForTest(state, veteran.id);
+
+  setPool(state, "veteran", "burst", 5);
+  const full = createAbilityViewModel(state, veteran.id, "spoolDrive");
+  assertEqual(full.usable, false, "winding up a full rack is not offered");
+  assert(
+    (full.unusableReasons || []).join(" ").includes("room"),
+    "and it says why: " + JSON.stringify(full.unusableReasons)
+  );
+
+  setPool(state, "veteran", "burst", 2);
+  assertEqual(
+    createAbilityViewModel(state, veteran.id, "spoolDrive").usable,
+    true,
+    "with room in the rack it is"
+  );
+});
+
+test("Tactical language", "The same shape of condition gates on the squad's pool", () => {
+  const state = languageBench(906);
+  const reyes = stageSupport(state);
+  setPool(state, "reyes", "supportCharge", 4);
+  const definition = combatResourceDefinition("commandPoints");
+  const owner = costOwnerFor(state, reyes.id, definition);
+
+  setCombatResource(state, definition, owner, definition.max);
+  assertEqual(
+    createAbilityViewModel(state, reyes.id, "tacticalRelay").usable,
+    false,
+    "a full squad budget has nowhere to put another point"
+  );
+
+  setCombatResource(state, definition, owner, 1);
+  assertEqual(
+    createAbilityViewModel(state, reyes.id, "tacticalRelay").usable,
+    true,
+    "with room it is offered again"
+  );
+  // Unit-scoped and faction-scoped, one condition type, no scope named at
+  // either call site. That is the regression this pair exists to prevent.
+  assertEqual(
+    CONTENT.abilities.spoolDrive.conditions[0].type,
+    CONTENT.abilities.tacticalRelay.conditions[0].type
+  );
+});
+
+test("Tactical language", "A reaction can be gated on a balance, its own or the event's", () => {
+  const state = languageBench(907);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "target");
+  const event = { unitId: target.id, sourceUnitId: target.id };
+
+  setPool(state, "veteran", "burst", 3);
+  assert(
+    askReactorBalance(state, "veteran", { resourceBalance: "burst", compare: "atLeast", value: 3 }, event),
+    "banked charge offers the response"
+  );
+  setPool(state, "veteran", "burst", 0);
+  assert(
+    !askReactorBalance(state, "veteran", { resourceBalance: "burst", compare: "atLeast", value: 3 }, event),
+    "an empty rack does not"
+  );
+
+  // And the other side of the event is reachable by the same condition.
+  const definition = combatResourceDefinition("commandPoints");
+  setCombatResource(state, definition, costOwnerFor(state, veteran.id, definition), 1);
+  assert(
+    askReactorBalance(
+      state,
+      "veteran",
+      { resourceBalance: "commandPoints", compare: "atMost", value: 1 },
+      event
+    ),
+    "a nearly-empty squad budget is something a reaction can notice"
+  );
+  assert(
+    !askReactorBalance(
+      state,
+      "veteran",
+      { resourceBalance: "commandPoints", compare: "atLeast", value: 2 },
+      event
+    )
+  );
+});
+
+test("Tactical language", "An unknown balance question refuses rather than passes", () => {
+  const state = languageBench(908);
+  assert(
+    !askBalance(state, "veteran", { resourceId: "notARealPool", compare: "atLeast", value: 1 }),
+    "a pool the unit does not carry reads as absent, not as zero-and-therefore-true"
+  );
+  assert(
+    !askBalance(state, "veteran", { resourceId: "burst", compare: "roughly", value: 1 }),
+    "and an unknown comparison never quietly holds"
+  );
+});
+
+test("Tactical language", "A mark on the target is worth a number", () => {
+  const state = languageBench(910);
+  const kell = unitByRef(state, "kell");
+  const target = unitByRef(state, "target");
+  const effect = CONTENT.abilities.precisionShot.effects.find((entry) => entry.type === "damage");
+  assert(effect.scaling, "the shipped shot earns something from a mark");
+
+  const forecastOnce = () =>
+    EFFECT_FORECASTERS.damage(
+      state,
+      forecastContext(state, {
+        sourceUnitId: kell.id,
+        targetUnitId: target.id,
+        abilityId: "precisionShot",
+        effect
+      })
+    )[0].amount;
+
+  const clean = forecastOnce();
+  REACTION_ENGINE.applyStatus(state, kell.id, [target.id], "marked");
+  processAllEvents(state);
+  const marked = forecastOnce();
+  assert(marked > clean, "marked is worth more: " + clean + " → " + marked);
+
+  target.statuses = target.statuses.filter((entry) => entry.statusId !== "marked");
+  assertEqual(forecastOnce(), clean, "taking the mark off puts the number back");
+});
+
+test("Tactical language", "What the forecast promised is what the attack delivers", () => {
+  const state = languageBench(911);
+  const kell = unitByRef(state, "kell");
+  const target = unitByRef(state, "target");
+  place(state, kell.id, target.x - 4, target.y);
+  REACTION_ENGINE.applyStatus(state, kell.id, [target.id], "marked");
+  REACTION_ENGINE.applyStatus(state, kell.id, [kell.id], "braced");
+  processAllEvents(state);
+
+  const effect = CONTENT.abilities.precisionShot.effects.find((entry) => entry.type === "damage");
+  const promised = EFFECT_FORECASTERS.damage(
+    state,
+    forecastContext(state, {
+      sourceUnitId: kell.id,
+      targetUnitId: target.id,
+      abilityId: "precisionShot",
+      effect
+    })
+  )[0];
+  assert(promised.amount > 0);
+
+  activateForTest(state, kell.id);
+  const result = executeCommand(state, {
+    type: "useAbility",
+    unitId: kell.id,
+    abilityId: "precisionShot",
+    target: { unitId: target.id }
+  });
+  const damage = result.events.find((event) => event.type === "damageResolved");
+  assert(damage || result.events.some((event) => event.type === "attackMissed"), "it resolved");
+  if (damage) {
+    assertEqual(damage.amount, promised.amount, "one calculator, two callers");
+    assert(damage.scalingMultiplier > 1, "and the mark is attributed rather than baked in");
+  }
+});
+
+test("Tactical language", "Scaling from a status tag counts a family, not one condition", () => {
+  const state = languageBench(912);
+  const kell = unitByRef(state, "kell");
+  const target = unitByRef(state, "target");
+  const context = { state, sourceUnitId: kell.id, targetUnitId: target.id, effect: {} };
+  const byTag = { from: "targetStatus", statusTag: "systemDamage", perUnit: 4 };
+
+  assertEqual(effectScaling(state, context, byTag).power, 0, "an intact frame earns nothing");
+
+  REACTION_ENGINE.applyStatus(state, kell.id, [target.id], "thrustersImpaired");
+  processAllEvents(state);
+  assertEqual(effectScaling(state, context, byTag).power, 4, "one system down is worth one step");
+
+  REACTION_ENGINE.applyStatus(state, kell.id, [target.id], "sensorsImpaired");
+  processAllEvents(state);
+  assertEqual(effectScaling(state, context, byTag).power, 8, "two are worth two");
+
+  // A status id is worth one at most: statuses refresh rather than stack, so
+  // counting the same id twice would be counting something that is not there.
+  REACTION_ENGINE.applyStatus(state, kell.id, [target.id], "thrustersImpaired");
+  processAllEvents(state);
+  assertEqual(
+    effectScaling(state, context, { from: "targetStatus", statusId: "thrustersImpaired", perUnit: 4 }).power,
+    4
+  );
+});
+
+test("Tactical language", "Several scaling blocks add up, each in its own currency", () => {
+  const state = languageBench(913);
+  const kell = unitByRef(state, "kell");
+  const target = unitByRef(state, "target");
+  const context = { state, sourceUnitId: kell.id, targetUnitId: target.id, effect: {} };
+  REACTION_ENGINE.applyStatus(state, kell.id, [target.id], "marked");
+  processAllEvents(state);
+
+  const both = effectScaling(state, context, [
+    { from: "targetStatus", statusId: "marked", perUnit: 6 },
+    { from: "targetStatus", statusId: "marked", mode: "multiplier", perUnit: 0.5 }
+  ]);
+  assertEqual(both.power, 6, "power adds before the formula");
+  assertEqual(both.multiplier, 1.5, "and a multiplier scales what comes out of it");
+
+  // An unmarked target earns neither, and a multiplier that earns nothing is
+  // one rather than zero — otherwise every unscaled hit would land for nought.
+  target.statuses = [];
+  const none = effectScaling(state, context, [
+    { from: "targetStatus", statusId: "marked", mode: "multiplier", perUnit: 0.5 }
+  ]);
+  assertEqual(none.multiplier, 1);
+});
+
+test("Tactical language", "activationStart still fires exactly as it did", () => {
+  const state = languageBench(920);
+  const target = unitByRef(state, "target");
+  target.statuses.push({ statusId: "poison", remaining: 3, sourceUnitId: target.id });
+  const before = target.currentHp;
+  activateForTest(state, target.id);
+  processAllEvents(state);
+  assert(target.currentHp < before, "poison is untouched by the new moments");
+});
+
+test("Tactical language", "A status can act when the activation ends", () => {
+  const state = languageBench(921);
+  const veteran = unitByRef(state, "veteran");
+  veteran.statuses.push({ statusId: "coolingCycle", remaining: 3 });
+  activateForTest(state, veteran.id);
+  processAllEvents(state);
+
+  // Set *after* activating: activation regenerates on its own, so a baseline
+  // taken before it is a different number than the one the trigger acts on.
+  setPool(state, "veteran", "burst", 0);
+  executeCommand(state, { type: "endTurn", unitId: veteran.id });
+  processAllEvents(state);
+  assertEqual(poolOfRef(state, "veteran", "burst").current, 1, "the cycle ran when the turn closed");
+});
+
+test("Tactical language", "An end-of-activation status runs once per activation, not once per event", () => {
+  const state = languageBench(922);
+  const veteran = unitByRef(state, "veteran");
+  veteran.statuses.push({ statusId: "coolingCycle", remaining: 5 });
+  activateForTest(state, veteran.id);
+  processAllEvents(state);
+  setPool(state, "veteran", "burst", 0);
+  executeCommand(state, { type: "endTurn", unitId: veteran.id });
+  processAllEvents(state);
+  assertEqual(poolOfRef(state, "veteran", "burst").current, 1, "exactly one charge, not two");
+});
+
+test("Tactical language", "A status can answer whoever damaged its holder", () => {
+  const state = languageBench(923);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "target");
+  veteran.statuses.push({ statusId: "reactivePlating", remaining: 3 });
+  const attackerHp = target.currentHp;
+
+  queueEvent(state, {
+    type: "damageResolved",
+    sourceUnitId: target.id,
+    targetUnitId: veteran.id,
+    amount: 10,
+    baseAmount: 10
+  });
+  const processed = processAllEvents(state);
+
+  const answers = processed.filter(
+    (event) => event.type === "damageResolved" && event.targetUnitId === target.id
+  );
+  assertEqual(answers.length, 1, "the plate answered exactly once");
+  assert(target.currentHp < attackerHp, "and it answered the attacker, not the holder");
+  assertEqual(
+    attackerHp - target.currentHp,
+    Math.max(1, Math.round(calculateUnitStats(state, target.id).maxHp * 0.08)),
+    "for the authored share of the attacker's own hull"
+  );
+});
+
+test("Tactical language", "A dead holder answers nobody", () => {
+  const state = languageBench(924);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "target");
+  veteran.statuses.push({ statusId: "reactivePlating", remaining: 3 });
+  const attackerHp = target.currentHp;
+
+  queueEvent(state, {
+    type: "damageResolved",
+    sourceUnitId: target.id,
+    targetUnitId: veteran.id,
+    amount: 100000,
+    baseAmount: 100000
+  });
+  processAllEvents(state);
+
+  assert(!veteran.alive, "the holder died to the blow");
+  assertEqual(target.currentHp, attackerHp, "and a corpse does not retaliate");
+});
+
+test("Tactical language", "A status can act on the kill its holder just made", () => {
+  const state = languageBench(925);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "target");
+  veteran.statuses.push({ statusId: "combatTrophy", remaining: 3 });
+  setPool(state, "veteran", "burst", 0);
+
+  queueEvent(state, {
+    type: "damageResolved",
+    sourceUnitId: veteran.id,
+    targetUnitId: target.id,
+    amount: 100000,
+    baseAmount: 100000
+  });
+  processAllEvents(state);
+
+  assert(!target.alive);
+  assertEqual(
+    poolOfRef(state, "veteran", "burst").current,
+    2,
+    "the killer's passive paid out — and it had to run before the victim's statuses were cleared"
+  );
+});
+
+test("Tactical language", "A status can act when its holder moves", () => {
+  const state = languageBench(926);
+  const veteran = unitByRef(state, "veteran");
+  veteran.statuses.push({ statusId: "coolantTrail", remaining: 3 });
+  activateForTest(state, veteran.id);
+  const from = { x: veteran.x, y: veteran.y };
+  const moved = executeCommand(state, {
+    type: "move",
+    unitId: veteran.id,
+    path: [
+      { x: from.x, y: from.y },
+      { x: from.x, y: from.y - 1 }
+    ]
+  });
+  processAllEvents(state);
+  assert(moved.ok, "the move was legal: " + JSON.stringify(moved.error || moved));
+  assert(veteran.y === from.y - 1, "and it happened");
+  assert(
+    veteran.statuses.some((entry) => entry.statusId === "slow"),
+    "the move left something behind; statuses are " +
+      veteran.statuses.map((entry) => entry.statusId).join(",")
+  );
+});
+
+test("Tactical language", "Triggered effects stay inside the chain that caused them", () => {
+  const state = languageBench(927);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "target");
+  veteran.statuses.push({ statusId: "reactivePlating", remaining: 3 });
+
+  const cause = beginChain(state.causality, "command");
+  queueEvent(state, {
+    type: "damageResolved",
+    sourceUnitId: target.id,
+    targetUnitId: veteran.id,
+    amount: 10,
+    baseAmount: 10,
+    cause
+  });
+  const processed = processAllEvents(state);
+
+  const triggered = processed.find((event) => event.type === "statusTriggered");
+  const answer = processed.find(
+    (event) => event.type === "damageResolved" && event.targetUnitId === target.id
+  );
+  assert(triggered, "the trigger is an event of its own, not a hidden side effect");
+  assertEqual(triggered.cause.chainId, cause.chainId, "same chain as the blow that caused it");
+  assert(triggered.cause.depth > cause.depth, "and downstream of it");
+  assert(answer, "the retaliation resolved");
+  assertEqual(answer.cause.chainId, cause.chainId, "attribution survives the whole exchange");
+});
+
+test("Tactical language", "Retaliation answering retaliation terminates", () => {
+  // The pathological case: two frames that both hit back, forever. Nothing
+  // refuses this configuration, because an exchange of blows is a legitimate
+  // thing to author. The only thing between it and a hung battle is the causal
+  // ceiling every other cascade in this engine already stops at.
+  const state = languageBench(928);
+  const veteran = unitByRef(state, "veteran");
+  const target = unitByRef(state, "target");
+  veteran.currentHp = 99999;
+  target.currentHp = 99999;
+  veteran.statuses.push({ statusId: "reactivePlating", remaining: 99 });
+  target.statuses.push({ statusId: "reactivePlating", remaining: 99 });
+
+  queueEvent(state, {
+    type: "damageResolved",
+    sourceUnitId: target.id,
+    targetUnitId: veteran.id,
+    amount: 1,
+    baseAmount: 1,
+    cause: beginChain(state.causality, "command")
+  });
+  const processed = processAllEvents(state);
+
+  const exchanges = processed.filter((event) => event.type === "statusTriggered").length;
+  assert(exchanges > 1, "the exchange really did go back and forth (" + exchanges + " steps)");
+  assert(exchanges <= MAX_CHAIN_DEPTH, "and stopped at the ceiling, not past it");
+  assertEqual(state.resolutionQueue.length, 0, "the queue drained");
+  assertEqual(
+    state.errors.filter((message) => message.includes("maximum event count")).length,
+    0,
+    "and it stopped because the chain ended, not because the queue gave up"
+  );
+});
+
+test("Tactical language", "Validation refuses a moment the engine never fires", () => {
+  const report = validateGameplayData({
+    statuses: {
+      benchGhost: {
+        name: "Ghost",
+        duration: { type: "targetActivations", amount: 1 },
+        triggers: [{ event: "onTuesday", effects: [{ type: "damage", power: 1 }] }]
+      }
+    }
+  });
+  assert(
+    report.errors.some((message) => message.includes("onTuesday")),
+    "a trigger nothing fires is invisible, so it is an error: " + report.errors.join(" | ")
+  );
+});
+
+test("Tactical language", "Validation refuses a counterpart where there is nobody", () => {
+  const report = validateGameplayData({
+    statuses: {
+      benchOrphan: {
+        name: "Orphan",
+        duration: { type: "targetActivations", amount: 1 },
+        triggers: [
+          { event: "activationStart", target: "counterpart", effects: [{ type: "damage", power: 1 }] }
+        ]
+      }
+    }
+  });
+  assert(
+    report.errors.some((message) => message.includes("no second party")),
+    report.errors.join(" | ")
+  );
+});
+
+test("Tactical language", "Validation refuses a status that reapplies itself on landing", () => {
+  const report = validateGameplayData({
+    statuses: {
+      benchLoop: {
+        name: "Loop",
+        duration: { type: "targetActivations", amount: 3 },
+        triggers: [
+          { event: "statusApplied", effects: [{ type: "applyStatus", statusId: "benchLoop" }] }
+        ]
+      }
+    }
+  });
+  assert(
+    report.errors.some((message) => message.includes("loop")),
+    "the one statically obvious self-recursion is caught: " + report.errors.join(" | ")
+  );
+});
+
+test("Tactical language", "Validation refuses a malformed balance question", () => {
+  const withCondition = (condition) =>
+    validateGameplayData({
+      resources: { burst: { name: "Burst", scope: "unit", max: 5 } },
+      abilities: { benchShot: { name: "Bench Shot", conditions: [condition] } }
+    }).errors;
+
+  const complains = (condition, needle) =>
+    assert(
+      withCondition(condition).some((message) => message.includes(needle)),
+      needle + " went unreported: " + withCondition(condition).join(" | ")
+    );
+
+  complains({ type: "resourceBalance", resourceId: "nothingLikeThis", value: 1 }, "nothingLikeThis");
+  complains({ type: "resourceBalance", resourceId: "burst", compare: "roughly", value: 1 }, "roughly");
+  complains({ type: "resourceBalance", resourceId: "burst", value: -2 }, "negative");
+  complains({ type: "resourceBalance", of: "somebodyElse", resourceId: "burst", value: 1 }, "somebodyElse");
+  complains({ type: "resourceBalance", resourceId: "burst", value: 250, percentOfMax: true }, "100 percent");
+});
+
+test("Tactical language", "Validation refuses malformed status scaling", () => {
+  const withScaling = (scaling) =>
+    validateGameplayData({
+      statuses: { marked: { name: "Marked", tags: ["targeting"] } },
+      abilities: {
+        benchShot: { name: "Bench Shot", effects: [{ type: "damage", power: 10, scaling }] }
+      }
+    }).errors;
+
+  const complains = (scaling, needle) =>
+    assert(
+      withScaling(scaling).some((message) => message.includes(needle)),
+      needle + " went unreported: " + withScaling(scaling).join(" | ")
+    );
+
+  complains({ from: "vibes", perUnit: 1 }, "vibes");
+  complains({ from: "targetStatus", perUnit: 1 }, "neither");
+  complains({ from: "targetStatus", statusId: "ghostly", perUnit: 1 }, "ghostly");
+  complains({ from: "targetStatus", statusTag: "nobodyHasThis", perUnit: 1 }, "nobodyHasThis");
+  complains({ from: "targetStatus", statusId: "marked", mode: "sideways", perUnit: 1 }, "sideways");
+});
+
+test("Tactical language", "Validation refuses a leftover operator alias", () => {
+  const report = validateGameplayData({
+    units: { frame: { name: "Frame" } },
+    operators: {
+      alpha: { name: "Alpha", chassis: "frame", ref: "alpha" }
+    }
+  });
+  assert(
+    report.errors.some((message) => message.includes("legacy")),
+    'a ref that agrees with its key is still a second identifier: ' + report.errors.join(" | ")
+  );
+});
+
+test("Tactical language", "An operator has one id, and every registry uses it", () => {
+  for (const [operatorId, operator] of Object.entries(GAMEPLAY_CONTENT.operators)) {
+    assertEqual(operator.ref, undefined, operatorId + " still carries a legacy ref");
+  }
+  for (const [linkId, link] of Object.entries(GAMEPLAY_CONTENT.combatLinks)) {
+    for (const participant of link.participants || []) {
+      assert(
+        GAMEPLAY_CONTENT.operators[participant],
+        linkId + ' names "' + participant + '", which is not an operator id'
+      );
+    }
+  }
+  for (const [reactionId, reaction] of Object.entries(GAMEPLAY_CONTENT.reactions)) {
+    if (!reaction.owner) continue;
+    assert(
+      GAMEPLAY_CONTENT.operators[reaction.owner],
+      reactionId + ' is owned by "' + reaction.owner + '", which is not an operator id'
+    );
+  }
+  for (const operatorId of Object.keys(createCampaignState().roster)) {
+    assert(
+      GAMEPLAY_CONTENT.operators[operatorId],
+      "the starting roster is keyed by canonical id, not " + operatorId
+    );
+  }
+});
+
+test("Tactical language", "A deployed operator carries its canonical id onto the field", () => {
+  const campaign = createCampaignState();
+  const missionId = firstMissionId();
+  const deployment = createCampaignDeploymentState(campaign, missionId);
+  const roster = createCampaignMissionRoster(campaign, missionId, deployment);
+  assert(roster.length, "somebody deployed");
+  for (const entry of roster) {
+    assertEqual(entry.ref, entry.operatorId, "the field ref is the operator id, not a second name");
+    assert(
+      GAMEPLAY_CONTENT.operators[entry.ref],
+      'deployment produced ref "' + entry.ref + '", which is not an operator id'
+    );
+  }
+});
+
+test("Tactical language", "A save written before the rename still loads", () => {
+  const legacy = {
+    version: 3,
+    roster: {
+      commander: {
+        operatorId: "commander", chassis: "assaultMech", condition: 61,
+        xp: 75, rank: 2, perkId: "valeBulwark", loadout: {}
+      },
+      kell: {
+        operatorId: "kell", chassis: "sniperMech", condition: 100,
+        xp: 0, rank: 1, perkId: null, loadout: {}
+      }
+    },
+    missionOutcomes: {
+      "act1-01-hollowmere-perimeter": { conditions: { byOperator: { commander: 61, kell: 100 } } }
+    }
+  };
+  const loaded = loadCampaign(JSON.stringify(legacy));
+  assert(loaded, "the save is still readable");
+  assertEqual(loaded.roster.commander, undefined, "the legacy key is gone");
+  assert(loaded.roster.vale, "and the pilot survived the rename");
+  assertEqual(loaded.roster.vale.condition, 61, "with her damage");
+  assertEqual(loaded.roster.vale.xp, 75, "and her record");
+  assertEqual(loaded.roster.vale.operatorId, "vale", "including the id written inside the entry");
+  assertEqual(loaded.roster.kell.condition, 100, "and everyone who never needed renaming");
+  assertEqual(loaded.version, CAMPAIGN_SAVE_VERSION, "stamped forward, so it migrates once");
+  const byOperator = loaded.missionOutcomes["act1-01-hollowmere-perimeter"].conditions.byOperator;
+  assertEqual(byOperator.commander, undefined);
+  assertEqual(byOperator.vale, 61, "stored results were re-keyed too");
+});
+
+test("Tactical language", "Nothing shipped still names a legacy operator id", () => {
+  // Only the places that address a *pilot*. A unit class happens to be called
+  // "commander" too, and that is a different namespace with its own registry.
+  const addressing = JSON.stringify({
+    operators: Object.keys(GAMEPLAY_CONTENT.operators),
+    linkParticipants: Object.values(GAMEPLAY_CONTENT.combatLinks).map((link) => link.participants),
+    reactionOwners: Object.values(GAMEPLAY_CONTENT.reactions).map((reaction) => reaction.owner || null)
+  });
+  assert(!addressing.includes("commander"), "no gameplay registry addresses the old key");
+  const campaignJson = JSON.stringify(CAMPAIGN);
+  assert(
+    !/"(speaker|character)"\s*:\s*"commander"/.test(campaignJson),
+    "and no scene line is spoken by it either"
+  );
+  assert(!JSON.stringify(CAMPAIGN.operators).includes('"ref"'), "no operator carries a second name");
+});
+
+test("Tactical language", "The engine knows the vocabulary but none of the words", () => {
+  // The lists the validator checks authored data against must cover exactly
+  // what the engine implements. A source the validator does not know about
+  // would ship unchecked; one the engine lacks would reject valid content.
+  assertEqual(
+    EFFECT_SCALING_IDS.slice().sort().join(","),
+    EFFECT_SCALING_SOURCE_IDS.slice().sort().join(","),
+    "scaling sources agree between engine and validator"
+  );
+  assertEqual(
+    Object.keys(CONDITION_HANDLERS).slice().sort().join(","),
+    EFFECT_CONDITION_IDS.slice().sort().join(","),
+    "effect conditions agree"
+  );
+  assertEqual(
+    STATUS_TRIGGER_EVENT_IDS.length,
+    Object.keys(STATUS_TRIGGER_EVENTS).length,
+    "and so do the moments"
+  );
+
+  // And no new primitive smuggled a content id into generic machinery.
+  const sources = [
+    resourceReadingFor.toString(),
+    effectScaling.toString(),
+    countMatchingStatuses.toString(),
+    runStatusTriggers.toString(),
+    String(REACTION_CONDITION_REGISTRY.resourceBalance.evaluate),
+    String(EFFECT_SCALING_SOURCES.targetStatus.read),
+    String(CONDITION_HANDLERS.resourceBalance)
+  ].join("\n");
+  for (const word of ["burst", "commandPoints", "supportCharge", "marked", "vale", "poise", "capacitor"]) {
+    assert(
+      !new RegExp('"' + word + '"|\'' + word + '\'').test(sources),
+      'the engine names "' + word + '"'
+    );
+  }
+});
+
+test("Tactical language", "Asking about a balance is free", () => {
+  const state = languageBench(930);
+  const veteran = unitByRef(state, "veteran");
+  const context = { state, sourceUnitId: veteran.id, targetUnitId: veteran.id };
+  const condition = [{ type: "resourceBalance", resourceId: "burst", compare: "atLeast", value: 1 }];
+  const started = performance.now();
+  for (let i = 0; i < 2000; i += 1) evaluateConditionsPure(context, condition);
+  const per = (performance.now() - started) / 2000;
+  assert(per < 0.05, "one balance question took " + per.toFixed(4) + "ms");
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {

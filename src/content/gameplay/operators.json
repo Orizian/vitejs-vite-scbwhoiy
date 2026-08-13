@@ -2,7 +2,7 @@
   "format": "statuszero.gameplay",
   "formatVersion": 1,
   "registry": "operators",
-  "description": "Playable pilots. An operator owns identity and progression and points at a chassis; it does not own the chassis's stats. The entry key is the operator's one canonical id — campaign, deployment, missions, links and reactions all address a pilot by it.",
+  "description": "Playable pilots. An operator owns identity and progression and points at a chassis; it does not own the chassis's stats.",
   "entries": {
     "arcSpecialist": {
       "name": "Arc Specialist",
