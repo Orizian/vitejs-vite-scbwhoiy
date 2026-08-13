@@ -159,7 +159,34 @@ export function normalizeMission(raw) {
      * than inside it. In-battle lines stay where they belong: mission beats
      * and reactions, which fire in context and do not take over the screen. */
     preMissionScene: source.preMissionScene || null,
-    postMissionScene: source.postMissionScene || null
+    postMissionScene: source.postMissionScene || null,
+
+    /* ---- rewards ----
+     * The mission owns what it pays. A campaign may decide when a mission is
+     * offered; it does not get to redefine what clearing it is worth, because
+     * that is a property of the operation and belongs in the file somebody
+     * edits when they design it. */
+    rewards: normalizeMissionRewards(source.rewards)
+  };
+}
+
+/**
+ * Two tables and nothing else.
+ *
+ * `clear` pays on every successful clear; `firstClear` pays the first time
+ * only. There is deliberately no third "replay" table — a repeatable reward is
+ * just `clear`, and adding a separate one would have made the common case
+ * ambiguous about whether the first clear also pays it.
+ *
+ * "Only once" is enforced by claim policy on the entries rather than by the
+ * slot, which is why a first-clear table can still contain something
+ * repeatable and a clear table can contain something unique.
+ */
+function normalizeMissionRewards(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  return {
+    clear: source.clear || null,
+    firstClear: source.firstClear || null
   };
 }
 
@@ -329,6 +356,11 @@ function normalizeUnit(raw, index) {
     // Per-unit loadout, keyed by slot. This is how a mission fields a garrison
     // with thermal optics rather than needing a bespoke chassis for it.
     equipment: raw.equipment && typeof raw.equipment === "object" ? { ...raw.equipment } : null,
+    // What this particular placement is worth when it is defeated. Overrides
+    // whatever its chassis normally drops, which is how a named officer and an
+    // ordinary trooper share one unit definition and still pay differently.
+    // Duplicating a whole chassis to change its loot would be the alternative.
+    dropTableId: raw.dropTableId || null,
     note: raw.note || ""
   };
 }

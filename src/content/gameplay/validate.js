@@ -12,6 +12,7 @@
 
 import { REGISTRY_IDS, REGISTRY_KINDS } from "./format.js";
 import { validateResourceDefinition, validateResourceQuery } from "../../combat/resources.js";
+import { validateLootTable, findTableCycles, lootTableIsEmpty } from "../../campaign/rewards.js";
 import {
   EFFECT_SCALING_SOURCE_IDS as EFFECT_SCALING_IDS,
   EFFECT_SCALING_MODES,
@@ -56,7 +57,7 @@ export function validateGameplayData(data, context) {
 
   const {
     units, abilities, equipment, statuses, aiProfiles, operators, perks, terrain,
-    resources, reactions, combatLinks, fixtures
+    resources, reactions, combatLinks, fixtures, materials, lootTables
   } = registries;
   const external = context || {};
 
@@ -666,6 +667,57 @@ export function validateGameplayData(data, context) {
         }
       }
     });
+  }
+
+  /* ---- materials and loot tables ---- */
+  for (const id of Object.keys(materials)) {
+    const material = materials[id] || {};
+    if (!material.name) warnings.push(label("materials", id) + " has no display name.");
+    if (material.tags && !Array.isArray(material.tags)) {
+      errors.push(label("materials", id) + " has tags that are not a list.");
+    }
+    if (material.tier != null && !(Number(material.tier) > 0)) {
+      errors.push(label("materials", id) + " has a tier that is not a positive number.");
+    }
+  }
+
+  const lootRefs = {
+    equipmentIds: Object.keys(equipment),
+    materialIds: Object.keys(materials),
+    tableIds: Object.keys(lootTables),
+    // Campaign currencies are not their own registry yet. Deriving the valid
+    // set from the economy the campaign actually runs keeps authored data
+    // checkable today without inventing a registry that the campaign-as-data
+    // phase will define properly.
+    currencyIds: external.currencyIds || null
+  };
+  for (const id of Object.keys(lootTables)) {
+    for (const message of validateLootTable(lootTables[id], label("lootTables", id), lootRefs)) {
+      errors.push(message);
+    }
+    if (lootTableIsEmpty(lootTables[id])) {
+      warnings.push(label("lootTables", id) + " grants nothing, so any source naming it pays nothing.");
+    }
+  }
+  for (const cycle of findTableCycles(lootTables)) {
+    errors.push("Loot tables reference each other in a cycle: " + cycle.join(" → ") + ".");
+  }
+
+  /* ---- drop sources ----
+   *
+   * A chassis may name the salvage its whole archetype is worth; a specific
+   * placement may override it to make one enemy worth hunting. Both are just
+   * a table id, so neither needs its own registry. */
+  for (const id of Object.keys(units)) {
+    const dropTableId = (units[id] || {}).dropTableId;
+    if (dropTableId && !has(lootTables, dropTableId)) {
+      errors.push(label("units", id) + ' drops unknown loot table "' + dropTableId + '".');
+    }
+  }
+  for (const tableId of external.missionLootTableIds || []) {
+    if (!has(lootTables, tableId)) {
+      errors.push('A mission references loot table "' + tableId + '", which no longer exists.');
+    }
   }
 
   /* ---- operators and perks ---- */

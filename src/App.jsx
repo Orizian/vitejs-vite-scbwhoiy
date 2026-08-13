@@ -59,6 +59,15 @@ import {
   DEFAULT_RESOURCE_COMPARISON
 } from "./combat/resources.js";
 import {
+  planRewards,
+  applyRewards,
+  receiptIdFor,
+  claimKeyFor,
+  tablesGranting,
+  GRANT_KINDS,
+  CLAIM_POLICIES
+} from "./campaign/rewards.js";
+import {
   EFFECT_SCALING_SOURCE_IDS,
   EFFECT_CONDITION_IDS,
   EFFECT_SCALING_MODES,
@@ -639,6 +648,28 @@ const RESOURCES_BY_ID = Object.fromEntries(
 /* Authored in src/content/gameplay/equipment.json. Weapons are equipment
  * with a weapon slot, not a separate registry. */
 const EQUIPMENT = GAMEPLAY_CONTENT.equipment;
+
+/* ===============================================================
+ * MATERIALS AND LOOT
+ * Authored in src/content/gameplay/{materials,loot-tables}.json. A material
+ * is a quantity in the campaign's stores and never touches a battle; a loot
+ * table is what a reward source pays. Both are here rather than in the battle
+ * registry because nothing in the simulation reads either one — loot is
+ * resolved after the shooting stops.
+ * =============================================================*/
+const MATERIALS = GAMEPLAY_CONTENT.materials;
+const LOOT_TABLES = GAMEPLAY_CONTENT.lootTables;
+
+/**
+ * The campaign's currencies, by id.
+ *
+ * Not a registry of its own yet — these are fields on the campaign state, and
+ * inventing a registry for them now would be guessing at what the
+ * campaign-as-data phase decides. Naming them in one place is enough for a
+ * reward grant to be checked against something, and is the only edit that
+ * phase should need.
+ */
+const CAMPAIGN_CURRENCY_IDS = ["supplies", "funds", "intel"];
 
 /* ===============================================================
  * MAP DEFINITIONS
@@ -20934,7 +20965,7 @@ const CAMPAIGN = {
  * CAMPAIGN STATE
  * -------------------------------------------------------------*/
 
-const CAMPAIGN_SAVE_VERSION = 4;
+const CAMPAIGN_SAVE_VERSION = 5;
 
 const LEGACY_MISSION_ID_MAP = {
   hollowmerePerimeter: "act1-01-hollowmere-perimeter",
@@ -21077,6 +21108,17 @@ function createCampaignState() {
     missionOrder: [],
     orderChoices: {},
     missionOutcomes: {},
+    // Salvage, as quantities. Equipment already had a counted store; a
+    // material is not equipment and must not be filed as if it were.
+    materials: {},
+    // Once-per-campaign rewards already taken, by claim key. Keyed by the
+    // authored entry rather than by the item, so two different unique rewards
+    // that happen to pay the same part are still two separate claims.
+    rewardClaims: {},
+    // Mission attempts whose receipt has already been paid. This is what makes
+    // reward application exactly-once across remounts, reloads and a
+    // double-clicked continue button.
+    appliedReceipts: {},
     completedScenes: [],
     choiceHistory: [],
     supplies: CAMPAIGN.startingSupplies,
@@ -22103,6 +22145,40 @@ function applyMissionOrderChoice(flags, orderChoices, mission) {
 }
 
 /**
+ * A repeat clear: rewards, and nothing else.
+ *
+ * Deliberately narrow. Everything a first clear does beyond paying — unlocking
+ * the next mission, recruiting, advancing flags — has already happened and
+ * must not happen again, so this touches none of it.
+ */
+function applyMissionRewardsOnly(campaign, missionId, outcome) {
+  const receipt = planMissionRewards(campaign, missionId, outcome);
+  const result = applyRewards(campaign, receipt);
+  const mission = CAMPAIGN.missions[missionId];
+  if (!result.applied) return { ...result.campaign, activeMissionId: null };
+  return {
+    ...result.campaign,
+    activeMissionId: null,
+    log: campaign.log.concat(
+      (mission ? mission.name : missionId) + ": cleared again, " + describeReceipt(receipt)
+    )
+  };
+}
+
+/** A one-line summary of what a receipt paid, for the campaign log. */
+function describeReceipt(receipt) {
+  const parts = [];
+  for (const [itemId, amount] of Object.entries(receipt.totals.currency)) {
+    parts.push("+" + amount + " " + itemId);
+  }
+  const items = Object.keys(receipt.totals.equipment).length;
+  const materials = Object.values(receipt.totals.material).reduce((sum, n) => sum + n, 0);
+  if (items) parts.push(items + (items === 1 ? " item" : " items"));
+  if (materials) parts.push(materials + " salvage");
+  return parts.length ? parts.join(", ") : "nothing new";
+}
+
+/**
  * Applies a mission result. Victory grants deterministic rewards, flags,
  * unlocks and recruits; defeat only records the attempt so the player can
  * retry without advancing the story.
@@ -22118,7 +22194,13 @@ function resolveMissionOutcome(campaign, missionId, outcome) {
       log: campaign.log.concat(mission.name + ": failed, retry available")
     };
   }
-  if (campaign.completed.includes(missionId)) return campaign;
+  // A replay no longer falls out here. Story progress — flags, unlocks,
+  // recruits, contacts — is still strictly first-clear, because completing a
+  // mission twice does not make a plot happen twice. What changed is that
+  // rewards are now a separate question with their own claim rules, so a
+  // second clear can still pay salvage without re-running the story.
+  const firstClear = !campaign.completed.includes(missionId);
+  if (!firstClear) return applyMissionRewardsOnly(campaign, missionId, outcome);
 
   let flags = { ...campaign.flags };
   for (const flag of mission.grantsFlags || []) flags[flag] = true;
@@ -22134,8 +22216,12 @@ function resolveMissionOutcome(campaign, missionId, outcome) {
       loadout: cloneLoadout(campaign.roster[operatorId].loadout)
     };
   }
+  // A recruit brings their own frame's kit. Anything the reward pipeline is
+  // about to grant is excluded, so a part that arrives as loot is not also
+  // quietly conjured as a recruit's starting equipment.
   let inventory = { ...campaign.inventory };
-  const rewardIds = new Set((mission.rewards && mission.rewards.equipment) || []);
+  const receipt = planMissionRewards(campaign, missionId, outcome);
+  const rewardIds = new Set(Object.keys(receipt.totals.equipment));
   for (const operatorId of mission.recruits || []) {
     if (roster[operatorId]) continue;
     const operator = CAMPAIGN.operators[operatorId];
@@ -22143,7 +22229,6 @@ function resolveMissionOutcome(campaign, missionId, outcome) {
     roster[operatorId] = { operatorId, chassis: operator.chassis, condition: 100, loadout, xp: 0, rank: 1, perkId: null };
     inventory = addLoadoutOwnership(inventory, loadout, rewardIds);
   }
-  for (const equipmentId of rewardIds) inventory[equipmentId] = (inventory[equipmentId] || 0) + 1;
 
   const contacts = campaign.contacts.slice();
   for (const contactId of mission.contacts || []) if (!contacts.includes(contactId)) contacts.push(contactId);
@@ -22170,7 +22255,10 @@ function resolveMissionOutcome(campaign, missionId, outcome) {
     }
   };
 
-  return {
+  // Story progress first, then the payment. Rewards go through the same grant
+  // pipeline a replay uses — there is no separate first-clear currency path,
+  // which is what stops the two drifting apart.
+  const progressed = {
     ...campaign,
     chapter: mission.chapter,
     flags,
@@ -22181,14 +22269,12 @@ function resolveMissionOutcome(campaign, missionId, outcome) {
     orderChoices: ordered.orderChoices,
     missionOrder: (campaign.missionOrder || []).concat(missionId),
     missionOutcomes,
-    supplies: campaign.supplies + ((mission.rewards && mission.rewards.supplies) || 0),
-    funds: campaign.funds + ((mission.rewards && mission.rewards.funds) || 0),
-    intel: campaign.intel + ((mission.rewards && mission.rewards.intel) || 0),
     activeMissionId: null,
     available: availableMissionsAfter(missionId, flags, completed),
     finished: flags.prototypeComplete === true,
     log: campaign.log.concat(mission.name + ": complete")
   };
+  return applyRewards(progressed, receipt).campaign;
 }
 
 function availableMissionsAfter(missionId, flags, completed) {
@@ -22252,6 +22338,192 @@ function collectMissionConditions(state, roster) {
     if (rosterEntry && rosterEntry.operatorId) conditions.byOperator[rosterEntry.operatorId] = value;
   });
   return conditions;
+}
+
+/**
+ * Who was left standing, and who was not.
+ *
+ * The smallest thing a drop needs: a reward may only come from a source that
+ * was actually defeated, and "it was on the board" is not the same claim.
+ * Read from final unit state rather than by re-scanning the battle log,
+ * because a unit that was destroyed and then revived finished the operation
+ * intact and should not pay salvage.
+ *
+ * Carries the placement `ref` — the same stable id links, objectives and
+ * mission scripts already address units by — so a drop source is identified
+ * by authored identity rather than by a runtime unit key.
+ */
+function collectDefeatedSources(state) {
+  const defeated = [];
+  for (const unitId of state.unitOrder) {
+    const unit = state.units[unitId];
+    if (!unit || unit.alive) continue;
+    // Summons and anything spawned mid-battle have no authored placement, so
+    // there is nothing stable to attribute a drop to.
+    if (unit.summonedBy) continue;
+    defeated.push({
+      ref: unit.ref || unitId,
+      definitionId: unit.definitionId,
+      teamId: unit.teamId,
+      label: unitLabel(state, unitId)
+    });
+  }
+  return defeated;
+}
+
+/* ---------------------------------------------------------------
+ * REWARDS
+ *
+ * The bridge between "a mission finished" and the pure reward planner. This
+ * is the only place that knows what counts as a reward source; the planner
+ * only knows how to resolve one.
+ * -------------------------------------------------------------*/
+
+/** The mission file's own reward block, if the mission came from one. */
+function missionRewardTables(missionId) {
+  const file = MISSION_CONTENT.missions ? MISSION_CONTENT.missions[missionId] : null;
+  if (file && file.rewards) return file.rewards;
+  return { clear: null, firstClear: null };
+}
+
+/**
+ * What a defeated placement is worth.
+ *
+ * The placement wins if it says anything, because that is the whole point of
+ * the override: a named officer and an ordinary trooper can share a chassis
+ * and still pay differently, without duplicating a unit definition to do it.
+ */
+function dropTableForSource(missionId, source) {
+  const file = MISSION_CONTENT.missions ? MISSION_CONTENT.missions[missionId] : null;
+  const placement = file && (file.units || []).find((unit) => unit.ref === source.ref);
+  if (placement && placement.dropTableId) return placement.dropTableId;
+  const definition = CONTENT.units[source.definitionId];
+  return (definition && definition.dropTableId) || null;
+}
+
+/**
+ * Every reward source a finished attempt produced, in a stable order.
+ *
+ * Legacy campaign rewards are adapted here rather than anywhere deeper: a
+ * mission whose file names no tables still pays what the `CAMPAIGN` literal
+ * says, through the same grant pipeline, so there is one authority at runtime
+ * even while two authoring locations exist. See docs/REWARDS.md for the
+ * migration path.
+ */
+function collectRewardSources(campaign, missionId, outcome) {
+  const sources = [];
+  const tables = missionRewardTables(missionId);
+  const firstClear = !campaign.completed.includes(missionId);
+
+  if (tables.clear) {
+    sources.push({ kind: "missionClear", id: missionId, label: missionLabel(missionId), tableIds: [tables.clear] });
+  }
+  if (firstClear && tables.firstClear) {
+    sources.push({ kind: "firstClear", id: missionId, label: missionLabel(missionId), tableIds: [tables.firstClear] });
+  }
+  // Legacy: a campaign mission whose file names no tables still pays what the
+  // literal says, adapted into ordinary grants. This is the only place the old
+  // shape is understood, and it produces the same receipt lines authored data
+  // would, so nothing downstream has two cases to handle.
+  if (!tables.clear && !tables.firstClear && firstClear) {
+    const adapted = legacyRewardTable(missionId);
+    if (adapted) {
+      sources.push({
+        kind: "firstClear",
+        id: missionId,
+        label: missionLabel(missionId),
+        tableIds: [LEGACY_TABLE_PREFIX + missionId]
+      });
+    }
+  }
+  // Hostile placements only. Losing one of your own is not salvage.
+  const playerTeams = new Set(["player", "sectionSeven"]);
+  for (const defeated of (outcome && outcome.defeated) || []) {
+    if (playerTeams.has(defeated.teamId)) continue;
+    const tableId = dropTableForSource(missionId, defeated);
+    if (!tableId) continue;
+    sources.push({
+      kind: "unitDefeated",
+      id: defeated.ref,
+      label: defeated.label || defeated.ref,
+      tableIds: [tableId]
+    });
+  }
+  return sources;
+}
+
+/**
+ * The `CAMPAIGN` literal's reward block, as a loot table.
+ *
+ * A compatibility shim with a deliberate expiry: every one of these missions
+ * should eventually carry its rewards in its own file, and the count of
+ * missions still relying on this is the migration's progress bar. Built on
+ * demand rather than stored, so it cannot drift from the literal it adapts.
+ *
+ * These were all first-clear-only before this phase — `resolveMissionOutcome`
+ * refused to pay a replay at all — so they adapt as first-clear sources, which
+ * preserves exactly what the game did.
+ */
+const LEGACY_TABLE_PREFIX = "legacy:";
+
+function legacyRewardTable(missionId) {
+  const mission = CAMPAIGN.missions[missionId];
+  const rewards = mission && mission.rewards;
+  if (!rewards) return null;
+  const guaranteed = [];
+  for (const currencyId of CAMPAIGN_CURRENCY_IDS) {
+    const amount = Number(rewards[currencyId]) || 0;
+    if (amount > 0) {
+      guaranteed.push({ id: currencyId, kind: "currency", itemId: currencyId, quantity: amount });
+    }
+  }
+  for (const equipmentId of rewards.equipment || []) {
+    guaranteed.push({
+      id: "equipment:" + equipmentId,
+      kind: "equipment",
+      itemId: equipmentId,
+      quantity: 1,
+      claim: "oncePerCampaign"
+    });
+  }
+  if (!guaranteed.length) return null;
+  return { name: mission.name + " (legacy rewards)", guaranteed, pools: [] };
+}
+
+/** Canonical tables plus whatever legacy adapters this attempt needs. */
+function lootTablesFor(missionId) {
+  const legacy = legacyRewardTable(missionId);
+  if (!legacy) return LOOT_TABLES;
+  return { ...LOOT_TABLES, [LEGACY_TABLE_PREFIX + missionId]: legacy };
+}
+
+function missionLabel(missionId) {
+  const mission = CAMPAIGN.missions[missionId];
+  if (mission) return mission.name;
+  const file = MISSION_CONTENT.missions ? MISSION_CONTENT.missions[missionId] : null;
+  return (file && file.name) || missionId;
+}
+
+/**
+ * The receipt a finished attempt would pay, without paying it.
+ *
+ * Called by the results screen to render, by the tests to assert and by
+ * `resolveMissionOutcome` to apply. One answer, three readers.
+ */
+function planMissionRewards(campaign, missionId, outcome) {
+  return planRewards({
+    missionId,
+    // The attempt already exists and is already persistent, so the roll key
+    // needs no new state and no campaign seed. Replaying increments it, which
+    // is exactly when a repeatable drop is allowed to roll again.
+    attempt: (campaign.attempts && campaign.attempts[missionId]) || 1,
+    campaign,
+    tables: lootTablesFor(missionId),
+    sources: collectRewardSources(campaign, missionId, outcome),
+    currencyIds: CAMPAIGN_CURRENCY_IDS,
+    equipmentIds: Object.keys(CONTENT.equipment),
+    materialIds: Object.keys(MATERIALS)
+  });
 }
 
 /* ---------------------------------------------------------------
@@ -22325,7 +22597,7 @@ function hasCampaignSlot() {
 function loadCampaign(serialized) {
   try {
     const parsed = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
-    if (!parsed || ![CAMPAIGN_SAVE_VERSION, 3, 2, 1].includes(parsed.version)) return null;
+    if (!parsed || ![CAMPAIGN_SAVE_VERSION, 4, 3, 2, 1].includes(parsed.version)) return null;
     const base = createCampaignState();
     const roster = {};
     for (const storedId of Object.keys(parsed.roster || {})) {
@@ -22368,6 +22640,13 @@ function loadCampaign(serialized) {
       flags: { ...(migrated.flags || {}) },
       roster: Object.keys(roster).length ? roster : base.roster,
       inventory: { ...(migrated.inventory || base.inventory) },
+      // A save written before rewards existed has no salvage and no claims.
+      // Defaulting them empty is the whole migration: nothing is invented, and
+      // a mission already completed stays completed, so its first clear is
+      // correctly already spent.
+      materials: { ...(migrated.materials || {}) },
+      rewardClaims: { ...(migrated.rewardClaims || {}) },
+      appliedReceipts: { ...(migrated.appliedReceipts || {}) },
       facilities: { ...(migrated.facilities || {}) },
       orderChoices: JSON.parse(JSON.stringify(migrated.orderChoices || {})),
       missionOrder: migrateMissionIdList(migrated.missionOrder).filter((missionId) => !!CAMPAIGN.missions[missionId]),

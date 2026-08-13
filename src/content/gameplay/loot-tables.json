@@ -1,0 +1,174 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "lootTables",
+  "description": "What a reward source can pay. A table is reusable and referenced by id: a mission names one for its clear reward, a chassis names one as its default salvage, a specific placement names one to make a named enemy worth hunting. `guaranteed` always pays; `pools` roll.",
+  "entries": {
+    "eliteSalvage": {
+      "name": "Elite Salvage",
+      "description": "An elite frame is worth its ordinary parts and then something from the restricted pool on top.",
+      "tags": [
+        "salvage",
+        "elite"
+      ],
+      "guaranteed": [
+        {
+          "id": "servos",
+          "itemId": "servoAssembly",
+          "kind": "material",
+          "quantity": 2
+        },
+        {
+          "tableId": "restrictedTechnology"
+        }
+      ],
+      "pools": []
+    },
+    "namedCaptainCache": {
+      "name": "Named Captain Cache",
+      "description": "A specific officer's personal kit. The core is signed out to them alone and can only ever be taken once; the rest of the cache is ordinary enough to be worth coming back for.",
+      "tags": [
+        "unique",
+        "named"
+      ],
+      "guaranteed": [
+        {
+          "claim": "oncePerCampaign",
+          "id": "signatureCore",
+          "itemId": "overclockCore",
+          "kind": "equipment",
+          "quantity": 1
+        },
+        {
+          "id": "alloy",
+          "itemId": "prototypeAlloy",
+          "kind": "material",
+          "quantity": 1
+        }
+      ],
+      "pools": [
+        {
+          "entries": [
+            {
+              "id": "optics",
+              "itemId": "classifiedOptics",
+              "kind": "material",
+              "quantity": 1,
+              "weight": 70
+            },
+            {
+              "id": "scanner",
+              "itemId": "signalScanner",
+              "kind": "equipment",
+              "quantity": 1,
+              "weight": 30
+            }
+          ],
+          "id": "sidearm",
+          "rolls": 1
+        }
+      ]
+    },
+    "restrictedTechnology": {
+      "name": "Restricted Technology",
+      "description": "The shared pool of things that are not supposed to be in the field. Referenced by several elite tables rather than copied into each of them, which is the whole reason a table may name another table.",
+      "tags": [
+        "salvage",
+        "restricted"
+      ],
+      "guaranteed": [],
+      "pools": [
+        {
+          "entries": [
+            {
+              "id": "optics",
+              "itemId": "classifiedOptics",
+              "kind": "material",
+              "quantity": 1,
+              "weight": 60
+            },
+            {
+              "id": "alloy",
+              "itemId": "prototypeAlloy",
+              "kind": "material",
+              "quantity": 1,
+              "weight": 30
+            },
+            {
+              "id": "alloyPair",
+              "itemId": "prototypeAlloy",
+              "kind": "material",
+              "quantity": 2,
+              "weight": 10
+            }
+          ],
+          "id": "grade",
+          "rolls": 1
+        }
+      ]
+    },
+    "rewardBenchClear": {
+      "name": "Reward Bench — Clear",
+      "description": "DEVELOPER CONTENT. The currency a successful clear of the reward bench pays, every time.",
+      "tags": [
+        "mission",
+        "developer"
+      ],
+      "guaranteed": [
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 40
+        },
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 6
+        }
+      ],
+      "pools": []
+    },
+    "rewardBenchFirstClear": {
+      "name": "Reward Bench — First Clear",
+      "description": "DEVELOPER CONTENT. Paid once, the first time the bench is cleared. The claim policy is what enforces that, not the source.",
+      "tags": [
+        "mission",
+        "developer"
+      ],
+      "guaranteed": [
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 2
+        },
+        {
+          "claim": "oncePerCampaign",
+          "id": "prototypePlating",
+          "itemId": "reactiveArmor",
+          "kind": "equipment",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
+    "standardSalvage": {
+      "name": "Standard Salvage",
+      "description": "What an ordinary government frame is worth once it has stopped moving. The default for any chassis that does not say otherwise.",
+      "tags": [
+        "salvage"
+      ],
+      "guaranteed": [
+        {
+          "id": "servos",
+          "itemId": "servoAssembly",
+          "kind": "material",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    }
+  }
+}

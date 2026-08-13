@@ -5,6 +5,7 @@ import {
   EFFECT_SCALING_SOURCE_IDS,
   EFFECT_SCALING_MODES
 } from "../../combat/authoring.js";
+import { GRANT_KINDS, CLAIM_POLICIES } from "../../campaign/rewards.js";
 
 /* =========================================================================
  * GAMEPLAY EDITOR SCHEMA
@@ -151,6 +152,16 @@ export const REGISTRY_SCHEMAS = {
             registry: "aiProfiles",
             behaviour: true,
             help: "Selects a weight vector. The AI's behaviour is engine code."
+          },
+          {
+            key: "dropTableId",
+            label: "Default salvage",
+            kind: "ref",
+            registry: "lootTables",
+            help:
+              "What this archetype is worth when it is defeated. A mission " +
+              "placement may override it, which is how a named officer on this " +
+              "chassis drops something else without needing a chassis of their own."
           }
         ]
       },
@@ -718,6 +729,93 @@ export const REGISTRY_SCHEMAS = {
     ]
   },
 
+  materials: {
+    idLabel: "Material id",
+    nameKey: "name",
+    categorize: (entry) => "Tier " + (entry.tier == null ? "?" : entry.tier),
+    sections: [
+      {
+        id: "identity",
+        label: "Identity",
+        note:
+          "A material is a quantity, not an object. It has no slot, no stats and " +
+          "nothing to fit it to — it accumulates in the campaign's stores until " +
+          "something consumes it.",
+        fields: [
+          { key: "name", label: "Display name", kind: "line", required: true },
+          { key: "description", label: "Description", kind: "text", rows: 3 },
+          { key: "glyph", label: "Glyph", kind: "line" },
+          { key: "tags", label: "Tags", kind: "tags" },
+          {
+            key: "tier",
+            label: "Tier",
+            kind: "number",
+            help: "Rough scarcity band. Nothing in the engine reads it; content and UI may."
+          }
+        ]
+      }
+    ]
+  },
+
+  lootTables: {
+    idLabel: "Loot table id",
+    nameKey: "name",
+    categorize: (entry) => ((entry.tags || []).includes("mission") ? "Mission rewards" : "Drop tables"),
+    sections: [
+      {
+        id: "identity",
+        label: "Identity",
+        fields: [
+          { key: "name", label: "Display name", kind: "line", required: true },
+          { key: "description", label: "Description", kind: "text", rows: 3 },
+          { key: "tags", label: "Tags", kind: "tags" }
+        ]
+      },
+      {
+        id: "guaranteed",
+        label: "Guaranteed",
+        note:
+          "Always paid when this table resolves. An entry either names something " +
+          "to grant or references another table — never both.",
+        fields: [
+          {
+            key: "guaranteed",
+            label: "Guaranteed grants",
+            kind: "objectList",
+            typeKey: "kind",
+            vocabulary: GRANT_KINDS,
+            help:
+              'Each entry is { id, kind, itemId, quantity } and may add claim: "' +
+              CLAIM_POLICIES.join('" | "') +
+              '". The id is required and must be stable — claims and provenance ' +
+              "are recorded against it. An entry may instead be { tableId } to " +
+              "pull in another table."
+          }
+        ]
+      },
+      {
+        id: "pools",
+        label: "Roll pools",
+        note:
+          "Each pool rolls its stated number of times, choosing by weight. Rolls " +
+          "are deterministic: the same mission attempt always produces the same " +
+          "result, so a reload cannot reroll a drop.",
+        fields: [
+          {
+            key: "pools",
+            label: "Pools",
+            kind: "objectList",
+            typeKey: "id",
+            help:
+              "Each pool is { id, rolls, entries }. An entry is a grant with an " +
+              "added weight — relative, not a percentage, so adding a rare line " +
+              "does not require rebalancing the others."
+          }
+        ]
+      }
+    ]
+  },
+
   perks: {
     idLabel: "Perk ref",
     nameKey: "name",
@@ -1217,6 +1315,8 @@ export function blankEntity(kindId) {
     },
     aiProfiles: { expectedDamage: 1, lethalBonus: 40, healing: 1, targetProximity: 2, selfDanger: -1, timelineDelay: 1 },
     operators: { name: "New Operator", glyph: "?", role: "", chassis: "assaultMech", perkChoices: [] },
+    materials: { name: "New Material", description: "", glyph: "?", tags: [], tier: 1 },
+    lootTables: { name: "New Loot Table", description: "", tags: [], guaranteed: [], pools: [] },
     perks: { name: "New Perk", description: "", modifiers: {} },
     fixtures: {
       name: "New Fixture",

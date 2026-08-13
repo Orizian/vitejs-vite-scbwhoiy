@@ -277,7 +277,8 @@
         "stabilize"
       ],
       "defaultAbilityId": "scatterShot",
-      "aiProfile": "aggressive"
+      "aiProfile": "aggressive",
+      "dropTableId": "eliteSalvage"
     },
     "interdictorFrame": {
       "name": "Interdiction Frame",
@@ -510,7 +511,8 @@
         "handCannon"
       ],
       "defaultAbilityId": "handCannon",
-      "aiProfile": "aggressive"
+      "aiProfile": "aggressive",
+      "dropTableId": "standardSalvage"
     },
     "sapperFrame": {
       "name": "Sapper Frame",

@@ -1,0 +1,135 @@
+{
+  "format": "statuszero.mission",
+  "formatVersion": 1,
+  "id": "fixture-reward-bench",
+  "name": "Reward Bench",
+  "scale": "S",
+  "summary": "DEVELOPER TOOL, not campaign content. Three hostiles that pay three different ways: an ordinary trooper worth its archetype's standard salvage, an elite worth a shared restricted-technology pool, and a named captain on the same chassis as the trooper whose placement overrides what it drops. Nothing here is scripted — the only thing being demonstrated is where loot comes from.",
+  "map": {
+    "name": "Bench",
+    "width": 22,
+    "height": 16,
+    "legend": {
+      ".": "plain",
+      "~": "rough",
+      "#": "wall"
+    },
+    "rows": [
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................",
+      "......................"
+    ],
+    "elevationRows": [
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000",
+      "0000000000000000000000"
+    ]
+  },
+  "teams": [
+    {
+      "id": "sectionSeven",
+      "name": "Section Seven",
+      "controller": "human",
+      "marker": "▲",
+      "accent": "emerald"
+    },
+    {
+      "id": "loyalist",
+      "name": "Loyalists",
+      "controller": "ai",
+      "marker": "■",
+      "accent": "rose"
+    }
+  ],
+  "units": [
+    {
+      "ref": "vale",
+      "definitionId": "assaultMech",
+      "teamId": "sectionSeven",
+      "x": 4,
+      "y": 8,
+      "facing": "northeast"
+    },
+    {
+      "ref": "kell",
+      "definitionId": "sniperMech",
+      "teamId": "sectionSeven",
+      "x": 3,
+      "y": 10,
+      "facing": "northeast"
+    },
+    {
+      "ref": "trooper",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 14,
+      "y": 8,
+      "facing": "southwest",
+      "note": "Drops whatever its chassis says. No placement override — this is the archetype case."
+    },
+    {
+      "ref": "elite",
+      "definitionId": "heavyEnforcer",
+      "teamId": "loyalist",
+      "x": 16,
+      "y": 6,
+      "facing": "southwest",
+      "note": "Its chassis names the elite table, which pulls in the shared restricted pool."
+    },
+    {
+      "ref": "namedCaptain",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 17,
+      "y": 11,
+      "facing": "southwest",
+      "dropTableId": "namedCaptainCache",
+      "note": "The same chassis as the ordinary trooper. Only the placement differs, and that is the entire reason a placement may override a drop table: a named officer should not need a duplicated unit definition to be worth hunting."
+    },
+    {
+      "ref": "bystander",
+      "definitionId": "rifleGrunt",
+      "teamId": "loyalist",
+      "x": 20,
+      "y": 15,
+      "facing": "southwest",
+      "note": "Parked out of the way and expected to survive, so a test can prove that being present is not the same as being defeated."
+    }
+  ],
+  "objective": {
+    "type": "defeatAllEnemies",
+    "text": "Clear the bench",
+    "teamId": "sectionSeven",
+    "opposingTeamId": "loyalist"
+  },
+  "rewards": {
+    "clear": "rewardBenchClear",
+    "firstClear": "rewardBenchFirstClear"
+  }
+}

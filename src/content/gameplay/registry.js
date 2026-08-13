@@ -29,6 +29,8 @@ import resources from "./resources.json";
 import reactions from "./reactions.json";
 import combatLinks from "./combat-links.json";
 import fixtures from "./fixtures.json";
+import materials from "./materials.json";
+import lootTables from "./loot-tables.json";
 
 export const GAMEPLAY_DRAFT_STORAGE_KEY = "statuszero.gameplay.draft";
 
@@ -44,7 +46,9 @@ const CANONICAL_FILES = {
   resources,
   reactions,
   combatLinks,
-  fixtures
+  fixtures,
+  materials,
+  lootTables
 };
 
 /** The data exactly as it ships, before any draft. */

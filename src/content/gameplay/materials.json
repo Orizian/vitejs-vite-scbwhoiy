@@ -1,0 +1,38 @@
+{
+  "format": "statuszero.gameplay",
+  "formatVersion": 1,
+  "registry": "materials",
+  "description": "Stackable salvage. Not equipment — a material is never fitted to a frame, it accumulates as a quantity and waits for something to consume it. Crafting, upgrades and trading are all future consumers; the registry exists now so loot authored today does not have to be rewritten when they arrive.",
+  "entries": {
+    "classifiedOptics": {
+      "name": "Classified Optics",
+      "description": "A sensor head with a serial number that is not supposed to exist. Worth more intact than the frame it came out of.",
+      "glyph": "◎",
+      "tags": [
+        "salvage",
+        "restricted"
+      ],
+      "tier": 2
+    },
+    "prototypeAlloy": {
+      "name": "Prototype Alloy",
+      "description": "Plate stock from a production run that was never approved. It does not appear on any parts list, which is precisely why it is worth carrying home.",
+      "glyph": "◈",
+      "tags": [
+        "salvage",
+        "prototype"
+      ],
+      "tier": 3
+    },
+    "servoAssembly": {
+      "name": "Servo Assembly",
+      "description": "Actuator packs cut out of a wrecked drive train. Common enough that every salvage crew has a crate of them and nobody counts.",
+      "glyph": "⚙",
+      "tags": [
+        "salvage",
+        "common"
+      ],
+      "tier": 1
+    }
+  }
+}

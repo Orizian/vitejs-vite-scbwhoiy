@@ -57,6 +57,7 @@ export const REGISTRY_KINDS = {
       "abilities",
       "defaultAbilityId",
       "aiProfile",
+      "dropTableId",
       "perception",
       "defaultEquipment"
     ]
@@ -277,6 +278,33 @@ export const REGISTRY_KINDS = {
       "stacks",
       "triggerTiles"
     ]
+  },
+
+  materials: {
+    id: "materials",
+    label: "Materials",
+    singular: "material",
+    path: "src/content/gameplay/materials.json",
+    summary:
+      "Stackable salvage. Not equipment — a material is never fitted to a " +
+      "frame, it accumulates as a quantity and waits for something to consume " +
+      "it. Crafting, upgrades and trading are all future consumers; the " +
+      "registry exists now so loot authored today does not have to be " +
+      "rewritten when they arrive.",
+    fieldOrder: ["name", "description", "glyph", "tags", "tier"]
+  },
+
+  lootTables: {
+    id: "lootTables",
+    label: "Loot tables",
+    singular: "loot table",
+    path: "src/content/gameplay/loot-tables.json",
+    summary:
+      "What a reward source can pay. A table is reusable and referenced by " +
+      "id: a mission names one for its clear reward, a chassis names one as " +
+      "its default salvage, a specific placement names one to make a named " +
+      "enemy worth hunting. `guaranteed` always pays; `pools` roll.",
+    fieldOrder: ["name", "description", "tags", "guaranteed", "pools"]
   }
 };
 
