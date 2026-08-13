@@ -103,6 +103,10 @@ export const EQUIPMENT_SLOTS = ["primaryWeapon", "armor", "utilitySystem", "core
 
 export const EQUIPMENT_IDS = Object.keys(GAMEPLAY_CONTENT.equipment).sort();
 
+/** Authored loot tables, for the mission editor's drop selectors. */
+export const LOOT_TABLE_IDS = Object.keys(GAMEPLAY_CONTENT.lootTables).sort();
+export const MATERIAL_IDS = Object.keys(GAMEPLAY_CONTENT.materials).sort();
+
 export const FACINGS = ["northeast", "southeast", "southwest", "northwest"];
 
 /** Team presets. The engine treats `teamId` as the whole hostility model

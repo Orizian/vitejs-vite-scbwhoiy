@@ -27,6 +27,7 @@ import {
   ABILITY_IDS,
   STATUS_IDS,
   EQUIPMENT_IDS,
+  LOOT_TABLE_IDS,
   EQUIPMENT_SLOTS,
   AI_PROFILE_IDS,
   FACINGS,
@@ -619,6 +620,21 @@ export function validateMission(mission, catalog) {
     push(warnings, "Exactly one team should be human-controlled.");
   }
 
+  /* --- rewards ---
+   *
+   * The mission owns what it pays, so a dangling table here is a mission
+   * error rather than a gameplay-registry one: the file that names it is the
+   * file that has to be fixed. */
+  for (const slot of ["clear", "firstClear"]) {
+    const tableId = m.rewards[slot];
+    if (tableId == null) continue;
+    if (typeof tableId !== "string") {
+      push(errors, 'Mission reward "' + slot + '" must be a loot table id.');
+    } else if (!LOOT_TABLE_IDS.includes(tableId)) {
+      push(errors, 'Mission ' + slot + ' reward names unknown loot table "' + tableId + '".');
+    }
+  }
+
   /* --- units --- */
   const refs = new Set();
   const occupied = new Map();
@@ -631,6 +647,9 @@ export function validateMission(mission, catalog) {
     }
     if (!teamIds.has(unit.teamId)) {
       push(errors, label + ' is on unknown team "' + unit.teamId + '".');
+    }
+    if (unit.dropTableId && !LOOT_TABLE_IDS.includes(unit.dropTableId)) {
+      push(errors, label + ' drops unknown loot table "' + unit.dropTableId + '".');
     }
     for (const slot of Object.keys(unit.equipment || {})) {
       const equipmentId = unit.equipment[slot];

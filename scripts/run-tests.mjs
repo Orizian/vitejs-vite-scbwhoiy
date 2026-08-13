@@ -36,7 +36,15 @@ import { setTimeout as sleep } from "node:timers/promises";
  * diagnostic message is English, not a special case, and a tripwire that cries
  * about prose is one people learn to skip.
  * -------------------------------------------------------------*/
-const GENERIC_DIRS = ["src/combat", "src/reactions", "src/mission", "src/perception", "src/scene"];
+const GENERIC_DIRS = [
+  "src/combat",
+  "src/reactions",
+  "src/mission",
+  "src/perception",
+  "src/scene",
+  // The reward pipeline resolves loot without knowing what any of it is.
+  "src/campaign"
+];
 
 /* Operator names, and the ids that belong to one operator's kit.
  *
@@ -47,6 +55,20 @@ const GENERIC_DIRS = ["src/combat", "src/reactions", "src/mission", "src/percept
  * is deliberately not here — engine code must not learn it either, and the way
  * to guarantee that is for the engine never to see a name at all. */
 const FORBIDDEN_NAMES = [
+  // Reward content. A loot pipeline that mentions a material, a table or a
+  // named enemy has grown the special case the whole architecture exists to
+  // avoid — the next unique drop would need a second one.
+  "servoAssembly",
+  "classifiedOptics",
+  "prototypeAlloy",
+  "standardSalvage",
+  "eliteSalvage",
+  "restrictedTechnology",
+  "namedCaptainCache",
+  "rewardBenchClear",
+  "rewardBenchFirstClear",
+  "overclockCore",
+  "reactiveArmor",
   "vale",
   "kell",
   "nyx",

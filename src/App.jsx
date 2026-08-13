@@ -61,11 +61,16 @@ import {
 import {
   planRewards,
   applyRewards,
+  resolveLootTable,
   receiptIdFor,
   claimKeyFor,
+  rollKey,
   tablesGranting,
+  validateLootTable,
+  findTableCycles,
   GRANT_KINDS,
-  CLAIM_POLICIES
+  CLAIM_POLICIES,
+  SOURCE_KINDS
 } from "./campaign/rewards.js";
 import {
   EFFECT_SCALING_SOURCE_IDS,
@@ -22294,19 +22299,24 @@ function missionChapterAfter(mission, flags) {
 }
 
 /** Post-mission summary shown on the results screen. */
-function createMissionResultModel(campaign, missionId, outcome) {
+function createMissionResultModel(campaign, missionId, outcome, receipt) {
   const mission = CAMPAIGN.missions[missionId];
   const victory = outcome && outcome.victory === true;
   const conditions = (outcome && outcome.conditions && outcome.conditions.byOperator) || {};
+  const paid = victory ? receipt || null : null;
   return {
     missionId,
     missionName: mission ? mission.name : missionId,
     victory,
     activations: outcome ? outcome.activations : 0,
+    // The receipt the pipeline actually produced, grouped for display. The
+    // screen renders what was paid rather than re-deriving what should have
+    // been — there is one calculator, and this is not it.
+    reward: paid ? describeReceiptForDisplay(paid) : null,
     rewards: victory && mission ? mission.rewards : { supplies: 0, funds: 0, intel: 0 },
-    equipment: victory && mission && mission.rewards.equipment ? mission.rewards.equipment : [],
-    recruits: victory && mission ? (mission.recruits || []).map((id) => CAMPAIGN.operators[id]) : [],
-    contacts: victory && mission ? (mission.contacts || []).map((id) => CAMPAIGN.contacts[id]) : [],
+    equipment: victory && mission && mission.rewards && mission.rewards.equipment ? mission.rewards.equipment : [],
+    recruits: victory && mission ? (mission.recruits || []).map((id) => CAMPAIGN.operators[id]).filter(Boolean) : [],
+    contacts: victory && mission ? (mission.contacts || []).map((id) => CAMPAIGN.contacts[id]).filter(Boolean) : [],
     unlocked: victory && mission ? (mission.unlocks || []).map((id) => CAMPAIGN.missions[id].name) : [],
     conditions: Object.keys(conditions).map((operatorId) => ({
       operatorId,
@@ -22321,7 +22331,48 @@ function createMissionResultModel(campaign, missionId, outcome) {
       { outcome }
     ),
     retryable: !victory,
-    prototypeComplete: victory && (mission.grantsFlags || []).includes("prototypeComplete")
+    prototypeComplete: victory && !!mission && (mission.grantsFlags || []).includes("prototypeComplete")
+  };
+}
+
+/**
+ * A receipt, grouped the way a player reads it: what the operation paid, and
+ * what came off the things you destroyed.
+ *
+ * Skipped lines are carried through with their reason, because "you already
+ * have this one" is information a player needs in order to understand why a
+ * replay paid less than the first clear did.
+ */
+function describeReceiptForDisplay(receipt) {
+  const nameOf = (line) => {
+    if (line.kind === "equipment") return (CONTENT.equipment[line.itemId] || {}).name || line.itemId;
+    if (line.kind === "material") return (MATERIALS[line.itemId] || {}).name || line.itemId;
+    return line.itemId;
+  };
+  const toEntry = (line) => ({
+    kind: line.kind,
+    itemId: line.itemId,
+    name: nameOf(line),
+    quantity: line.quantity,
+    sourceKind: line.sourceKind,
+    sourceLabel: line.sourceLabel || line.sourceId,
+    tableId: line.tableId,
+    entryId: line.entryId,
+    firstClear: line.sourceKind === "firstClear",
+    skipped: line.skipped || null
+  });
+  const granted = (receipt.granted || []).map(toEntry);
+  return {
+    receiptId: receipt.receiptId,
+    attempt: receipt.attempt,
+    mission: granted.filter((entry) => entry.sourceKind !== "unitDefeated"),
+    salvage: granted.filter((entry) => entry.sourceKind === "unitDefeated"),
+    // Only the refusals a player would otherwise find confusing. A weight that
+    // lost a roll is not shown; a unique they already own is.
+    withheld: (receipt.skipped || [])
+      .filter((line) => line.skipped === "alreadyClaimed")
+      .map(toEntry),
+    empty: !granted.length
   };
 }
 
@@ -22395,8 +22446,8 @@ function missionRewardTables(missionId) {
  */
 function dropTableForSource(missionId, source) {
   const file = MISSION_CONTENT.missions ? MISSION_CONTENT.missions[missionId] : null;
-  const placement = file && (file.units || []).find((unit) => unit.ref === source.ref);
-  if (placement && placement.dropTableId) return placement.dropTableId;
+  const override = file && file.dropTableByRef && file.dropTableByRef[source.ref];
+  if (override) return override;
   const definition = CONTENT.units[source.definitionId];
   return (definition && definition.dropTableId) || null;
 }
@@ -31710,6 +31761,552 @@ test("Tactical language", "Asking about a balance is free", () => {
   for (let i = 0; i < 2000; i += 1) evaluateConditionsPure(context, condition);
   const per = (performance.now() - started) / 2000;
   assert(per < 0.05, "one balance question took " + per.toFixed(4) + "ms");
+});
+
+/* ---------------------------------------------------------------
+ * REWARDS
+ *
+ * What a mission pays, what a defeated enemy leaves, and the rules for how
+ * often either may be collected. The proofs that matter here are the ones
+ * about *identity*: the same attempt pays the same loot however many times it
+ * is resolved, a new attempt may pay again, and a unique reward taken once
+ * stays taken across a save.
+ * -------------------------------------------------------------*/
+
+const REWARD_MISSION = "fixture-reward-bench";
+
+/** A campaign that has attempted the bench once and not yet cleared it. */
+function rewardCampaign(attempt) {
+  const base = createCampaignState();
+  return { ...base, attempts: { ...base.attempts, [REWARD_MISSION]: attempt == null ? 1 : attempt } };
+}
+
+/** Everything the bench's hostiles are, as a defeated-source list. */
+function benchDefeated(refs) {
+  const encounter = CONTENT.encounters[MISSION_CONTENT.missions[REWARD_MISSION].encounterId];
+  return (refs || []).map((ref) => {
+    const placement = encounter.units.find((unit) => (unit.ref || unit.id) === ref);
+    return {
+      ref,
+      definitionId: placement.definitionId,
+      teamId: placement.teamId,
+      label: ref
+    };
+  });
+}
+
+function benchOutcome(refs) {
+  return { victory: true, activations: 12, conditions: { byOperator: {} }, facts: {}, defeated: benchDefeated(refs) };
+}
+
+const linesFor = (receipt, kind) => receipt.granted.filter((line) => line.kind === kind);
+const quantityOf = (receipt, kind, itemId) =>
+  receipt.granted
+    .filter((line) => line.kind === kind && line.itemId === itemId)
+    .reduce((sum, line) => sum + line.quantity, 0);
+
+test("Rewards", "A mission owns what clearing it is worth", () => {
+  const file = MISSION_CONTENT.missions[REWARD_MISSION];
+  assertEqual(file.rewards.clear, "rewardBenchClear", "the mission file names its own clear reward");
+  assertEqual(file.rewards.firstClear, "rewardBenchFirstClear");
+
+  const receipt = planMissionRewards(rewardCampaign(1), REWARD_MISSION, benchOutcome([]));
+  assertEqual(quantityOf(receipt, "currency", "funds"), 40);
+  assertEqual(quantityOf(receipt, "currency", "supplies"), 6);
+  assertEqual(quantityOf(receipt, "currency", "intel"), 2, "and the first clear pays on top");
+});
+
+test("Rewards", "A guaranteed grant always lands, and a pool rolls", () => {
+  const receipt = planMissionRewards(rewardCampaign(1), REWARD_MISSION, benchOutcome(["elite"]));
+  // The elite table guarantees two servo assemblies and pulls in the shared
+  // restricted pool, which rolls exactly once.
+  assertEqual(quantityOf(receipt, "material", "servoAssembly"), 2, "guaranteed lands in full");
+  const rolled = receipt.granted.filter((line) => line.roll && line.tableId === "restrictedTechnology");
+  assertEqual(rolled.length, 1, "one roll, one line");
+  assert(rolled[0].roll.rollKey.includes(REWARD_MISSION), "and the roll names its key: " + rolled[0].roll.rollKey);
+});
+
+test("Rewards", "The same attempt always rolls the same loot", () => {
+  const outcome = benchOutcome(["elite", "namedCaptain"]);
+  const once = planMissionRewards(rewardCampaign(3), REWARD_MISSION, outcome);
+  const twice = planMissionRewards(rewardCampaign(3), REWARD_MISSION, outcome);
+  assertEqual(
+    JSON.stringify(once.granted),
+    JSON.stringify(twice.granted),
+    "planning is a pure function of identity, not of history"
+  );
+  // And it does not depend on a battle's random stream having advanced.
+  assertEqual(once.receiptId, "fixture-reward-bench#3");
+});
+
+test("Rewards", "A different attempt may roll differently", () => {
+  const outcome = benchOutcome(["elite"]);
+  const rolls = [];
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    const receipt = planMissionRewards(rewardCampaign(attempt), REWARD_MISSION, outcome);
+    const rolled = receipt.granted.find((line) => line.roll);
+    rolls.push(rolled ? rolled.entryId : "-");
+  }
+  assert(new Set(rolls).size > 1, "twelve attempts produced only " + rolls.join(","));
+});
+
+test("Rewards", "A defeated source pays; a surviving one does not", () => {
+  const campaign = rewardCampaign(1);
+  const survived = planMissionRewards(campaign, REWARD_MISSION, benchOutcome([]));
+  assertEqual(
+    survived.granted.filter((line) => line.sourceKind === "unitDefeated").length,
+    0,
+    "nothing was destroyed, so nothing was salvaged"
+  );
+
+  const killed = planMissionRewards(campaign, REWARD_MISSION, benchOutcome(["trooper"]));
+  assertEqual(quantityOf(killed, "material", "servoAssembly"), 1, "a defeated trooper is worth its chassis table");
+});
+
+test("Rewards", "A chassis pays its archetype's salvage without being named anywhere", () => {
+  assertEqual(
+    CONTENT.units.rifleGrunt.dropTableId,
+    "standardSalvage",
+    "the drop lives on the unit definition, as data"
+  );
+  const receipt = planMissionRewards(rewardCampaign(1), REWARD_MISSION, benchOutcome(["trooper"]));
+  const line = receipt.granted.find((entry) => entry.sourceKind === "unitDefeated");
+  assertEqual(line.tableId, "standardSalvage");
+  assertEqual(line.sourceId, "trooper", "and the receipt says which placement it came off");
+});
+
+test("Rewards", "A placement overrides its chassis, so a named enemy is worth hunting", () => {
+  const file = MISSION_CONTENT.missions[REWARD_MISSION];
+  const encounter = CONTENT.encounters[file.encounterId];
+  const at = (ref) => encounter.units.find((unit) => (unit.ref || unit.id) === ref);
+  assertEqual(at("namedCaptain").definitionId, at("trooper").definitionId, "the same chassis — that is the point");
+  assertEqual(file.dropTableByRef.namedCaptain, "namedCaptainCache");
+  assertEqual(file.dropTableByRef.trooper, undefined, "and the ordinary one overrides nothing");
+
+  const receipt = planMissionRewards(rewardCampaign(1), REWARD_MISSION, benchOutcome(["namedCaptain"]));
+  const fromCaptain = linesFor(receipt, "equipment").filter((line) => line.sourceId === "namedCaptain");
+  assert(fromCaptain.length, "the captain carries something");
+  assertEqual(fromCaptain[0].tableId, "namedCaptainCache");
+  assertEqual(fromCaptain[0].sourceKind, "unitDefeated", "provenance survives to the receipt");
+});
+
+test("Rewards", "One receipt can carry currency, equipment and materials at once", () => {
+  const receipt = planMissionRewards(
+    rewardCampaign(1),
+    REWARD_MISSION,
+    benchOutcome(["trooper", "elite", "namedCaptain"])
+  );
+  assert(linesFor(receipt, "currency").length, "currency");
+  assert(linesFor(receipt, "equipment").length, "equipment");
+  assert(linesFor(receipt, "material").length, "materials");
+  const sources = new Set(receipt.granted.map((line) => line.sourceKind));
+  assertEqual(
+    Array.from(sources).sort().join(","),
+    "firstClear,missionClear,unitDefeated",
+    "and every kind of source is represented"
+  );
+});
+
+test("Rewards", "Applying a receipt moves currencies, inventory and salvage", () => {
+  const campaign = rewardCampaign(1);
+  const receipt = planMissionRewards(campaign, REWARD_MISSION, benchOutcome(["trooper", "namedCaptain"]));
+  const result = applyRewards(campaign, receipt);
+  assert(result.applied);
+
+  assertEqual(result.campaign.funds, campaign.funds + 40);
+  assertEqual(result.campaign.supplies, campaign.supplies + 6);
+  assertEqual(result.campaign.intel, campaign.intel + 2);
+  assertEqual(
+    result.campaign.materials.servoAssembly,
+    1,
+    "salvage lands in its own store, not in the equipment inventory"
+  );
+  assertEqual(result.campaign.inventory.servoAssembly, undefined, "and never in the wrong one");
+  assertEqual(
+    result.campaign.inventory.overclockCore,
+    (campaign.inventory.overclockCore || 0) + 1,
+    "equipment lands as a count, which is what the inventory already was"
+  );
+});
+
+test("Rewards", "The same receipt applied twice changes nothing the second time", () => {
+  const campaign = rewardCampaign(1);
+  const receipt = planMissionRewards(campaign, REWARD_MISSION, benchOutcome(["trooper"]));
+  const once = applyRewards(campaign, receipt);
+  const twice = applyRewards(once.campaign, receipt);
+
+  assertEqual(twice.applied, false);
+  assertEqual(twice.reason, "alreadyApplied");
+  assertEqual(twice.campaign.funds, once.campaign.funds, "currencies accumulate, so this is the dangerous one");
+  assertEqual(twice.campaign.materials.servoAssembly, once.campaign.materials.servoAssembly);
+  assertEqual(
+    JSON.stringify(twice.campaign.inventory),
+    JSON.stringify(once.campaign.inventory)
+  );
+});
+
+test("Rewards", "A remount cannot double-pay, but a genuine replay can pay again", () => {
+  const first = rewardCampaign(1);
+  const receipt = planMissionRewards(first, REWARD_MISSION, benchOutcome(["trooper"]));
+  let campaign = applyRewards(first, receipt).campaign;
+  // Three more finalize passes for the same attempt — a remount, a reload and
+  // an impatient second click all look exactly like this.
+  for (let i = 0; i < 3; i += 1) campaign = applyRewards(campaign, receipt).campaign;
+  assertEqual(campaign.materials.servoAssembly, 1, "one kill, one servo");
+
+  // A later attempt is a different receipt id, and is allowed to pay.
+  const replayCampaign = { ...campaign, attempts: { ...campaign.attempts, [REWARD_MISSION]: 2 } };
+  const replayReceipt = planMissionRewards(replayCampaign, REWARD_MISSION, benchOutcome(["trooper"]));
+  assert(replayReceipt.receiptId !== receipt.receiptId, "a new attempt is a new receipt");
+  const after = applyRewards(replayCampaign, replayReceipt);
+  assertEqual(after.applied, true);
+  assertEqual(after.campaign.materials.servoAssembly, 2, "repeatable salvage repeats");
+});
+
+test("Rewards", "A once-per-campaign reward is taken exactly once, ever", () => {
+  const campaign = rewardCampaign(1);
+  const outcome = benchOutcome(["namedCaptain"]);
+  const first = applyRewards(campaign, planMissionRewards(campaign, REWARD_MISSION, outcome));
+  assertEqual(first.campaign.inventory.overclockCore, 1, "the captain's signature core");
+  const claimKeys = Object.keys(first.campaign.rewardClaims);
+  assert(
+    claimKeys.some((key) => key.includes("namedCaptainCache") && key.includes("signatureCore")),
+    "the claim is keyed by the authored entry: " + claimKeys.join(", ")
+  );
+
+  // A later attempt against the same captain.
+  const replayCampaign = { ...first.campaign, attempts: { [REWARD_MISSION]: 2 } };
+  const replayReceipt = planMissionRewards(replayCampaign, REWARD_MISSION, outcome);
+  assertEqual(
+    replayReceipt.granted.filter((line) => line.entryId === "signatureCore").length,
+    0,
+    "the unique core is not offered a second time"
+  );
+  const refused = replayReceipt.skipped.find((line) => line.entryId === "signatureCore");
+  assert(refused, "and the refusal is reported rather than silently dropped");
+  assertEqual(refused.skipped, "alreadyClaimed");
+
+  const after = applyRewards(replayCampaign, replayReceipt);
+  assertEqual(after.campaign.inventory.overclockCore, 1, "still exactly one");
+  assertEqual(
+    after.campaign.materials.prototypeAlloy,
+    (first.campaign.materials.prototypeAlloy || 0) + 1,
+    "while the repeatable half of the same table pays again"
+  );
+});
+
+test("Rewards", "A claim key survives a save and a load", () => {
+  const campaign = rewardCampaign(1);
+  const applied = applyRewards(campaign, planMissionRewards(campaign, REWARD_MISSION, benchOutcome(["namedCaptain"])));
+  const reloaded = loadCampaign(saveCampaign(applied.campaign));
+  assert(reloaded, "the save is readable");
+  assertEqual(
+    JSON.stringify(reloaded.rewardClaims),
+    JSON.stringify(applied.campaign.rewardClaims),
+    "claims persist"
+  );
+  assertEqual(reloaded.materials.prototypeAlloy, applied.campaign.materials.prototypeAlloy, "so do materials");
+  assertEqual(reloaded.inventory.overclockCore, 1, "so does the equipment");
+  assertEqual(
+    JSON.stringify(reloaded.appliedReceipts),
+    JSON.stringify(applied.campaign.appliedReceipts),
+    "and so does the record of what has been paid, which is what stops a reload re-paying"
+  );
+
+  // The reloaded campaign still refuses the unique.
+  const replay = { ...reloaded, attempts: { [REWARD_MISSION]: 2 } };
+  const receipt = planMissionRewards(replay, REWARD_MISSION, benchOutcome(["namedCaptain"]));
+  assertEqual(receipt.granted.filter((line) => line.entryId === "signatureCore").length, 0);
+});
+
+test("Rewards", "A save written before rewards existed loads with empty stores", () => {
+  const legacy = {
+    version: 4,
+    supplies: 30,
+    funds: 120,
+    intel: 4,
+    inventory: { plateArmor: 2 },
+    completed: ["act1-01-hollowmere-perimeter"],
+    roster: {
+      vale: { operatorId: "vale", chassis: "assaultMech", condition: 88, xp: 25, rank: 1, perkId: null, loadout: {} }
+    }
+  };
+  const loaded = loadCampaign(JSON.stringify(legacy));
+  assert(loaded, "it still loads");
+  assertEqual(JSON.stringify(loaded.materials), "{}", "no salvage is invented");
+  assertEqual(JSON.stringify(loaded.rewardClaims), "{}", "no claims are invented");
+  assertEqual(JSON.stringify(loaded.appliedReceipts), "{}");
+  assertEqual(loaded.funds, 120, "and existing progression is untouched");
+  assertEqual(loaded.inventory.plateArmor, 2);
+  assertEqual(loaded.roster.vale.condition, 88);
+  assertEqual(loaded.version, CAMPAIGN_SAVE_VERSION, "stamped forward");
+  assert(
+    loaded.completed.includes("act1-01-hollowmere-perimeter"),
+    "a mission already cleared stays cleared, so its first clear is correctly already spent"
+  );
+});
+
+test("Rewards", "Legacy campaign reward literals still pay, through the same pipeline", () => {
+  // The Act One missions author their rewards in the CAMPAIGN literal and have
+  // no reward block of their own yet. They must keep working, and must do so
+  // as ordinary grants rather than through a second code path.
+  const missionId = firstMissionId();
+  const mission = CAMPAIGN.missions[missionId];
+  assert(mission.rewards, "this mission still uses the literal");
+  const campaign = { ...createCampaignState(), attempts: { [missionId]: 1 } };
+  const receipt = planMissionRewards(campaign, missionId, {
+    victory: true, activations: 5, conditions: { byOperator: {} }, facts: {}, defeated: []
+  });
+  assertEqual(
+    quantityOf(receipt, "currency", "supplies"),
+    mission.rewards.supplies,
+    "the literal's supplies arrive as a currency grant"
+  );
+  assertEqual(quantityOf(receipt, "currency", "funds"), mission.rewards.funds);
+  for (const line of receipt.granted) {
+    assert(line.tableId.startsWith("legacy:"), "and it is visibly an adapter, not canonical content");
+  }
+});
+
+test("Rewards", "Clearing a mission for the first time pays and progresses", () => {
+  const missionId = firstMissionId();
+  const before = beginMission(createCampaignState(), missionId);
+  const mission = CAMPAIGN.missions[missionId];
+  const after = resolveMissionOutcome(before, missionId, {
+    victory: true, activations: 9, conditions: { byOperator: {} }, facts: {}, defeated: []
+  });
+  assert(after.completed.includes(missionId), "story progress happened");
+  assertEqual(after.funds, before.funds + mission.rewards.funds, "and so did payment");
+  assertEqual(
+    Object.keys(after.appliedReceipts).length,
+    1,
+    "recorded as paid, so a second finalize cannot repeat it"
+  );
+});
+
+test("Rewards", "Clearing a mission again pays without re-running the story", () => {
+  const missionId = firstMissionId();
+  const first = resolveMissionOutcome(beginMission(createCampaignState(), missionId), missionId, {
+    victory: true, activations: 9, conditions: { byOperator: {} }, facts: {}, defeated: []
+  });
+  const unlockedBefore = first.available.slice().sort().join(",");
+  const flagsBefore = JSON.stringify(first.flags);
+
+  const replayStart = beginMission({ ...first, available: first.available.concat(missionId) }, missionId);
+  const replayed = resolveMissionOutcome(replayStart, missionId, {
+    victory: true, activations: 9, conditions: { byOperator: {} }, facts: {}, defeated: []
+  });
+
+  assertEqual(replayed.completed.filter((id) => id === missionId).length, 1, "completed once, still once");
+  assertEqual(JSON.stringify(replayed.flags), flagsBefore, "no flag fires twice");
+  assertEqual(
+    replayed.available.filter((id) => id !== missionId).slice().sort().join(","),
+    unlockedBefore,
+    "nothing new unlocks on a repeat clear"
+  );
+  // The legacy adapter is first-clear only, which is exactly what the game did
+  // before this phase, so a replay of a legacy mission correctly pays nothing.
+  assertEqual(replayed.funds, first.funds, "and a legacy mission pays its literal once");
+});
+
+test("Rewards", "A failed attempt pays nothing at all", () => {
+  const missionId = firstMissionId();
+  const before = beginMission(createCampaignState(), missionId);
+  const after = resolveMissionOutcome(before, missionId, { victory: false });
+  assertEqual(after.funds, before.funds);
+  assertEqual(after.supplies, before.supplies);
+  assertEqual(JSON.stringify(after.materials || {}), "{}");
+  assertEqual(Object.keys(after.appliedReceipts || {}).length, 0, "nothing was resolved, so nothing was paid");
+  assert(!after.completed.includes(missionId), "and it stays available");
+});
+
+test("Rewards", "Every receipt line says where it came from", () => {
+  const receipt = planMissionRewards(
+    rewardCampaign(1),
+    REWARD_MISSION,
+    benchOutcome(["trooper", "namedCaptain"])
+  );
+  for (const line of receipt.granted) {
+    assert(SOURCE_KINDS.includes(line.sourceKind), "a source kind");
+    assert(line.sourceId, "a source id");
+    assert(line.tableId, "the table that paid it");
+    assert(line.entryId, "and the authored entry, which is what claims are keyed by");
+    assertEqual(line.missionId, REWARD_MISSION);
+    assertEqual(line.attempt, 1);
+  }
+  const captainLine = receipt.granted.find((line) => line.sourceId === "namedCaptain");
+  assertEqual(captainLine.sourceKind, "unitDefeated");
+  assertEqual(captainLine.sourceLabel, "namedCaptain", "and a label a results screen can print");
+});
+
+test("Rewards", "Which sources can drop a given item is derivable from content alone", () => {
+  // The reverse index a future "where does this drop?" screen needs. It is a
+  // derivation rather than authored text on the item, so it cannot go stale.
+  const tables = tablesGranting(GAMEPLAY_CONTENT.lootTables, "material", "prototypeAlloy");
+  assert(tables.includes("restrictedTechnology"), "the pool that rolls it");
+  assert(tables.includes("eliteSalvage"), "and the table that references that pool: " + tables.join(","));
+  assert(tables.includes("namedCaptainCache"), "and the one that grants it directly");
+
+  // From tables to placements, using only canonical content.
+  const sources = [];
+  for (const [missionId, file] of Object.entries(MISSION_CONTENT.missions)) {
+    const encounter = CONTENT.encounters[file.encounterId];
+    for (const unit of (encounter && encounter.units) || []) {
+      const ref = unit.ref || unit.id;
+      const tableId =
+        (file.dropTableByRef || {})[ref] || (GAMEPLAY_CONTENT.units[unit.definitionId] || {}).dropTableId;
+      if (tableId && tables.includes(tableId)) sources.push(missionId + ":" + ref);
+    }
+  }
+  assert(
+    sources.includes(REWARD_MISSION + ":namedCaptain"),
+    "the captain is discoverable as a source: " + sources.join(", ")
+  );
+});
+
+test("Rewards", "Validation refuses a malformed table", () => {
+  const refs = { equipmentIds: ["plateArmor"], materialIds: ["servoAssembly"], currencyIds: ["funds"], tableIds: ["other"] };
+  const problems = (table) => validateLootTable(table, "t", refs);
+  const complains = (table, needle) =>
+    assert(
+      problems(table).some((message) => message.includes(needle)),
+      needle + " went unreported: " + problems(table).join(" | ")
+    );
+
+  complains({ guaranteed: [{ id: "a", kind: "equipment", itemId: "ghost", quantity: 1 }] }, "ghost");
+  complains({ guaranteed: [{ id: "a", kind: "material", itemId: "ghost", quantity: 1 }] }, "ghost");
+  complains({ guaranteed: [{ id: "a", kind: "currency", itemId: "ghost", quantity: 1 }] }, "ghost");
+  complains({ guaranteed: [{ id: "a", kind: "wishes", itemId: "funds", quantity: 1 }] }, "wishes");
+  complains({ guaranteed: [{ id: "a", kind: "currency", itemId: "funds", quantity: 0 }] }, "positive whole quantity");
+  complains({ guaranteed: [{ id: "a", kind: "currency", itemId: "funds", claim: "sometimes" }] }, "sometimes");
+  complains({ guaranteed: [{ kind: "currency", itemId: "funds", quantity: 1 }] }, "stable id");
+  complains(
+    {
+      guaranteed: [
+        { id: "dupe", kind: "currency", itemId: "funds", quantity: 1 },
+        { id: "dupe", kind: "currency", itemId: "funds", quantity: 1 }
+      ]
+    },
+    "reuses entry id"
+  );
+  complains({ pools: [{ id: "p", rolls: -1, entries: [] }] }, "non-negative roll count");
+  complains(
+    { pools: [{ id: "p", rolls: 1, entries: [{ id: "a", kind: "currency", itemId: "funds", quantity: 1, weight: 0 }] }] },
+    "weight of zero or less"
+  );
+  complains({ pools: [{ id: "p", rolls: 1, entries: [] }] }, "no entries");
+  complains({ guaranteed: [{ tableId: "nowhere" }] }, "nowhere");
+  complains(
+    { guaranteed: [{ tableId: "other", kind: "currency", itemId: "funds" }] },
+    "one or the other"
+  );
+});
+
+test("Rewards", "Validation refuses a cycle between tables", () => {
+  const cycles = findTableCycles({
+    a: { guaranteed: [{ tableId: "b" }] },
+    b: { guaranteed: [{ tableId: "a" }] }
+  });
+  assert(cycles.length, "the cycle is found");
+  assert(cycles[0].includes("a") && cycles[0].includes("b"), cycles[0].join("→"));
+  assertEqual(findTableCycles(GAMEPLAY_CONTENT.lootTables).length, 0, "and the shipped tables have none");
+});
+
+test("Rewards", "Validation refuses a mission naming a table that does not exist", () => {
+  const report = validateMissionForTest({ rewards: { clear: "noSuchTable" } });
+  assert(
+    report.errors.some((message) => message.includes("noSuchTable")),
+    report.errors.join(" | ")
+  );
+  const placement = validateMissionForTest({
+    units: [{ ref: "a", definitionId: "rifleGrunt", teamId: "foe", x: 2, y: 2, dropTableId: "alsoMissing" }]
+  });
+  assert(
+    placement.errors.some((message) => message.includes("alsoMissing")),
+    placement.errors.join(" | ")
+  );
+});
+
+test("Rewards", "A nested table reference resolves once and keeps its provenance", () => {
+  const receipt = planMissionRewards(rewardCampaign(1), REWARD_MISSION, benchOutcome(["elite"]));
+  const nested = receipt.granted.filter((line) => line.tableId === "restrictedTechnology");
+  assertEqual(nested.length, 1, "the referenced table contributed");
+  assertEqual(
+    nested[0].sourceId,
+    "elite",
+    "and the line still names the enemy it came off, not the table that referenced it"
+  );
+});
+
+test("Rewards", "The reward pipeline knows no item, enemy or mission by name", () => {
+  const sources = [
+    planRewards.toString(),
+    applyRewards.toString(),
+    resolveLootTable.toString(),
+    claimKeyFor.toString(),
+    rollKey.toString(),
+    collectDefeatedSources.toString(),
+    collectRewardSources.toString(),
+    dropTableForSource.toString()
+  ].join("\n");
+  const forbidden = [
+    "namedCaptain", "lootTestCaptain", "overclockCore", "prototypeAlloy", "servoAssembly",
+    "classifiedOptics", "standardSalvage", "eliteSalvage", "namedCaptainCache",
+    "fixture-reward-bench", "rifleGrunt", "vale", "kell"
+  ];
+  for (const word of forbidden) {
+    assert(
+      !new RegExp('"' + word + '"|\'' + word + '\'').test(sources),
+      'the reward pipeline names "' + word + '"'
+    );
+  }
+  // And no randomness that is not derived from a key.
+  assert(!/Math\.random/.test(sources), "reward resolution must never call Math.random");
+});
+
+test("Rewards", "Resolving a whole receipt is cheap", () => {
+  const outcome = benchOutcome(["trooper", "elite", "namedCaptain"]);
+  const campaign = rewardCampaign(1);
+  const started = performance.now();
+  for (let i = 0; i < 500; i += 1) planMissionRewards(campaign, REWARD_MISSION, outcome);
+  const per = (performance.now() - started) / 500;
+  assert(per < 1, "planning a receipt took " + per.toFixed(4) + "ms");
+});
+
+test("Rewards", "The results model shows what was paid, grouped by where it came from", () => {
+  const campaign = rewardCampaign(1);
+  const outcome = benchOutcome(["trooper", "namedCaptain"]);
+  const receipt = planMissionRewards(campaign, REWARD_MISSION, outcome);
+  const model = createMissionResultModel(campaign, REWARD_MISSION, outcome, receipt);
+  assert(model.reward, "the model carries the receipt");
+  assertEqual(model.reward.receiptId, receipt.receiptId);
+  assert(model.reward.mission.length, "the operation's own reward");
+  assert(model.reward.salvage.length, "and what came off the wrecks");
+  for (const entry of model.reward.salvage) {
+    assert(entry.sourceLabel, "each salvage line names its source for the player");
+  }
+  assert(
+    model.reward.mission.some((entry) => entry.firstClear),
+    "and a first-clear line is marked as one"
+  );
+});
+
+test("Rewards", "Existing campaign progression is unchanged by any of this", () => {
+  // Repair, perks, equipping and the mission board all predate rewards and
+  // must behave exactly as they did.
+  let campaign = createCampaignState();
+  campaign = { ...campaign, roster: { ...campaign.roster, vale: { ...campaign.roster.vale, condition: 54 } } };
+  const cost = repairCost(campaign, "vale");
+  assert(cost > 0);
+  campaign = repairCampaignOperator(campaign, "vale");
+  assertEqual(campaign.roster.vale.condition, 100, "repair still works");
+
+  const board = createMissionBoardModel(campaign);
+  assert(board.length, "the board still lists missions");
+  assert(board.some((entry) => !entry.locked), "and something is playable");
+
+  const deployment = createCampaignDeploymentState(campaign, firstMissionId());
+  assert(deployment.candidates.length, "deployment still assembles a lance");
 });
 
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
@@ -42595,12 +43192,96 @@ function RosterScreen({ base, onBack }) {
   );
 }
 
+/**
+ * What the operation paid, from the receipt the pipeline produced.
+ *
+ * Two groups, because they answer different questions: the operation's own
+ * reward is what clearing it is worth, and salvage is what the things you
+ * destroyed were carrying. Salvage names its source, which is the whole point
+ * of replaying a mission for a particular enemy.
+ */
+function RewardPanel({ result }) {
+  const reward = result.reward;
+  const currencyRow = (entries) =>
+    entries.filter((entry) => entry.kind === "currency");
+  const itemRow = (entries) => entries.filter((entry) => entry.kind !== "currency");
+  const glyphFor = (entry) => (entry.kind === "material" ? "◈" : "🔧");
+
+  return (
+    <Panel title="Operation rewards">
+      {!reward || reward.empty ? (
+        <p className="text-[12px] text-slate-500">This operation paid nothing.</p>
+      ) : (
+        <div className="space-y-5">
+          {currencyRow(reward.mission).length ? (
+            <div className="grid grid-cols-3 gap-4 text-center">
+              {currencyRow(reward.mission).map((entry) => (
+                <div key={entry.entryId + entry.itemId} className="border border-slate-700 p-5">
+                  <p className="text-[32px] font-black text-sky-200">+{entry.quantity}</p>
+                  <p className="text-[10px] uppercase tracking-wider text-slate-500">{entry.itemId}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {itemRow(reward.mission).length ? (
+            <div className="space-y-2 text-[12px]">
+              {itemRow(reward.mission).map((entry) => (
+                <p key={entry.tableId + entry.entryId} className={entry.firstClear ? "text-amber-300" : "text-sky-300"}>
+                  {glyphFor(entry)} {entry.name}
+                  {entry.quantity > 1 ? " ×" + entry.quantity : ""}
+                  {entry.firstClear ? <span className="ml-2 text-[10px] uppercase tracking-wider">first clear</span> : null}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {reward.salvage.length ? (
+            <div>
+              <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-slate-500">Salvage</p>
+              <div className="space-y-1 text-[12px]">
+                {reward.salvage.map((entry, index) => (
+                  <p key={entry.tableId + entry.entryId + index} className="flex justify-between gap-4">
+                    <span className="text-emerald-300">
+                      {glyphFor(entry)} {entry.name}
+                      {entry.quantity > 1 ? " ×" + entry.quantity : ""}
+                    </span>
+                    <span className="text-[11px] text-slate-500">{entry.sourceLabel}</span>
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {reward.withheld.length ? (
+            <div>
+              <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-slate-600">Already recovered</p>
+              <div className="space-y-1 text-[11px] text-slate-600">
+                {reward.withheld.map((entry, index) => (
+                  <p key={entry.tableId + entry.entryId + index}>
+                    {entry.name} — taken on an earlier operation
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <div className="space-y-2 text-[12px]">
+            {result.recruits.map((recruit) => (
+              <p key={recruit.name} className="text-emerald-300">{recruit.glyph} {recruit.name} joins the resistance</p>
+            ))}
+            {result.contacts.map((contact) => (
+              <p key={contact.name} className="text-emerald-300">{contact.glyph} {contact.name} is now a contact</p>
+            ))}
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function ResultsScreen({ result, onContinue, onRetry }) {
   const civilian = result.facts && result.facts.groups ? result.facts.groups.civilians : null;
   return (
     <Screen title={result.victory ? "Mission Complete" : "Mission Failed"} subtitle={result.missionName + " · " + result.activations + " activations"} right={<>{result.retryable ? <Button onClick={onRetry}>Retry mission</Button> : null}<Button tone="primary" onClick={onContinue}>{result.prototypeComplete ? "End of prototype" : "Return to base"}</Button></>}>
       <div className="grid h-full gap-6" style={{ gridTemplateColumns: "1.2fr 0.8fr" }}>
-        <div className="space-y-6 overflow-auto pr-2">{result.victory ? <><Panel title="Operation rewards"><div className="grid grid-cols-3 gap-4 text-center"><div className="border border-slate-700 p-5"><p className="text-[32px] font-black text-sky-200">+{result.rewards.supplies}</p><p className="text-[10px] uppercase tracking-wider text-slate-500">Supplies</p></div><div className="border border-slate-700 p-5"><p className="text-[32px] font-black text-amber-200">+{result.rewards.funds}</p><p className="text-[10px] uppercase tracking-wider text-slate-500">Funds</p></div><div className="border border-slate-700 p-5"><p className="text-[32px] font-black text-emerald-200">+{result.rewards.intel || 0}</p><p className="text-[10px] uppercase tracking-wider text-slate-500">Intel</p></div></div><div className="mt-5 space-y-2 text-[12px]">{result.equipment.map((id) => <p key={id} className="text-sky-300">🔧 {CONTENT.equipment[id].name}</p>)}{result.recruits.map((recruit) => <p key={recruit.name} className="text-emerald-300">{recruit.glyph} {recruit.name} joins the resistance</p>)}{result.contacts.map((contact) => <p key={contact.name} className="text-emerald-300">{contact.glyph} {contact.name} is now a contact</p>)}</div></Panel>{civilian ? <Panel title="Hollowmere outcome"><div className="grid grid-cols-3 gap-5 text-[13px]"><div><p className="text-slate-500">Civilians attacked</p><p className="mt-2 text-[20px] text-slate-100">{civilian.attacked ? "Yes" : "No"}</p></div><div><p className="text-slate-500">Damage inflicted</p><p className="mt-2 text-[20px] text-slate-100">{civilian.damaged ? civilian.damageTaken : 0}</p></div><div><p className="text-slate-500">Transports lost</p><p className="mt-2 text-[20px] text-slate-100">{civilian.destroyed}</p></div></div></Panel> : null}</> : <div className="border border-rose-500/35 bg-rose-950/20 p-8"><p className="text-[18px] font-black uppercase tracking-wider text-rose-300">Operation failed</p><p className="mt-4 text-[13px] leading-relaxed text-slate-400">No rewards, flags, recruits, contacts, or mech damage were committed. The operation remains available.</p></div>}</div>
+        <div className="space-y-6 overflow-auto pr-2">{result.victory ? <><RewardPanel result={result} />{civilian ? <Panel title="Hollowmere outcome"><div className="grid grid-cols-3 gap-5 text-[13px]"><div><p className="text-slate-500">Civilians attacked</p><p className="mt-2 text-[20px] text-slate-100">{civilian.attacked ? "Yes" : "No"}</p></div><div><p className="text-slate-500">Damage inflicted</p><p className="mt-2 text-[20px] text-slate-100">{civilian.damaged ? civilian.damageTaken : 0}</p></div><div><p className="text-slate-500">Transports lost</p><p className="mt-2 text-[20px] text-slate-100">{civilian.destroyed}</p></div></div></Panel> : null}</> : <div className="border border-rose-500/35 bg-rose-950/20 p-8"><p className="text-[18px] font-black uppercase tracking-wider text-rose-300">Operation failed</p><p className="mt-4 text-[13px] leading-relaxed text-slate-400">No rewards, flags, recruits, contacts, or mech damage were committed. The operation remains available.</p></div>}</div>
         <Panel title="Lance condition" bodyClassName="p-0"><div className="divide-y divide-slate-800">{result.conditions.length ? result.conditions.map((entry) => <div key={entry.operatorId} className="flex items-center justify-between p-5"><span className="text-[14px] text-slate-100">{entry.name}</span><span className={(entry.condition < 40 ? "text-rose-300" : entry.condition < 75 ? "text-amber-300" : "text-emerald-300") + " text-[24px] font-black"}>{entry.condition}%</span></div>) : <p className="p-5 text-slate-600">No persistent condition report.</p>}</div></Panel>
       </div>
     </Screen>
@@ -44594,7 +45275,10 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
       victory,
       activations: battle.activationCount,
       conditions: collectMissionConditions(battle, rosterRef.current),
-      facts: collectMissionFacts(battle, missionId)
+      facts: collectMissionFacts(battle, missionId),
+      // Who is not walking away. A drop needs this: being on the board is not
+      // the same claim as having been defeated.
+      defeated: collectDefeatedSources(battle)
     };
     setPendingOutcome(outcome);
     setDeployed(false);
@@ -44605,11 +45289,15 @@ function TacticalBattleContent({ viewport, initialCampaign }) {
     const missionId = pendingMissionId;
     const outcome = providedOutcome || pendingOutcome;
     if (!missionId || !outcome) return;
-    setCampaign((current) => {
-      const resolved = resolveMissionOutcome(current, missionId, outcome);
-      setMissionResult(createMissionResultModel(resolved, missionId, outcome));
-      return resolved;
-    });
+    // Planned from the campaign as it stands *before* resolution, which is the
+    // same input `resolveMissionOutcome` plans from — deterministic keys mean
+    // both calls produce an identical receipt, so the screen shows exactly
+    // what was paid. Applying is still guarded by the receipt id, so a second
+    // finalize for the same attempt changes nothing.
+    const receipt = planMissionRewards(campaign, missionId, outcome);
+    const resolved = resolveMissionOutcome(campaign, missionId, outcome);
+    setCampaign(resolved);
+    setMissionResult(createMissionResultModel(resolved, missionId, outcome, receipt));
     setPendingOutcome(null);
     setDeployed(false);
     setScreen("results");

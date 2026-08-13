@@ -100,7 +100,17 @@ function collect() {
       campaign: compiled.campaign,
       runtimeIdByRef: compiled.runtimeIdByRef,
       preMissionScene: compiled.mission.preMissionScene || null,
-      postMissionScene: compiled.mission.postMissionScene || null
+      postMissionScene: compiled.mission.postMissionScene || null,
+      // What clearing this operation is worth, and which placements are worth
+      // something of their own. A projection rather than the whole mission:
+      // the reward layer needs exactly these two answers and nothing else
+      // about the map, the script or the terrain.
+      rewards: compiled.mission.rewards || { clear: null, firstClear: null },
+      dropTableByRef: Object.fromEntries(
+        (compiled.mission.units || [])
+          .filter((unit) => unit.dropTableId)
+          .map((unit) => [unit.ref, unit.dropTableId])
+      )
     };
     return compiled;
   };

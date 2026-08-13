@@ -3,6 +3,7 @@ import {
   TERRAIN_CATALOG,
   UNIT_CATALOG,
   AI_PROFILE_IDS,
+  LOOT_TABLE_IDS,
   FACINGS,
   SPEAKER_CATALOG,
   SCENE_KINDS,
@@ -482,6 +483,17 @@ export function UnitsPanel({
             hint="Authoring metadata for reinforcement waves. The engine has no spawn-group system yet (SPN-01), so this is currently a label only."
           >
             <Text value={selected.group} onChange={(value) => update((draft) => patchUnit(draft, selected.ref, { group: value || null }))} />
+          </Field>
+          <Field
+            label="Drops"
+            hint="What this particular placement is worth when defeated. Empty uses whatever its chassis drops — set it to make one named enemy worth hunting without duplicating a unit definition."
+          >
+            <Select
+              allowEmpty
+              value={selected.dropTableId}
+              onChange={(value) => update((draft) => patchUnit(draft, selected.ref, { dropTableId: value || null }))}
+              options={LOOT_TABLE_IDS.map((id) => ({ value: id, label: id }))}
+            />
           </Field>
           <Field label="Note">
             <Text value={selected.note} onChange={(value) => update((draft) => patchUnit(draft, selected.ref, { note: value }))} />
@@ -1432,6 +1444,38 @@ export function MissionPanel({ mission, update }) {
       </Field>
       <Field label="Summary">
         <Area rows={3} value={mission.summary} onChange={(value) => update((draft) => { draft.summary = value; })} />
+      </Field>
+      {/* The mission owns what clearing it is worth. A campaign decides when
+       *  an operation is offered; it does not get to redefine what it pays. */}
+      <Field
+        label="Clear reward"
+        hint="Paid on every successful clear, including the first. A repeatable reward is simply this one."
+      >
+        <Select
+          allowEmpty
+          value={(mission.rewards && mission.rewards.clear) || null}
+          onChange={(value) =>
+            update((draft) => {
+              draft.rewards = { ...(draft.rewards || {}), clear: value || null };
+            })
+          }
+          options={LOOT_TABLE_IDS.map((id) => ({ value: id, label: id }))}
+        />
+      </Field>
+      <Field
+        label="First-clear reward"
+        hint="Paid only the first time this operation is cleared. Entries inside it may still be repeatable — the claim policy on each entry decides, not this slot."
+      >
+        <Select
+          allowEmpty
+          value={(mission.rewards && mission.rewards.firstClear) || null}
+          onChange={(value) =>
+            update((draft) => {
+              draft.rewards = { ...(draft.rewards || {}), firstClear: value || null };
+            })
+          }
+          options={LOOT_TABLE_IDS.map((id) => ({ value: id, label: id }))}
+        />
       </Field>
     </Section>
   );

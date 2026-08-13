@@ -413,7 +413,11 @@ export function validateLootTable(raw, path, refs) {
   const where = path || "loot table";
   const problems = [];
   if (!raw || typeof raw !== "object") return [where + " must be an object."];
-  const table = normalizeLootTable(raw);
+  // Deliberately the authored data, not the normalized copy. Normalization
+  // coerces an unrecognised claim policy to the default so the runtime is
+  // safe; validating the coerced value would mean a typo silently became
+  // "repeatable" and nothing ever said so.
+  const table = raw;
   const known = refs || {};
   const seenEntryIds = new Set();
 
@@ -453,7 +457,7 @@ export function validateLootTable(raw, path, refs) {
     } else if (grant.kind === "currency" && known.currencyIds && !known.currencyIds.includes(grant.itemId)) {
       problems.push(at + ' grants unknown currency "' + grant.itemId + '".');
     }
-    const quantity = Number(grant.quantity);
+    const quantity = grant.quantity == null ? 1 : Number(grant.quantity);
     if (!Number.isFinite(quantity) || quantity <= 0 || Math.floor(quantity) !== quantity) {
       problems.push(at + " needs a positive whole quantity.");
     }
@@ -462,10 +466,10 @@ export function validateLootTable(raw, path, refs) {
     }
   };
 
-  table.guaranteed.forEach((grant, index) => checkGrant(grant, where + " guaranteed " + (index + 1)));
+  (table.guaranteed || []).forEach((grant, index) => checkGrant(grant, where + " guaranteed " + (index + 1)));
 
   const seenPoolIds = new Set();
-  table.pools.forEach((pool, poolIndex) => {
+  (table.pools || []).forEach((pool, poolIndex) => {
     const at = where + " pool " + (poolIndex + 1);
     if (pool.id) {
       if (seenPoolIds.has(pool.id)) problems.push(at + ' reuses pool id "' + pool.id + '".');
@@ -475,13 +479,14 @@ export function validateLootTable(raw, path, refs) {
     if (!Number.isFinite(rolls) || rolls < 0 || Math.floor(rolls) !== rolls) {
       problems.push(at + " needs a whole, non-negative roll count.");
     }
-    if (!pool.entries.length) {
+    const entries = pool.entries || [];
+    if (!entries.length) {
       problems.push(at + " has no entries, so its rolls can never produce anything.");
     }
     let positiveWeight = 0;
-    pool.entries.forEach((grant, index) => {
+    entries.forEach((grant, index) => {
       const entryAt = at + " entry " + (index + 1);
-      const weight = Number(grant.weight);
+      const weight = grant.weight == null ? 1 : Number(grant.weight);
       if (!Number.isFinite(weight) || weight <= 0) {
         problems.push(entryAt + " has a weight of zero or less, so it can never be rolled.");
       } else {
