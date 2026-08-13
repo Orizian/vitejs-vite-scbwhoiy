@@ -1,6 +1,6 @@
 # STATUS ZERO — Canonical Project Status
 
-> **Last updated** 2026-08-12 · **Branch** `claude/tacrpg-engine-analysis-editors-mwjxzt` · **Commit** `40633be`
+> **Last updated** 2026-08-13 · **Branch** `claude/tacrpg-engine-analysis-editors-mwjxzt` · **Commit** `2287389`
 >
 > **CURRENT status in this document is derived from code, tests and runtime
 > registries — not from design documents or conversation.** Where a feature
@@ -89,6 +89,9 @@ gameplay data) that write canonical JSON the game loads directly.
 | Perception & knowledge (5 channels, unseen→suspected→acquired) | IMPLEMENTED | `src/perception/`, 28 tests, `check:knowledge` 21/21 |
 | Stealth | **PARTIAL** | Full information architecture (concealment, signatures, per-faction contacts, scripted reveals). **No operator stealth kit** — no heat economy, no cloak durations. See STL-01. |
 | Subsystem damage | **INFRASTRUCTURE ONLY** | Statuses can remove abilities / block tags and alter sensors. Two impairment statuses authored. **Nothing in combat inflicts them** — applied only by tests and repair content. |
+| Resource-balance conditions | IMPLEMENTED | `resourceBalance` in both condition registries; unit and faction scope through one resolver; 2 shipped abilities gated on it |
+| Status-driven damage scaling | IMPLEMENTED | `targetStatus` scaling source, by id or tag, in power or multiplier mode; forecast and execution share one authority |
+| Status triggers (passives) | IMPLEMENTED | 6 moments — activation start/end, damaged, moved, kill, status applied — with counterpart targeting, causal attribution and a bounded recursion |
 
 ## Character / Operator Systems — PARTIAL
 
@@ -184,12 +187,14 @@ export/import.
 **Derived at runtime, not authored:** maps (23) and encounters (30) — mostly
 literals in `App.jsx` plus compiled mission files.
 
-**Registry inconsistency worth fixing:** four operator entries
-(`kell`, `nyx`, `reyes`, and `commander`) do not all carry a `ref`.
-`commander` has `ref: "vale"` while its key is `commander`; `kell`, `nyx` and
-`reyes` have no `ref` at all and are addressed by key. Mission and reaction
-content addresses operators by `ref`, so the two conventions are live
-simultaneously.
+**Operator addressing is now single.** An operator entry used to carry both a
+registry key and an optional `ref`, allowed to differ — and for one pilot they
+did. The entry key is now the one canonical id everywhere: campaign roster,
+deployment, mission unit refs, combat links, reaction ownership and scene
+speakers. The `ref` field is gone from the schema and its presence is a
+validation error, because a second identifier that agrees today is exactly how
+the last one survived long enough to disagree. A save written before the change
+is translated once, at load, and never again.
 
 ---
 
@@ -223,13 +228,24 @@ Every one has a handler, metadata, validator, forecaster and AI scorer —
 enforced by the architecture audit.
 
 ## Conditions & triggers
-**Effect conditions (17):** HP thresholds either side, status presence/absence,
+**Effect conditions (18):** HP thresholds either side, status presence/absence,
 alive/defeated, ally/enemy, tile empty, terrain tag, distance at most/least,
-chance.
-**Reaction conditions (29):** relationship, range, knowledge state, line of
-sight, became-exposed, status on reactor or subject, forced-vs-voluntary,
-declaration kind, redirectability, prevention reason, mission facts, and
-boolean `all`/`any`/`not`.
+resource balance (either side, either scope, count or percent-of-max), chance.
+**Reaction conditions (30):** relationship, range, knowledge state, line of
+sight, became-exposed, status on reactor or subject, resource balance on the
+reactor or either side of the event, forced-vs-voluntary, declaration kind,
+redirectability, prevention reason, mission facts, and boolean
+`all`/`any`/`not`.
+
+**Status trigger moments (6):** `activationStart` · `activationEnd` ·
+`unitDamaged` · `unitMoved` · `killedUnit` · `statusApplied`. Effects land on
+the holder by default, or on the moment's counterpart where it has one. Two
+further moments were evaluated and deliberately omitted — see
+[`docs/TACTICAL_LANGUAGE.md`](TACTICAL_LANGUAGE.md).
+
+**Effect scaling sources (7):** approach distance, segment distance, redirect
+count, hop index, hop distance, propagation kills, target status. Each is a
+count multiplied by an authored `perUnit`, in `power` or `multiplier` mode.
 **Reaction triggers (15):** activation start/end, `actionDeclared`,
 `actionPrevented`, attack declared/resolved/evaded, damaged, HP threshold,
 moved, destroyed, marked, status applied, repair completed, faction changed.
@@ -419,7 +435,9 @@ And the three rules the codebase already enforces:
 | Initiative sequencing | IMPLEMENTED | Allied permutation, hostile barriers, one command at a time | Same + AI use | AI cannot sequence |
 | Repair / support | IMPLEMENTED | Transfer, conversion, cross-scope contribution, repair, emergency reaction | Same | AI refuses waste but cannot plan |
 | Subsystem damage | INFRASTRUCTURE ONLY | Statuses remove abilities, block tags, degrade sensors; 2 impairments authored | Combat inflicts system damage | **Nothing applies it in combat** |
-| Operator resources | IMPLEMENTED | 8 resources, both scopes, regen triggers, link gating | Same | — |
+| Operator resources | IMPLEMENTED | 8 resources, both scopes, regen triggers, link gating, and conditions that can read a balance | Same | — |
+| Passive / triggered statuses | IMPLEMENTED | 6 trigger moments, counterpart targeting, causal attribution, bounded recursion, schema-driven authoring | Same | — |
+| Setup-and-payoff scaling | IMPLEMENTED | `targetStatus` scaling by id or tag; forecast and execution share one calculator | Same | — |
 | Equipment / build system | PARTIAL | 4 slots, modifiers, grants/removes abilities, class compatibility, persistent ownership | Durability, upgrades, meaningful build expression | No state, no durability, no progression hooks |
 | Mastery / perk system | PARTIAL | 8 perks, one choice per operator at rank 2 | Character skill trees | No trees, tiers or unlock paths (PRG-01) |
 | Enemy AI | PARTIAL | 3 weight profiles over believed world, real reaction scorer, refuses waste | Role behaviours (hunter, escort, ace) | No behaviours, no planning for any advanced primitive |
@@ -452,7 +470,7 @@ And the three rules the codebase already enforces:
 
 | ID | Frame | Role | Major mechanic | Resource | Maturity | Naming status |
 |---|---|---|---|---|---|---|
-| `commander` (ref `vale`) | `assaultMech` | Assault / command | Battle Plan — activation sequencing | Command Points (faction) | Mechanically developed | **Canonical story operator** |
+| `vale` | `assaultMech` | Assault / command | Battle Plan — activation sequencing | Command Points (faction) | Mechanically developed | **Canonical story operator** |
 | `kell` | `sniperMech` | Marksman | Overwatch lanes, marking, brace | — | Content-complete, no signature primitive | **Canonical story operator** |
 | `reyes` | `supportMech` | Sustainment | Resource transfer, conversion to CP, system repair, arc welder | Support Charge | Mechanically developed | **Canonical story operator** |
 | `nyx` | `stealthMech` | Infiltrator | Cloak, tempo reactions | — | **Kit unbuilt** — perception architecture ready, abilities not authored | **Canonical story operator** |
@@ -463,7 +481,7 @@ And the three rules the codebase already enforces:
 | — | `loyalistDuelist` | Enemy denial | Same reactions as `duelist` | Poise | Proves the mechanic points both ways | **Enemy mirror fixture** |
 | — | `testChanneler` | — | Mana abilities for effect-framework tests | Mana | Test-only | **Test fixture** |
 
-Four operators are wired into the Act One campaign (`commander`, `kell`,
+Four operators are wired into the Act One campaign (`vale`, `kell`,
 `reyes`, `nyx`); the four development slices are not, and appear only in
 fixture arenas.
 
@@ -484,6 +502,15 @@ phases have been removed.
 - Sequencing: one command at a time; `includeActive` and `hostileBarrier: "ignore"` implemented but unused.
 - Support: no faction→unit transfer content; one operator carries a support economy.
 - Nyx's stealth kit is unbuilt (STL-01).
+- **Conditions cannot count nearby units.** Lone Wolf, outnumbered, formation
+  and surrounded are the mechanics this blocks. Deliberately deferred: the
+  counting itself is a dozen lines over existing helpers, but counting
+  *hostiles* has to answer whether it reads the board or the asking faction's
+  knowledge, and this project has an established position that a reaction must
+  not become a detection oracle. That is a design decision, not a sweep item.
+- No status trigger for the holder's own destruction, or for a status being
+  removed. Both were evaluated and rejected for being unable to say
+  unambiguously who the effect lands on; see `docs/TACTICAL_LANGUAGE.md`.
 
 ### AI
 - **No planning for any advanced primitive**: cannot plan routes, chains, fixture placement, sequencing or support priority.
@@ -505,9 +532,8 @@ phases have been removed.
 - No in-app documentation or onboarding.
 
 ### Architecture
-- **`App.jsx` is 44,656 lines** and holds the engine, all presentation, the whole campaign, map/encounter literals and every test.
+- **`App.jsx` is 45,698 lines** and holds the engine, all presentation, the whole campaign, map/encounter literals and every test.
 - The campaign is a source literal, not authored data.
-- Operator registry uses two addressing conventions (`ref` vs key) simultaneously.
 - No multi-project abstraction; `STATUS_ZERO` naming is baked into globals and storage keys.
 - No large-map sectoring, culling or pathfinding budget (MAP-02).
 - One map per battle; no submaps (SUB-01).
@@ -518,7 +544,7 @@ phases have been removed.
 - No theme layer.
 
 ### Testing / tooling
-- All 655 tests live inside `App.jsx`.
+- All 688 tests live inside `App.jsx`.
 - Browser acceptance requires a running dev server on :5173.
 - Mission fixtures emit 28 standing warnings (scale/briefing/victory), which is noise that could mask a real one.
 
@@ -526,15 +552,15 @@ phases have been removed.
 
 # Test / Quality Snapshot
 
-Measured on commit `40633be`.
+Measured on commit `2287389`.
 
 | | |
 |---|---|
-| **Unit tests** | **655 / 655 passing**, across 76 groups |
+| **Unit tests** | **688 / 688 passing**, across 78 groups |
 | **Architecture audit** | **PASS** — 36 checks, 0 failures |
 | **Character-name tripwire** | **clean** — 60 forbidden ids, 5 generic directories |
 | **Content validation** | **clean** — 0 errors (28 mission warnings) |
-| **Browser acceptance** | **13 suites, 502 checks, all passing** |
+| **Browser acceptance** | **14 suites, 623 checks, all passing** |
 
 | Suite | Checks | Suite | Checks |
 |---|---|---|---|
@@ -543,12 +569,12 @@ Measured on commit `40633be`.
 | `check:grayfield` | 26 | `check:fixtures` | 62 |
 | `check:reactions` | 21 | `check:duel` | 74 |
 | `check:knowledge` | 21 | `check:command` | 76 |
-| `check:questions` | 3 | `check:support` | 69 |
+| `check:questions` | 3 | `check:support` | 87 |
 | `check:gameplay` | 41 | `check:orchestration` | 33 |
 
-Largest test groups: Trajectory 38 · Reactions 28 · Perception 28 ·
-Propagation 27 · Sequencing 24 · Fixtures 23 · Interception 23 ·
-Orchestration 22 · Support 22.
+Largest test groups: Trajectory 38 · Tactical language 33 · Reactions 28 ·
+Perception 28 · Propagation 27 · Sequencing 24 · Fixtures 23 ·
+Interception 23 · Orchestration 22 · Support 22.
 
 ---
 
