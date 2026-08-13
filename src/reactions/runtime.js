@@ -177,7 +177,12 @@ function buildView(state, deps) {
     knowledgeState: (viewerId, subjectId) =>
       engine.knowledgeState ? engine.knowledgeState(state, viewerId, subjectId) : "acquired",
     canSeeTile: (viewerId, tile) =>
-      !!tile && (engine.canSeeTile ? engine.canSeeTile(state, viewerId, tile) : true)
+      !!tile && (engine.canSeeTile ? engine.canSeeTile(state, viewerId, tile) : true),
+    // One balance lookup, borrowed from the engine rather than reimplemented.
+    // Scope resolution lives there, so a faction pool answers from the faction
+    // bucket without this module knowing either scope exists.
+    resourceReading: (unitId, resourceId) =>
+      engine.resourceReading ? engine.resourceReading(state, unitId, resourceId) : null
   };
 }
 
@@ -320,6 +325,7 @@ function buildConditionContext(state, deps, view, reaction, reactorId, event) {
     // `subjectBecameExposed` condition for why this is a relation rather than
     // a cached cover flag.
     canSeeTile: (tile) => view.canSeeTile(reactorId, tile),
+    resourceReading: (unitId, resourceId) => view.resourceReading(unitId, resourceId),
     eventTile: (which) => {
       if (which === "from") return event.from || null;
       if (which === "to") return event.to || event.tile || null;

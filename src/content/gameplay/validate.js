@@ -11,7 +11,16 @@
  * =======================================================================*/
 
 import { REGISTRY_IDS, REGISTRY_KINDS } from "./format.js";
-import { validateResourceDefinition } from "../../combat/resources.js";
+import { validateResourceDefinition, validateResourceQuery } from "../../combat/resources.js";
+import {
+  EFFECT_SCALING_SOURCE_IDS as EFFECT_SCALING_IDS,
+  EFFECT_SCALING_MODES,
+  STATUS_SCALING_SOURCES,
+  EFFECT_RESOURCE_OWNERS,
+  STATUS_TRIGGER_EVENT_IDS,
+  STATUS_TRIGGER_TARGETS,
+  statusTriggerHasCounterpart
+} from "../../combat/authoring.js";
 import { REDIRECT_IDS } from "../../combat/trajectory.js";
 import { SELECTION_POLICY_IDS, MAX_PROPAGATION_HOPS } from "../../combat/propagation.js";
 import { FIXTURE_STATES, FIXTURE_VISIBILITY } from "../../combat/fixtures.js";
@@ -129,15 +138,16 @@ export function validateGameplayData(data, context) {
    * carry effect lists of their own, and a dangling status id is exactly as
    * broken one level down as it is at the top.
    */
-  const checkEffectRefs = (effects, id, depth) => {
+  const checkEffectRefs = (effects, id, depth, kindId) => {
     if ((depth || 0) > 8) return;
+    const owner = label(kindId || "abilities", id);
     for (const effect of effects || []) {
       if (!effect || typeof effect !== "object") continue;
       if (effect.statusId && !has(statuses, effect.statusId)) {
-        errors.push(label("abilities", id) + ' applies unknown status "' + effect.statusId + '".');
+        errors.push(owner + ' applies unknown status "' + effect.statusId + '".');
       }
       if (effect.abilityId && !has(abilities, effect.abilityId)) {
-        errors.push(label("abilities", id) + ' references unknown ability "' + effect.abilityId + '".');
+        errors.push(owner + ' references unknown ability "' + effect.abilityId + '".');
       }
       // `definitionId` names whichever registry the effect draws from. A
       // fixture is not a unit, and saying "summons unknown unit" about a mine
@@ -145,17 +155,81 @@ export function validateGameplayData(data, context) {
       if (effect.definitionId && effect.type === "placeFixture") {
         if (!has(fixtures, effect.definitionId)) {
           errors.push(
-            label("abilities", id) + ' places unknown fixture "' + effect.definitionId + '".'
+            owner + ' places unknown fixture "' + effect.definitionId + '".'
           );
         }
       } else if (effect.definitionId && !has(units, effect.definitionId)) {
-        errors.push(label("abilities", id) + ' summons unknown unit "' + effect.definitionId + '".');
+        errors.push(owner + ' summons unknown unit "' + effect.definitionId + '".');
       }
       if (effect.resourceId && !has(resources, effect.resourceId)) {
-        errors.push(label("abilities", id) + ' moves unknown resource "' + effect.resourceId + '".');
+        errors.push(owner + ' moves unknown resource "' + effect.resourceId + '".');
       }
+      checkScaling(effect.scaling, owner);
+      checkEffectConditions(effect.conditions, owner + " condition");
       for (const key of ["effects", "ifTrue", "ifFalse"]) {
-        if (Array.isArray(effect[key])) checkEffectRefs(effect[key], id, (depth || 0) + 1);
+        if (Array.isArray(effect[key])) checkEffectRefs(effect[key], id, (depth || 0) + 1, kindId);
+      }
+    }
+  };
+
+  /**
+   * Authored scaling: a named source, and whatever that source needs to read.
+   *
+   * A status source that names nothing reads zero forever, which is the kind of
+   * mistake that looks like a balance problem for a week before anyone checks
+   * the data.
+   */
+  const checkScaling = (scaling, where) => {
+    const list = Array.isArray(scaling) ? scaling : scaling ? [scaling] : [];
+    for (const entry of list) {
+      if (!entry || typeof entry !== "object") continue;
+      if (!EFFECT_SCALING_IDS.includes(entry.from)) {
+        errors.push(where + ' scales from unknown source "' + entry.from + '".');
+        continue;
+      }
+      if (entry.mode != null && !EFFECT_SCALING_MODES.includes(entry.mode)) {
+        errors.push(
+          where + ' scales in unknown mode "' + entry.mode + '" (' + EFFECT_SCALING_MODES.join(", ") + ').'
+        );
+      }
+      if (entry.perUnit != null && !Number.isFinite(Number(entry.perUnit))) {
+        errors.push(where + " scales by a value that is not a number.");
+      }
+      if (STATUS_SCALING_SOURCES.includes(entry.from)) {
+        if (!entry.statusId && !entry.statusTag) {
+          errors.push(where + " scales from a status but names neither a status nor a tag.");
+        }
+        if (entry.statusId && !has(statuses, entry.statusId)) {
+          errors.push(where + ' scales from unknown status "' + entry.statusId + '".');
+        }
+        if (entry.statusTag) {
+          const carriers = Object.keys(statuses).filter((statusId) =>
+            ((statuses[statusId] || {}).tags || []).includes(entry.statusTag)
+          );
+          if (!carriers.length) {
+            errors.push(
+              where + ' scales from statuses tagged "' + entry.statusTag + '", which nothing carries.'
+            );
+          }
+        }
+      }
+    }
+  };
+
+  /** Effect conditions that reach outside the effect — currently balances. */
+  const checkEffectConditions = (conditions, where) => {
+    const entries = Array.isArray(conditions)
+      ? conditions
+      : (conditions && conditions.entries) || [];
+    for (const entry of entries) {
+      if (!entry || entry.type !== "resourceBalance") continue;
+      if (entry.of != null && !EFFECT_RESOURCE_OWNERS.includes(entry.of)) {
+        errors.push(
+          where + ' asks about unknown owner "' + entry.of + '" (' + EFFECT_RESOURCE_OWNERS.join(", ") + ').'
+        );
+      }
+      for (const message of validateResourceQuery(entry, where, Object.keys(resources))) {
+        errors.push(message);
       }
     }
   };
@@ -167,6 +241,8 @@ export function validateGameplayData(data, context) {
     if (targeting.rangeMin != null && targeting.rangeMax != null && targeting.rangeMax < targeting.rangeMin) {
       errors.push(label("abilities", id) + " has a maximum range below its minimum.");
     }
+    // Gating conditions on the ability itself: what makes it offered at all.
+    checkEffectConditions(ability.conditions, label("abilities", id) + " availability");
     checkEffectRefs(ability.effects, id);
 
     /* ---- trajectory ----
@@ -540,6 +616,56 @@ export function validateGameplayData(data, context) {
       errors.push(label("statuses", id) + " has a duration that is not positive.");
     }
     validatePerception(status.perception, label("statuses", id), errors);
+
+    /* ---- triggers ----
+     *
+     * A trigger naming a moment the engine never fires is invisible: the
+     * status exists, the effects are authored, and nothing ever happens. That
+     * failure mode is indistinguishable from a balance problem from the
+     * outside, which is why an unknown moment is an error rather than a
+     * warning. */
+    (status.triggers || []).forEach((trigger, index) => {
+      const where = label("statuses", id) + " trigger " + (index + 1);
+      if (!trigger || typeof trigger !== "object") {
+        errors.push(where + " is not an object.");
+        return;
+      }
+      if (!STATUS_TRIGGER_EVENT_IDS.includes(trigger.event)) {
+        errors.push(
+          where + ' fires on unknown moment "' + trigger.event + '" (' +
+            STATUS_TRIGGER_EVENT_IDS.join(", ") + ').'
+        );
+      }
+      if (trigger.target != null && !STATUS_TRIGGER_TARGETS.includes(trigger.target)) {
+        errors.push(
+          where + ' lands on unknown target "' + trigger.target + '" (' +
+            STATUS_TRIGGER_TARGETS.join(", ") + ').'
+        );
+      }
+      // A counterpart trigger at a moment with nobody on the other side is a
+      // trigger that silently never runs.
+      if (trigger.target === "counterpart" && !statusTriggerHasCounterpart(trigger.event)) {
+        errors.push(
+          where + ' lands on a counterpart, but "' + trigger.event + '" has no second party.'
+        );
+      }
+      if (!Array.isArray(trigger.effects) || !trigger.effects.length) {
+        errors.push(where + " has no effects, so it does nothing.");
+      }
+      checkEffectRefs(trigger.effects, id, 0, "statuses");
+      // The one self-recursion that is statically obvious: a status that
+      // reapplies itself the instant it lands. The causal chain would bound it
+      // at runtime, but authoring it is never what anybody meant.
+      if (trigger.event === "statusApplied" && trigger.target !== "counterpart") {
+        for (const effect of trigger.effects || []) {
+          if (effect && effect.type === "applyStatus" && effect.statusId === id) {
+            errors.push(
+              where + " reapplies its own status the moment it lands, which is a loop."
+            );
+          }
+        }
+      }
+    });
   }
 
   /* ---- operators and perks ---- */
@@ -556,15 +682,26 @@ export function validateGameplayData(data, context) {
         errors.push(label("operators", id) + ' offers unknown perk "' + perkId + '".');
       }
     }
-    // The stable ref is what links, reactions and mission scripts address, so
-    // two operators answering to one ref is a silent aliasing bug.
-    const ref = operator.ref || id;
-    if (seenRefs[ref]) {
+    // An operator's entry id is its one canonical name. A leftover `ref` is
+    // the second identifier this project deliberately removed, so it is an
+    // error even when it agrees with the key — agreeing today is exactly how
+    // the last one survived long enough to disagree later.
+    if (operator.ref !== undefined) {
       errors.push(
-        label("operators", id) + ' shares stable ref "' + ref + '" with operator "' + seenRefs[ref] + '".'
+        label("operators", id) + ' still carries a legacy "ref" field. An operator is ' +
+          'addressed by its entry id everywhere; delete the ref.'
       );
     }
-    seenRefs[ref] = id;
+    if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id)) {
+      errors.push(label("operators", id) + " needs a stable slug id.");
+    }
+    if (seenRefs[id.toLowerCase()]) {
+      errors.push(
+        label("operators", id) + ' collides with operator "' + seenRefs[id.toLowerCase()] +
+          '" — two operators cannot share an id.'
+      );
+    }
+    seenRefs[id.toLowerCase()] = id;
   }
 
   /* ---- outside references ---- */
@@ -579,8 +716,8 @@ export function validateGameplayData(data, context) {
     }
   }
   for (const ref of external.linkParticipantRefs || []) {
-    if (!Object.values(operators).some((operator) => (operator.ref || "") === ref)) {
-      warnings.push('A combat link names "' + ref + '", which is not an operator ref.');
+    if (!has(operators, ref)) {
+      warnings.push('A combat link names "' + ref + '", which is not an operator id.');
     }
   }
   for (const statusId of external.reactionStatusIds || []) {
@@ -649,10 +786,10 @@ export function validateGameplayData(data, context) {
     // An owned reaction names an operator by its stable ref, not by its key.
     if (reaction.owner) {
       const owned = Object.keys(operators).some(
-        (operatorId) => (operators[operatorId].ref || operatorId) === reaction.owner
+        (operatorId) => operatorId === reaction.owner
       );
       if (!owned && !(external.unitRefs || []).includes(reaction.owner)) {
-        errors.push(label("reactions", id) + ' is owned by unknown operator ref "' + reaction.owner + '".');
+        errors.push(label("reactions", id) + ' is owned by unknown operator "' + reaction.owner + '".');
       }
     } else if (!reaction.requires) {
       errors.push(
@@ -667,7 +804,11 @@ export function validateGameplayData(data, context) {
       );
     }
 
-    for (const message of validateReactionCondition(reaction.conditions, label("reactions", id) + " condition")) {
+    for (const message of validateReactionCondition(
+      reaction.conditions,
+      label("reactions", id) + " condition",
+      Object.keys(resources)
+    )) {
       errors.push(message);
     }
 
@@ -762,10 +903,10 @@ export function validateGameplayData(data, context) {
     }
     for (const ref of link.participants || []) {
       const known = Object.keys(operators).some(
-        (operatorId) => (operators[operatorId].ref || operatorId) === ref
+        (operatorId) => operatorId === ref
       );
       if (!known) {
-        errors.push(label("combatLinks", id) + ' names unknown operator ref "' + ref + '".');
+        errors.push(label("combatLinks", id) + ' names unknown operator "' + ref + '".');
       }
     }
     for (const reactionId of link.reactions || []) {
@@ -934,7 +1075,7 @@ export function referencesTo(data, kindId, id, context) {
   if (kindId === "operators") {
     for (const ref of external.linkParticipantRefs || []) {
       const operator = registries.operators[id] || {};
-      if ((operator.ref || id) === ref) note("a combat link", "names its ref");
+      if (id === ref) note("a combat link", "names it");
     }
   }
 

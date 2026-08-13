@@ -176,7 +176,7 @@ export default function SceneEditor({ onPreview, previewLabel }) {
     }
     focusText.current = true;
     return insertStep("dialogue", index + 1, {
-      speaker: previous ? previous.speaker : "commander",
+      speaker: previous ? previous.speaker : "",
       position: previous ? previous.position : null,
       text: ""
     });

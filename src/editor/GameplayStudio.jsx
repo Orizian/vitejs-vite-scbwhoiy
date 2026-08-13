@@ -994,13 +994,11 @@ function SchemaField({ field, value, data, onChange }) {
   }
 
   if (field.kind === "ref" || field.kind === "refList") {
-    // Some registries are addressed by a stable field rather than by their
-    // key — an operator's `ref` is what reactions and links name, and it is
-    // deliberately allowed to differ from the key it is filed under.
+    // Every registry is addressed by its key. Operators used to carry a second
+    // stable `ref` that content named instead, and a selector that could offer
+    // either one was how the two drifted apart; there is now one id to pick.
     const entries = data[field.registry] || {};
-    const options = Object.keys(entries)
-      .map((key) => (field.refField ? entries[key][field.refField] || key : key))
-      .sort();
+    const options = Object.keys(entries).sort();
     const isList = field.kind === "refList";
     const current = isList ? value || [] : value == null ? "" : value;
     return (
@@ -1330,12 +1328,16 @@ function SchemaField({ field, value, data, onChange }) {
     // `single` fields hold one object rather than a list — a reaction has one
     // effect, not a sequence of them.
     const current = field.single ? value || {} : value || [];
+    // A field may carry its own closed vocabulary. That is how a status trigger
+    // offers exactly the moments the engine fires and no others — the schema
+    // names the list, the editor prints it, and neither invents an option.
     const vocabulary =
-      field.typeKey === "type"
+      field.vocabulary ||
+      (field.typeKey === "type"
         ? REACTION_EFFECT_IDS
         : field.typeKey === "*"
         ? REACTION_CONDITION_IDS
-        : null;
+        : null);
     return (
       <div>
         {label}

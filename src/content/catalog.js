@@ -116,7 +116,7 @@ export const TEAM_PRESETS = [
 ];
 
 export const SPEAKER_CATALOG = [
-  { id: "commander", name: "Commander Vale", glyph: "🧑‍🚀" },
+  { id: "vale", name: "Commander Vale", glyph: "🧑‍🚀" },
   { id: "reyes", name: "Reyes", glyph: "👩‍🚀" },
   { id: "kell", name: "Kell", glyph: "🧔‍♂️" },
   { id: "nyx", name: "Nyx", glyph: "🥷" },

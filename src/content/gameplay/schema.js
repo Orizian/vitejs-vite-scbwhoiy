@@ -1,3 +1,11 @@
+import {
+  STATUS_TRIGGER_EVENT_IDS,
+  STATUS_TRIGGER_TARGETS,
+  EFFECT_CONDITION_IDS,
+  EFFECT_SCALING_SOURCE_IDS,
+  EFFECT_SCALING_MODES
+} from "../../combat/authoring.js";
+
 /* =========================================================================
  * GAMEPLAY EDITOR SCHEMA
  *
@@ -244,7 +252,13 @@ export const REGISTRY_SCHEMAS = {
             label: "Effects",
             kind: "objectList",
             typeKey: "type",
-            behaviour: true
+            behaviour: true,
+            help:
+              "A damage effect may carry `scaling`: one block or a list of them, each " +
+              "{ from, perUnit } with an optional mode (" + EFFECT_SCALING_MODES.join(", ") +
+              "), min and max. Sources: " + EFFECT_SCALING_SOURCE_IDS.join(", ") +
+              '. `targetStatus` names a statusId or a statusTag and counts what the ' +
+              "target is already carrying, which is how a mark becomes a number."
           }
         ]
       },
@@ -474,7 +488,19 @@ export const REGISTRY_SCHEMAS = {
         id: "conditions",
         label: "Conditions",
         fields: [
-          { key: "conditions", label: "Use conditions", kind: "objectList", typeKey: "type", behaviour: true },
+          {
+            key: "conditions",
+            label: "Use conditions",
+            kind: "objectList",
+            typeKey: "type",
+            behaviour: true,
+            vocabulary: EFFECT_CONDITION_IDS,
+            help:
+              'A resource question is { type: "resourceBalance", resourceId, of: "source" | ' +
+              '"target", compare, value } and may add percentOfMax. Which pool it reads ' +
+              "comes from the resource's own scope, so a squad budget and a personal " +
+              "rack are asked about identically."
+          },
           {
             key: "requirementText",
             label: "Why it is unavailable",
@@ -621,7 +647,20 @@ export const REGISTRY_SCHEMAS = {
               "Prefer it to a list of ids when the impairment is about a kind of " +
               "capability rather than one particular action."
           },
-          { key: "triggers", label: "Triggers", kind: "objectList", typeKey: "event", behaviour: true }
+          {
+            key: "triggers",
+            label: "Triggers",
+            kind: "objectList",
+            typeKey: "event",
+            behaviour: true,
+            vocabulary: STATUS_TRIGGER_EVENT_IDS,
+            help:
+              'Each entry is { event, effects } and may add target: "' +
+              STATUS_TRIGGER_TARGETS.join('" | "') +
+              '". A counterpart is the other party in the moment — whoever dealt ' +
+              "the damage, or the unit that was destroyed — and only the moments " +
+              "that have one accept it."
+          }
         ]
       },
       perceptionSection
@@ -645,23 +684,19 @@ export const REGISTRY_SCHEMAS = {
   },
 
   operators: {
-    idLabel: "Operator key",
+    idLabel: "Operator id",
     nameKey: "name",
     categorize: (entry) => (entry.recruit ? "Recruitable" : "Starting lance"),
     sections: [
       {
         id: "identity",
         label: "Identity",
+        note:
+          "The entry id is this pilot's one canonical name in data. Campaign roster, " +
+          "deployment, mission units, links and reactions all address them by it, and " +
+          "renaming the display name never touches it.",
         fields: [
           { key: "name", label: "Display name", kind: "line", required: true },
-          {
-            key: "ref",
-            label: "Stable content ref",
-            kind: "line",
-            help:
-              "What links, reactions and mission scripts address this pilot by. " +
-              "Renaming the display name never touches it."
-          },
           { key: "glyph", label: "Glyph", kind: "line" },
           { key: "role", label: "Role", kind: "text", rows: 2 }
         ]
@@ -794,7 +829,6 @@ export const REGISTRY_SCHEMAS = {
             label: "Owned by",
             kind: "ref",
             registry: "operators",
-            refField: "ref",
             help:
               "The operator this belongs to. Leave it empty and the reaction is offered " +
               "to any unit meeting the requirements below."
@@ -901,10 +935,10 @@ export const REGISTRY_SCHEMAS = {
         id: "participants",
         label: "Participants",
         note:
-          "Stable operator refs. A link is active only while every participant is " +
+          "Canonical operator ids. A link is active only while every participant is " +
           "deployed, able to act and allied.",
         fields: [
-          { key: "participants", label: "Operators", kind: "refList", registry: "operators", refField: "ref" },
+          { key: "participants", label: "Operators", kind: "refList", registry: "operators" },
           { key: "requireAll", label: "Requires all of them", kind: "boolean" },
           { key: "requireMutuallyAllied", label: "Requires mutual alliance", kind: "boolean" }
         ]
@@ -1118,7 +1152,13 @@ export const REGISTRY_SCHEMAS = {
             label: "Effects",
             kind: "objectList",
             typeKey: "type",
-            behaviour: true
+            behaviour: true,
+            help:
+              "A damage effect may carry `scaling`: one block or a list of them, each " +
+              "{ from, perUnit } with an optional mode (" + EFFECT_SCALING_MODES.join(", ") +
+              "), min and max. Sources: " + EFFECT_SCALING_SOURCE_IDS.join(", ") +
+              '. `targetStatus` names a statusId or a statusTag and counts what the ' +
+              "target is already carrying, which is how a mark becomes a number."
           }
         ]
       }

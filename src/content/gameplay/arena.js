@@ -236,7 +236,7 @@ export function resolveTestSubject(data, kindId, id) {
     if (!reaction) return fail('There is no reaction "' + id + '".');
     if (reaction.owner) {
       const operatorId = sortedIds(registries.operators).find(
-        (key) => ((registries.operators[key] || {}).ref || key) === reaction.owner
+        (key) => key === reaction.owner
       );
       if (!operatorId) {
         return fail(
@@ -279,7 +279,7 @@ export function resolveTestSubject(data, kindId, id) {
     const first = (link.participants || [])[0];
     const operatorId = first
       ? sortedIds(registries.operators).find(
-          (key) => ((registries.operators[key] || {}).ref || key) === first
+          (key) => key === first
         )
       : null;
     if (!operatorId) {

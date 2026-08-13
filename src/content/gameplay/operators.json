@@ -2,30 +2,17 @@
   "format": "statuszero.gameplay",
   "formatVersion": 1,
   "registry": "operators",
-  "description": "Playable pilots. An operator owns identity and progression and points at a chassis; it does not own the chassis's stats.",
+  "description": "Playable pilots. An operator owns identity and progression and points at a chassis; it does not own the chassis's stats. The entry key is the operator's one canonical id — campaign, deployment, missions, links and reactions all address a pilot by it.",
   "entries": {
     "arcSpecialist": {
       "name": "Arc Specialist",
-      "ref": "arcSpecialist",
       "glyph": "C",
       "role": "Cascade",
       "chassis": "cascadeFrame",
       "recruit": true
     },
-    "commander": {
-      "name": "Commander Vale",
-      "ref": "vale",
-      "glyph": "🧑‍🚀",
-      "role": "Decorated lance commander learning to lead without the state.",
-      "chassis": "assaultMech",
-      "perkChoices": [
-        "valeBulwark",
-        "valeVanguard"
-      ]
-    },
     "duelist": {
       "name": "Duelist",
-      "ref": "duelist",
       "glyph": "D",
       "role": "Denial",
       "chassis": "duelistFrame",
@@ -64,15 +51,23 @@
     },
     "sapper": {
       "name": "Sapper",
-      "ref": "sapper",
       "glyph": "S",
       "role": "Preparation",
       "chassis": "sapperFrame",
       "recruit": true
     },
+    "vale": {
+      "name": "Commander Vale",
+      "glyph": "🧑‍🚀",
+      "role": "Decorated lance commander learning to lead without the state.",
+      "chassis": "assaultMech",
+      "perkChoices": [
+        "valeBulwark",
+        "valeVanguard"
+      ]
+    },
     "veteran": {
       "name": "Veteran Interdictor",
-      "ref": "veteran",
       "glyph": "🧑‍✈️",
       "role": "Career pursuit pilot, two decades in. Gets there first, decides where everyone else is standing, and leaves.",
       "chassis": "interdictorFrame",

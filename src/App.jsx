@@ -51,8 +51,22 @@ import {
   setResourceAvailable,
   regenerateOnActivation,
   describeResources,
-  validateResourceDefinition
+  validateResourceDefinition,
+  readResource,
+  resourceQueryHolds,
+  validateResourceQuery,
+  RESOURCE_COMPARISONS,
+  DEFAULT_RESOURCE_COMPARISON
 } from "./combat/resources.js";
+import {
+  EFFECT_SCALING_SOURCE_IDS,
+  EFFECT_SCALING_MODES,
+  STATUS_SCALING_SOURCES,
+  EFFECT_RESOURCE_OWNERS,
+  STATUS_TRIGGER_EVENTS,
+  STATUS_TRIGGER_EVENT_IDS,
+  STATUS_TRIGGER_TARGETS
+} from "./combat/authoring.js";
 import {
   HEADINGS,
   HEADING_IDS,
@@ -3915,6 +3929,22 @@ function costOwnerFor(state, unitId, definition) {
 }
 
 /**
+ * What a unit's side of a named resource currently looks like.
+ *
+ * Deliberately routed through the same definition and owner resolution that
+ * spending, restoring and transferring use. Every previous scope bug in this
+ * project came from a second lookup that only knew about `unit.resources`, so
+ * asking a question about a balance goes through the same door as changing one.
+ */
+function resourceReadingFor(state, unitId, resourceId) {
+  if (!resourceId) return null;
+  const definition = combatResourceDefinition(resourceId);
+  const owner = costOwnerFor(state, unitId, definition);
+  if (!owner) return null;
+  return readResource(state, definition, owner);
+}
+
+/**
  * Whether a unit can pay an ability's declared costs, in any scope.
  *
  * Shared by every validator that charges for an ability, so a faction-scoped
@@ -4434,10 +4464,54 @@ const EFFECT_SCALING_SOURCES = {
       const chain = propagationContextOf(state, context.sourceUnitId);
       return chain ? chain.kills : 0;
     }
+  },
+
+  /**
+   * A condition the target is already carrying.
+   *
+   * This is the setup-and-payoff primitive. Everything the engine needed for
+   * "a marked target takes more" already existed — a status to apply, a
+   * condition to read it — except the one connection that makes the payoff a
+   * *number* rather than a branch. Naming the status here rather than
+   * branching on it in a damage handler is what keeps mark, ionise, expose and
+   * whatever comes next the same mechanism.
+   *
+   * Counted rather than tested, so `statusTag` can measure how comprehensively
+   * a target has been taken apart. A status id contributes at most one,
+   * because reapplying a status refreshes its duration instead of stacking.
+   */
+  targetStatus: {
+    label: "Status on the target",
+    summary:
+      "How many of the target's statuses match. Name `statusId` for one condition or " +
+      "`statusTag` for a family of them.",
+    read: (state, context, scaling) => countMatchingStatuses(state, context.targetUnitId, scaling)
   }
 };
 
 export const EFFECT_SCALING_IDS = Object.keys(EFFECT_SCALING_SOURCES);
+
+function countMatchingStatuses(state, unitId, query) {
+  const unit = state.units[unitId];
+  if (!unit || !query) return 0;
+  if (!query.statusId && !query.statusTag) return 0;
+  let count = 0;
+  for (const applied of unit.statuses || []) {
+    if (query.statusId && applied.statusId !== query.statusId) continue;
+    if (query.statusTag) {
+      const definition = CONTENT.statuses[applied.statusId];
+      if (!definition || !(definition.tags || []).includes(query.statusTag)) continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
+/** One scaling block, or several. Authored either way, read the same way. */
+function scalingEntries(scaling) {
+  if (!scaling) return [];
+  return Array.isArray(scaling) ? scaling : [scaling];
+}
 
 /**
  * Extra power an effect earns from a named source.
@@ -4452,16 +4526,22 @@ export const EFFECT_SCALING_IDS = Object.keys(EFFECT_SCALING_SOURCES);
  * downside and defaults to zero, so an author who does not think about decay
  * gets exactly the old behaviour.
  */
-function scalingBonus(state, context, scaling) {
-  if (!scaling || !scaling.from) return 0;
-  const source = EFFECT_SCALING_SOURCES[scaling.from];
-  if (!source) return 0;
-  const value = source.read(state, context) || 0;
-  const per = Number(scaling.perUnit || 0);
-  const raw = value * per;
-  const cap = scaling.max == null ? Infinity : Number(scaling.max);
-  const floor = scaling.min == null ? 0 : Number(scaling.min);
-  return Math.max(floor, Math.min(cap, raw));
+function effectScaling(state, context, scaling) {
+  let power = 0;
+  let multiplier = 1;
+  for (const entry of scalingEntries(scaling)) {
+    if (!entry || !entry.from) continue;
+    const source = EFFECT_SCALING_SOURCES[entry.from];
+    if (!source) continue;
+    const value = source.read(state, context, entry) || 0;
+    const per = Number(entry.perUnit || 0);
+    const cap = entry.max == null ? Infinity : Number(entry.max);
+    const floor = entry.min == null ? 0 : Number(entry.min);
+    const bounded = Math.max(floor, Math.min(cap, value * per));
+    if (entry.mode === "multiplier") multiplier *= 1 + bounded;
+    else power += bounded;
+  }
+  return { power, multiplier };
 }
 
 function resolveDamageEffect(state, context) {
@@ -4472,10 +4552,10 @@ function resolveDamageEffect(state, context) {
     return;
   }
   const numbers = effectContextStats(state, sourceUnitId, targetUnitId, effect);
-  // Approach distance, redirects taken — earned power from a named source
-  // rather than a bespoke calculator per ability.
-  const bonus = scalingBonus(state, context, effect.scaling);
-  if (bonus) numbers.power += bonus;
+  // Approach distance, redirects taken, a mark already on the target — earned
+  // value from a named source rather than a bespoke calculator per ability.
+  const scaling = effectScaling(state, context, effect.scaling);
+  if (scaling.power) numbers.power += scaling.power;
   const flank = flankProfile(state, sourceUnitId, targetUnitId, {
     sourceTile: context.sourceTile,
     targetTile: context.targetTile
@@ -4503,7 +4583,10 @@ function resolveDamageEffect(state, context) {
   }
 
   const baseAmount = Math.max(1, Math.round(formula(numbers)));
-  const amount = Math.max(1, Math.round(baseAmount * flank.damageMultiplier));
+  const amount = Math.max(
+    1,
+    Math.round(baseAmount * flank.damageMultiplier * scaling.multiplier)
+  );
   queueEvent(state, {
     type: "damageResolved",
     sourceUnitId,
@@ -4517,7 +4600,8 @@ function resolveDamageEffect(state, context) {
     targetFacing: flank.targetFacing,
     attackerDirection: flank.attackerDirection,
     damageMultiplier: flank.damageMultiplier,
-    scalingBonus: bonus || 0
+    scalingBonus: scaling.power || 0,
+    scalingMultiplier: scaling.multiplier
   });
 }
 
@@ -5558,8 +5642,27 @@ const CONDITION_HANDLERS = {
   },
   distanceAtMost: (context, condition) => effectDistance(context) <= condition.value,
   distanceAtLeast: (context, condition) => effectDistance(context) >= condition.value,
+  /**
+   * A combat resource balance, on whoever is acting or whoever is being acted
+   * on. Reads through the same scope resolution as an ability cost, so an
+   * author names a resource and never a scope.
+   *
+   * This is what an ability needs to say "only worth using while you still
+   * have charge", and what a steal needs to say "do not offer this against
+   * somebody carrying nothing".
+   */
+  resourceBalance: (context, condition) =>
+    resourceQueryHolds(
+      resourceReadingFor(
+        context.state,
+        condition.of === "target" ? context.targetUnitId : context.sourceUnitId,
+        condition.resourceId
+      ),
+      condition
+    ),
   chance: (context, condition) => rollChance(context.state, condition.value)
 };
+
 
 function hpPercent(state, unitId) {
   const unit = state.units[unitId];
@@ -5868,22 +5971,67 @@ function hasBlockingStatus(state, unitId) {
   });
 }
 
-function runStatusTriggers(state, unitId, eventName) {
+/* ---------------------------------------------------------------
+ * STATUS TRIGGERS
+ *
+ * A status that does something on its own, at a named moment.
+ *
+ * The representation was always generic — a list of `{ event, effects }` on
+ * the status — but only one moment ever called it, so every passive that was
+ * not "burn at the start of your turn" had to be built as something else.
+ * These are the moments that now call it. They are deliberately few: each one
+ * has to answer *who the effect lands on* unambiguously, and an event that
+ * cannot is worse than an event that is missing.
+ * -------------------------------------------------------------*/
+
+/**
+ * Runs whatever the holder's statuses have to say about this moment.
+ *
+ * Three safety properties, all of which cost something real if dropped:
+ *
+ *   The list is copied before iteration, because a trigger may cleanse the
+ *   status that is firing — and removing an entry from the array being walked
+ *   would silently skip the next one.
+ *
+ *   A dead holder triggers nothing. `unitDefeated` clears statuses anyway, but
+ *   a holder can die *inside* an earlier trigger in the same pass, and a
+ *   corpse retaliating is exactly the impossible effect this has to refuse.
+ *
+ *   Depth is bounded by the causal chain the events already carry, not by a
+ *   private counter. Retaliation that provokes retaliation is a legitimate
+ *   authored exchange, so it is allowed to happen — and then to stop, at the
+ *   same ceiling every other cascade in the engine stops at. Nothing here
+ *   needs to know it is inside itself.
+ */
+function runStatusTriggers(state, unitId, eventName, context) {
   const unit = state.units[unitId];
+  if (!unit || !unit.alive) return;
+  if (state.causality && chainExhausted(state.causality.current)) return;
+  const counterpartId = (context && context.counterpartUnitId) || null;
   for (const applied of unit.statuses.slice()) {
     const def = CONTENT.statuses[applied.statusId];
     if (!def) continue;
+    // Still carried? An earlier trigger in this same pass may have cleansed it.
+    if (!unit.statuses.some((entry) => entry.statusId === applied.statusId)) continue;
+    if (!unit.alive) return;
     for (const trigger of def.triggers) {
       if (trigger.event !== eventName) continue;
+      const landsOn = trigger.target === "counterpart" ? counterpartId : unitId;
+      // A counterpart trigger with nobody on the other side does nothing. That
+      // is a content mistake rather than an engine one, so it stays quiet.
+      if (!landsOn) continue;
+      const recipient = state.units[landsOn];
+      if (!recipient || !recipient.alive) continue;
       queueEvent(state, {
         type: "statusTriggered",
         targetUnitId: unitId,
+        counterpartUnitId: counterpartId,
         statusId: applied.statusId,
         triggerEvent: eventName
       });
       resolveEffects(state, {
         sourceUnitId: applied.sourceUnitId || unitId,
-        targetUnitIds: [unitId],
+        targetUnitIds: [landsOn],
         effects: trigger.effects || [],
         statusId: applied.statusId
       });
@@ -6262,6 +6410,9 @@ const EVENT_HANDLERS = {
     // Nothing actually triggered — the contact was stale — so the rest of the
     // walk is owed immediately rather than never.
     if (resume && !fired) queueEvent(state, { type: "unitMovementResumed", ...resume });
+    // After the landing tile is settled, so anything a trail leaves behind is
+    // left where the mover actually stopped rather than where it aimed.
+    runStatusTriggers(state, unit.id, "unitMoved", null);
   },
 
   /**
@@ -6966,7 +7117,19 @@ const EVENT_HANDLERS = {
         sourceUnitId: event.sourceUnitId || null,
         tile: { x: target.x, y: target.y }
       });
+      // The killer's own passives, before the victim's statuses are cleared.
+      if (event.sourceUnitId && event.sourceUnitId !== target.id) {
+        runStatusTriggers(state, event.sourceUnitId, "killedUnit", {
+          counterpartUnitId: target.id
+        });
+      }
+      return;
     }
+    // Survived it. Retaliation answers the unit that dealt the damage, which
+    // is why the trigger takes a counterpart rather than always landing home.
+    runStatusTriggers(state, target.id, "unitDamaged", {
+      counterpartUnitId: event.sourceUnitId || null
+    });
   },
 
   healResolved(state, event) {
@@ -7020,6 +7183,9 @@ const EVENT_HANDLERS = {
       unitLabel(state, target.id) + " gains " + def.name,
       { unitId: target.id, statusId: event.statusId, sourceUnitId: event.sourceUnitId }
     );
+    runStatusTriggers(state, target.id, "statusApplied", {
+      counterpartUnitId: event.sourceUnitId || null
+    });
   },
 
   statusResisted(state, event) {
@@ -7137,6 +7303,11 @@ const EVENT_HANDLERS = {
 
   turnEnded(state, event) {
     const unit = state.units[event.unitId];
+    // Fired here rather than from `endActivation`, so it happens exactly once
+    // per activation however that activation finished — spent, ended early,
+    // or skipped by a blocking status. Its effects resolve as ordinary queued
+    // events immediately behind this one.
+    runStatusTriggers(state, event.unitId, "activationEnd", null);
     if (unit.alive) {
       const stats = calculateUnitStats(state, unit.id);
       const delay = FORMULAS.timeline.recoveryDelay(stats.speed, event.totalRecovery);
@@ -8209,12 +8380,20 @@ const EFFECT_FORECASTERS = {
   damage(state, options) {
     const { sourceUnitId, targetUnitId, effect } = options;
     const numbers = effectContextStats(state, sourceUnitId, targetUnitId, effect);
+    // The same scaling authority the executor uses, on the same context. A
+    // forecast that ignored it would promise the unmarked number and then
+    // deliver the marked one, which is the one thing a preview may never do.
+    const scaling = effectScaling(state, options, effect.scaling);
+    if (scaling.power) numbers.power += scaling.power;
     const flank = flankProfile(state, sourceUnitId, targetUnitId, {
       sourceTile: options.sourceTile,
       targetTile: options.targetTile
     });
     const baseAmount = Math.max(1, Math.round(FORMULAS.damage[effect.formula](numbers)));
-    const amount = Math.max(1, Math.round(baseAmount * flank.damageMultiplier));
+    const amount = Math.max(
+      1,
+      Math.round(baseAmount * flank.damageMultiplier * scaling.multiplier)
+    );
     const hitChance = effect.canMiss
       ? FORMULAS.accuracy.hitChance({
           accuracy: numbers.accuracy,
@@ -11042,6 +11221,11 @@ const REACTION_ENGINE = {
     logLine(state, type, text, data);
   },
 
+  /** A balance and its ceiling, resolved through the ordinary scope rules. */
+  resourceReading(state, unitId, resourceId) {
+    return resourceReadingFor(state, unitId, resourceId);
+  },
+
   processEvents(state) {
     processAllEvents(state);
   },
@@ -12805,7 +12989,7 @@ const ENGINE_FUNCTIONS = {
   queueTrajectoryCompleted,
   resolveTrajectoryContact,
   resolveDisplaceEffect,
-  scalingBonus,
+  effectScaling,
   straightSegmentTo,
   routeEndpoint,
   createRoutePlanModel,
@@ -13492,7 +13676,7 @@ function auditArchitecture() {
     const blockedEquip = equipCampaignPart(
       campaignProbe,
       deploymentProbe,
-      "commander",
+      "vale",
       "coreSystem",
       "overclockCore"
     );
@@ -18336,7 +18520,7 @@ const CAMPAIGN = {
       "deployment": {
         "deploymentSize": 3,
         "requiredOperatorIds": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ],
@@ -18344,7 +18528,7 @@ const CAMPAIGN = {
         "guestOperators": [],
         "lockedDeployment": true,
         "deploymentOrder": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ]
@@ -18434,7 +18618,7 @@ const CAMPAIGN = {
       "deployment": {
         "deploymentSize": 3,
         "requiredOperatorIds": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ],
@@ -18442,7 +18626,7 @@ const CAMPAIGN = {
         "guestOperators": [],
         "lockedDeployment": true,
         "deploymentOrder": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ]
@@ -18471,7 +18655,7 @@ const CAMPAIGN = {
       "deployment": {
         "deploymentSize": 3,
         "requiredOperatorIds": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ],
@@ -18479,7 +18663,7 @@ const CAMPAIGN = {
         "guestOperators": [],
         "lockedDeployment": true,
         "deploymentOrder": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ]
@@ -18524,7 +18708,7 @@ const CAMPAIGN = {
       "deployment": {
         "deploymentSize": 3,
         "requiredOperatorIds": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ],
@@ -18532,7 +18716,7 @@ const CAMPAIGN = {
         "guestOperators": [],
         "lockedDeployment": true,
         "deploymentOrder": [
-          "commander",
+          "vale",
           "reyes",
           "kell"
         ]
@@ -18643,7 +18827,7 @@ const CAMPAIGN = {
       "deployment": {
         "deploymentSize": 3,
         "requiredOperatorIds": [
-          "commander",
+          "vale",
           "reyes"
         ],
         "optionalOperatorIds": [],
@@ -18655,7 +18839,7 @@ const CAMPAIGN = {
         ],
         "lockedDeployment": true,
         "deploymentOrder": [
-          "commander",
+          "vale",
           "nyx",
           "reyes"
         ]
@@ -18945,7 +19129,7 @@ const CAMPAIGN = {
               "text": "I heard it. I simply did not learn anything."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Hollowmere perimeter. Routine anti-raider work. We finish clean."
             }
           ]
@@ -18971,7 +19155,7 @@ const CAMPAIGN = {
           "choices": [
             {
               "id": "hollowmereApproach",
-              "speaker": "commander",
+              "speaker": "vale",
               "prompt": "Vale’s standing order",
               "options": [
                 {
@@ -19022,7 +19206,7 @@ const CAMPAIGN = {
               }
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Save the raw combat record. Nobody edits our copy."
             }
           ]
@@ -19138,7 +19322,7 @@ const CAMPAIGN = {
               "text": "Border Station Four is under coordinated raider assault."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "This one is real. Protect the personnel first."
             },
             {
@@ -19157,7 +19341,7 @@ const CAMPAIGN = {
           "kind": "propaganda",
           "lines": [
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Outpost holds. Get the wounded inside."
             },
             {
@@ -19192,7 +19376,7 @@ const CAMPAIGN = {
           "trigger": {
             "type": "battleStarted"
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Hold the approach. Reyes, keep the station side covered.",
           "priority": 90,
           "pauseBattle": true,
@@ -19215,7 +19399,7 @@ const CAMPAIGN = {
             "type": "enemyCountThreshold",
             "remainingAtMost": 2
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "They came in without supplies or an escape route. Who attacks like this?",
           "priority": 60,
           "pauseBattle": true,
@@ -19269,7 +19453,7 @@ const CAMPAIGN = {
               "text": "Meaning there is no record of the state owning any of it."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Secure the containers intact. We inspect everything ourselves."
             }
           ]
@@ -19288,7 +19472,7 @@ const CAMPAIGN = {
               "text": "The state stamped “recovered property” over the original settlement marks."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Copy the manifests. Command gets nothing until I know who ordered this."
             },
             {
@@ -19315,7 +19499,7 @@ const CAMPAIGN = {
           "trigger": {
             "type": "battleStarted"
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Disable the defenses. Do not rupture the containers.",
           "priority": 90,
           "pauseBattle": true,
@@ -19376,7 +19560,7 @@ const CAMPAIGN = {
             ],
             "destroyed": 2
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Both manifests secured. Preserve the raw files and move.",
           "priority": 60,
           "pauseBattle": true,
@@ -19415,7 +19599,7 @@ const CAMPAIGN = {
               "text": "Cleanup lance is approaching from the north with weapons hot."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "We reach the convoy first. Nobody fires until I know who is inside."
             }
           ]
@@ -19438,7 +19622,7 @@ const CAMPAIGN = {
               "text": "We have the weapons locks, depot manifests, and the edited target packet."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then this ends at Aldric’s desk. Through official channels, with every record."
             }
           ]
@@ -19496,7 +19680,7 @@ const CAMPAIGN = {
           "trigger": {
             "type": "firstEnemyDefeated"
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Government lance, stand down. Those transports are under my protection.",
           "priority": 75,
           "pauseBattle": true,
@@ -19554,7 +19738,7 @@ const CAMPAIGN = {
               "text": "Enough to prove the reports were prepared before the fighting."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "We take it through the official chain. Aldric answers in a room full of witnesses."
             },
             {
@@ -19562,7 +19746,7 @@ const CAMPAIGN = {
               "text": "Official channels belong to him."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then he can condemn himself using them."
             }
           ]
@@ -19581,7 +19765,7 @@ const CAMPAIGN = {
               "text": "And if the council already knows?"
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then we learn exactly how large the lie is."
             }
           ]
@@ -19612,7 +19796,7 @@ const CAMPAIGN = {
               "text": "Commander Vale. The nation’s newest hero arrives with concerns."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Combat records. Hollowmere was never a raider base. The relief depot was civilian property."
             },
             {
@@ -19669,7 +19853,7 @@ const CAMPAIGN = {
               "text": "Hollowmere was a resource. The crisis made it available and made the nation grateful."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "You manufactured the attack, took their relief, and called yourself the rescuer."
             },
             {
@@ -19680,7 +19864,7 @@ const CAMPAIGN = {
           "choices": [
             {
               "id": "confrontationStance",
-              "speaker": "commander",
+              "speaker": "vale",
               "prompt": "How does Vale answer?",
               "options": [
                 {
@@ -19710,7 +19894,7 @@ const CAMPAIGN = {
               "text": "Arrest Commander Vale for evidence fabrication, treason, and conspiracy."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Every person in this room knows what you did.",
               "when": {
                 "flag": "publiclyDefiant"
@@ -19793,7 +19977,7 @@ const CAMPAIGN = {
               "text": "Door is open. Kell has the cameras looping for ninety seconds."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Where is Kell?"
             },
             {
@@ -19816,7 +20000,7 @@ const CAMPAIGN = {
               "text": "They published that before your interrogation ended."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then we keep the original record alive."
             }
           ]
@@ -19831,7 +20015,7 @@ const CAMPAIGN = {
               "text": "Scout Nyx. I refused the cleanup order. They put me beside you for administrative convenience."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Can you pilot the stealth frame?"
             },
             {
@@ -19878,7 +20062,7 @@ const CAMPAIGN = {
               "text": "Those pilots were my unit yesterday."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Today they stand between us and the truth. Move."
             }
           ]
@@ -19901,7 +20085,7 @@ const CAMPAIGN = {
               "text": "Three damaged frames, Kell in a stolen utility truck, and almost no supplies."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then we survive the next hour first."
             }
           ]
@@ -20025,7 +20209,7 @@ const CAMPAIGN = {
               "text": "Fuel is low. We do not stay for a heroic last stand."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Relays, gate, extraction. Nothing else matters."
             }
           ]
@@ -20048,7 +20232,7 @@ const CAMPAIGN = {
               "text": "I know an abandoned quarry outside the official grid."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then that is home until it is not."
             }
           ]
@@ -20131,7 +20315,7 @@ const CAMPAIGN = {
               }
             ]
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "All units through. Close the gate behind us.",
           "priority": 70,
           "pauseBattle": true,
@@ -20169,7 +20353,7 @@ const CAMPAIGN = {
               "text": "Which makes it the best base we currently own."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Hideout. Not a base. Not yet."
             }
           ]
@@ -20199,7 +20383,7 @@ const CAMPAIGN = {
           "kind": "dialogue",
           "lines": [
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "We need parts and we need the people who can prove Hollowmere. We cannot reach both at once."
             },
             {
@@ -20207,7 +20391,7 @@ const CAMPAIGN = {
               "text": "Whichever operation we delay will get harder."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then we choose knowing the cost."
             }
           ]
@@ -20226,7 +20410,7 @@ const CAMPAIGN = {
               "text": "I have two transports of witnesses moving without lights. The government is searching every road."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "We make this place functional and bring them home."
             }
           ]
@@ -20261,7 +20445,7 @@ const CAMPAIGN = {
               "text": "We need all of it."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Containers are the objective. This is not a fair fight and does not need to become one."
             },
             {
@@ -20287,7 +20471,7 @@ const CAMPAIGN = {
               "text": "Give me an hour. The repair gantry will move again."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "The quarry is still vulnerable. At least now we can defend it."
             }
           ]
@@ -20366,7 +20550,7 @@ const CAMPAIGN = {
             ],
             "destroyed": 2
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Both containers open. Take what we can carry and withdraw.",
           "priority": 80,
           "pauseBattle": true,
@@ -20401,7 +20585,7 @@ const CAMPAIGN = {
               "text": "Government command frame is leading the interception."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Nobody touches those transports."
             },
             {
@@ -20437,7 +20621,7 @@ const CAMPAIGN = {
               "text": "The quarry can hide everyone for tonight."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Tonight is enough. Move the transports inside."
             }
           ]
@@ -20473,7 +20657,7 @@ const CAMPAIGN = {
             "tag": "civilian",
             "teamId": "player"
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Convoy visual. Form around the transports.",
           "priority": 85,
           "pauseBattle": true,
@@ -20552,7 +20736,7 @@ const CAMPAIGN = {
               "text": "The transports cannot move again."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then we hold the entrance. We are done trading people for our escape."
             }
           ]
@@ -20579,7 +20763,7 @@ const CAMPAIGN = {
               "text": "The broadcast calls this a terrorist compound."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "It is not a hiding place anymore. It is a base."
             }
           ]
@@ -20598,7 +20782,7 @@ const CAMPAIGN = {
               "text": "They gave us a name before we chose one."
             },
             {
-              "speaker": "commander",
+              "speaker": "vale",
               "text": "Then we choose what it means. We protect people, preserve the truth, and fight back from here."
             },
             {
@@ -20677,7 +20861,7 @@ const CAMPAIGN = {
             "type": "enemyCountThreshold",
             "remainingAtMost": 3
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "They expected fugitives. Show them people defending a home.",
           "priority": 70,
           "pauseBattle": true,
@@ -20688,7 +20872,7 @@ const CAMPAIGN = {
           "trigger": {
             "type": "battleVictoryConditionMet"
           },
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Quarry holds. Get everyone inside—we build from here.",
           "priority": 100,
           "pauseBattle": true,
@@ -20698,7 +20882,7 @@ const CAMPAIGN = {
     }
   },
   "speakers": {
-    "commander": {
+    "vale": {
       "name": "Commander Vale",
       "glyph": "🧑‍🚀"
     },
@@ -20749,7 +20933,7 @@ const CAMPAIGN = {
  * CAMPAIGN STATE
  * -------------------------------------------------------------*/
 
-const CAMPAIGN_SAVE_VERSION = 3;
+const CAMPAIGN_SAVE_VERSION = 4;
 
 const LEGACY_MISSION_ID_MAP = {
   hollowmerePerimeter: "act1-01-hollowmere-perimeter",
@@ -20769,6 +20953,57 @@ const LEGACY_MISSION_ID_MAP = {
 
 function currentMissionId(missionId) {
   return LEGACY_MISSION_ID_MAP[missionId] || missionId || null;
+}
+
+/**
+ * Operator ids that existed before an operator had exactly one.
+ *
+ * An operator used to be filed under a campaign key and *also* carry a `ref`
+ * that links, reactions and mission units addressed instead. The two were
+ * allowed to differ and, for one pilot, did — which meant the same person had
+ * two names and no rule about which to use where.
+ *
+ * There is now one id: the registry key. This map exists purely so a save
+ * written before that survives, and it is consulted in exactly one place —
+ * loading. Nothing downstream of the load resolves an alias, because the point
+ * of the migration is that the runtime only ever sees canonical ids.
+ */
+const LEGACY_OPERATOR_ID_MAP = {
+  commander: "vale"
+};
+
+function currentOperatorId(operatorId) {
+  return LEGACY_OPERATOR_ID_MAP[operatorId] || operatorId || null;
+}
+
+/** Re-keys any record filed by operator, dropping ids that no longer exist. */
+function migrateOperatorKeyedRecord(record) {
+  const out = {};
+  for (const key of Object.keys(record || {})) {
+    const canonical = currentOperatorId(key);
+    if (!canonical) continue;
+    out[canonical] = record[key];
+  }
+  return out;
+}
+
+/** Stored mission results carry a per-operator condition report of their own. */
+function migrateOutcomeOperatorIds(outcomes) {
+  const out = {};
+  for (const missionId of Object.keys(outcomes || {})) {
+    const outcome = outcomes[missionId];
+    out[missionId] =
+      outcome && outcome.conditions && outcome.conditions.byOperator
+        ? {
+            ...outcome,
+            conditions: {
+              ...outcome.conditions,
+              byOperator: migrateOperatorKeyedRecord(outcome.conditions.byOperator)
+            }
+          }
+        : outcome;
+  }
+  return out;
 }
 
 function migrateMissionIdList(values) {
@@ -21671,7 +21906,7 @@ function createCampaignMissionRoster(campaign, missionId, deployment) {
       // Stable authored identity for content that names units: links,
       // reactions, objectives and mission triggers all address units by ref.
       // Defaults to the operator id, so a new operator needs no extra data.
-      ref: operator.ref || operatorId,
+      ref: operatorId,
       definitionId: candidate.chassis,
       equipment: cloneLoadout(deployment.loadouts[operatorId]),
       modifiers: [{ stat: "maxHp", mode: "multiplier", value: conditionMultiplier, source: "condition" }]
@@ -22089,17 +22324,21 @@ function hasCampaignSlot() {
 function loadCampaign(serialized) {
   try {
     const parsed = typeof serialized === "string" ? JSON.parse(serialized) : serialized;
-    if (!parsed || ![CAMPAIGN_SAVE_VERSION, 2, 1].includes(parsed.version)) return null;
+    if (!parsed || ![CAMPAIGN_SAVE_VERSION, 3, 2, 1].includes(parsed.version)) return null;
     const base = createCampaignState();
     const roster = {};
-    for (const operatorId of Object.keys(parsed.roster || {})) {
+    for (const storedId of Object.keys(parsed.roster || {})) {
+      // The one place a legacy operator id is translated. Everything past this
+      // loop — including the entry's own `operatorId` field — is canonical.
+      const operatorId = currentOperatorId(storedId);
       if (!CAMPAIGN.operators[operatorId]) continue;
       roster[operatorId] = {
-        ...parsed.roster[operatorId],
-        xp: parsed.roster[operatorId].xp || 0,
-        rank: parsed.roster[operatorId].rank || 1,
-        perkId: parsed.roster[operatorId].perkId || null,
-        loadout: cloneLoadout(parsed.roster[operatorId].loadout)
+        ...parsed.roster[storedId],
+        operatorId,
+        xp: parsed.roster[storedId].xp || 0,
+        rank: parsed.roster[storedId].rank || 1,
+        perkId: parsed.roster[storedId].perkId || null,
+        loadout: cloneLoadout(parsed.roster[storedId].loadout)
       };
     }
     const migrated = parsed.version === 1
@@ -22131,7 +22370,9 @@ function loadCampaign(serialized) {
       facilities: { ...(migrated.facilities || {}) },
       orderChoices: JSON.parse(JSON.stringify(migrated.orderChoices || {})),
       missionOrder: migrateMissionIdList(migrated.missionOrder).filter((missionId) => !!CAMPAIGN.missions[missionId]),
-      missionOutcomes: JSON.parse(JSON.stringify(migrateMissionKeyedRecord(migrated.missionOutcomes || {}))),
+      missionOutcomes: JSON.parse(
+        JSON.stringify(migrateOutcomeOperatorIds(migrateMissionKeyedRecord(migrated.missionOutcomes || {})))
+      ),
       attempts: migrateMissionKeyedRecord(migrated.attempts || {}),
       activeMissionId: currentMissionId(migrated.activeMissionId),
       completedScenes: migrateCompletedSceneKeys(migrated.completedScenes),
@@ -24242,7 +24483,7 @@ function buildTestScene(steps, id) {
 test("Scenes", "A scene is an ordered list of steps and nothing else", () => {
   const scene = buildTestScene([
     { type: "background", background: "warner-road" },
-    { type: "dialogue", speaker: "commander", text: "One." },
+    { type: "dialogue", speaker: "vale", text: "One." },
     { type: "dialogue", speaker: "reyes", text: "Two." },
     { type: "end" }
   ]);
@@ -24260,8 +24501,8 @@ test("Scenes", "Presentation steps between lines cost the player nothing", () =>
   const scene = buildTestScene([
     { type: "background", background: "warner-road" },
     { type: "music", mode: "play", context: "briefing" },
-    { type: "characterEnter", character: "commander", position: "left" },
-    { type: "dialogue", speaker: "commander", text: "Here." }
+    { type: "characterEnter", character: "vale", position: "left" },
+    { type: "dialogue", speaker: "vale", text: "Here." }
   ]);
   // One advance from the start runs three presentation steps and stops on the
   // line, with all three already applied.
@@ -24305,14 +24546,14 @@ test("Scenes", "The stage at a step is a pure fold, so Play from here is exact",
 
 test("Scenes", "Entering, reacting and exiting change the stage in order", () => {
   const scene = buildTestScene([
-    { type: "characterEnter", character: "commander", position: "left", expression: "neutral" },
+    { type: "characterEnter", character: "vale", position: "left", expression: "neutral" },
     { type: "characterEnter", character: "reyes", position: "right", expression: "neutral" },
     { type: "expression", character: "reyes", expression: "concerned" },
-    { type: "characterExit", character: "commander" },
+    { type: "characterExit", character: "vale" },
     { type: "clear" }
   ]);
   const afterEnter = stageAt(scene, 1);
-  assertEqual(afterEnter.characters.map((entry) => entry.character).join(","), "commander,reyes");
+  assertEqual(afterEnter.characters.map((entry) => entry.character).join(","), "vale,reyes");
   assertEqual(afterEnter.characters[1].position, "right");
 
   const afterReaction = stageAt(scene, 2);
@@ -24353,7 +24594,7 @@ test("Scenes", "A scene round-trips through serialize and parse", () => {
 });
 
 test("Scenes", "Exported scenes carry no editor state", () => {
-  const scene = buildTestScene([{ type: "dialogue", speaker: "commander", text: "Hi." }]);
+  const scene = buildTestScene([{ type: "dialogue", speaker: "vale", text: "Hi." }]);
   const text = serializeScene(scene);
   assertEqual(text.includes('"key"'), false, "step keys stay in the editor");
   assert(text.endsWith("\n"), "files end with a newline so diffs stay clean");
@@ -24364,7 +24605,7 @@ test("Scenes", "Validation names the exact step that is wrong", () => {
     buildTestScene([
       { type: "background", background: "warner-road" },
       { type: "dialogue", speaker: "vlae", text: "Typo." },
-      { type: "dialogue", speaker: "commander", text: "" },
+      { type: "dialogue", speaker: "vale", text: "" },
       { type: "characterEnter", character: "reyes", position: "overhead" },
       { type: "expression", character: "reyes", expression: "smouldering" },
       { type: "end" }
@@ -24384,7 +24625,7 @@ test("Scenes", "Missing art warns rather than blocking the writing", () => {
   const report = validateScene(
     buildTestScene([
       { type: "background", background: "a-place-with-no-art-yet" },
-      { type: "dialogue", speaker: "commander", text: "Still writable." },
+      { type: "dialogue", speaker: "vale", text: "Still writable." },
       { type: "end" }
     ]),
     SCENE_TEST_REFS()
@@ -24407,7 +24648,7 @@ test("Scenes", "Structural problems are caught", () => {
   assertEqual(badId.ok, false, "ids must be stable slugs");
 
   const duplicate = validateScene(
-    buildTestScene([{ type: "dialogue", speaker: "commander", text: "x" }], "dupe"),
+    buildTestScene([{ type: "dialogue", speaker: "vale", text: "x" }], "dupe"),
     { ...SCENE_TEST_REFS(), knownSceneIds: ["dupe", "dupe"] }
   );
   assert(
@@ -24418,7 +24659,7 @@ test("Scenes", "Structural problems are caught", () => {
   const unreachable = validateScene(
     buildTestScene([
       { type: "end" },
-      { type: "dialogue", speaker: "commander", text: "never runs" }
+      { type: "dialogue", speaker: "vale", text: "never runs" }
     ]),
     SCENE_TEST_REFS()
   );
@@ -24454,7 +24695,7 @@ test("Scenes", "A scene runs to completion with no battle anywhere near it", () 
   assertEqual(position.done, true, "the scene ended");
   assert(lines.length >= 5, "and delivered its dialogue, got " + lines.length);
   assertEqual(
-    lines[0].startsWith("commander:"),
+    lines[0].startsWith("vale:"),
     true,
     "in the authored order, starting with " + lines[0]
   );
@@ -24465,7 +24706,7 @@ test("Scenes", "The legacy lines format lifts into steps without a second runtim
     title: "Old Scene",
     location: "Warner Road",
     lines: [
-      { speaker: "commander", text: "First." },
+      { speaker: "vale", text: "First." },
       { speaker: "reyes", text: "Second." }
     ]
   };
@@ -24554,18 +24795,29 @@ test("Scenes", "The step registry drives the editor, so a new type needs no edit
     assert(typeof definition.apply === "function", type + " needs an apply");
     assert(Array.isArray(definition.fields), type + " needs a field list");
 
-    // A default step of every type must be valid once its required free text
-    // is filled in — that is the only thing the author must supply. Anything
-    // else missing would mean "add step" creates something broken.
+    // A default step of every type must be valid once the author fills in what
+    // the step declares required — text, and who is saying it. Anything else
+    // missing would mean "add step" creates something broken.
+    //
+    // A speaker is required author input rather than a default: the step
+    // registry is generic and must not name a character, so a new dialogue
+    // step arrives with the field empty and the editor asks for it.
     const step = normalizeStep({ type });
-    const placeholders = { text: "placeholder", line: "placeholder", background: "warner-road" };
+    const placeholders = {
+      text: "placeholder",
+      line: "placeholder",
+      background: "warner-road",
+      // Whoever the campaign happens to list first. Read rather than named, so
+      // this check survives the cast changing.
+      speaker: Object.keys(CAMPAIGN.speakers)[0]
+    };
     for (const field of definition.fields) {
       if (field.required && !step[field.key] && placeholders[field.kind]) {
         step[field.key] = placeholders[field.kind];
       }
     }
     const report = validateScene(
-      buildTestScene([{ type: "dialogue", speaker: "commander", text: "x" }, step]),
+      buildTestScene([{ type: "dialogue", speaker: "vale", text: "x" }, step]),
       SCENE_TEST_REFS()
     );
     assertEqual(report.ok, true, type + " default is invalid: " + report.errors.join(" | "));
@@ -34208,7 +34460,7 @@ test("Act One campaign", "Both operation orders reach the same vulnerable first 
     assertEqual(campaign.finished, true);
     assertEqual(campaign.completed.length, 13);
     assertEqual(createBaseModel(campaign).stageName, "Hidden Resistance Base");
-    assertEqual(Object.keys(campaign.roster).sort().join(","), "commander,kell,nyx,reyes");
+    assertEqual(Object.keys(campaign.roster).sort().join(","), "kell,nyx,reyes,vale");
     assertEqual(campaignFlag(campaign, "baseEstablished"), true);
   }
 });
@@ -36525,8 +36777,7 @@ test("Reactions", "Campaign-deployed operators carry stable authored refs", () =
   }
   // The operator table maps the protagonist onto the ref the character
   // documents and the link content use.
-  assertEqual(CAMPAIGN.operators.commander.ref, "vale");
-  assert(refs.includes("vale"), "the commander deployed as vale");
+  assert(refs.includes("vale"), "the commander deploys under her canonical id");
   assert(refs.includes("kell") && refs.includes("reyes"), "and so did the rest of the trio");
 });
 
@@ -36577,12 +36828,12 @@ test("Reactions", "Every reaction definition validates against the registries", 
 
 test("Progression", "Persistent damage creates a finite repair decision and repair consumes supplies", () => {
   let campaign = createCampaignState();
-  campaign = { ...campaign, roster: { ...campaign.roster, commander: { ...campaign.roster.commander, condition: 54 } } };
-  const cost = repairCost(campaign, "commander");
+  campaign = { ...campaign, roster: { ...campaign.roster, vale: { ...campaign.roster.vale, condition: 54 } } };
+  const cost = repairCost(campaign, "vale");
   assert(cost > 0 && Number.isFinite(cost));
   const supplies = campaign.supplies;
-  campaign = repairCampaignOperator(campaign, "commander");
-  assertEqual(campaign.roster.commander.condition, 100);
+  campaign = repairCampaignOperator(campaign, "vale");
+  assertEqual(campaign.roster.vale.condition, 100);
   assertEqual(campaign.supplies, supplies - cost);
   assert(campaign.supplies >= 0);
 });
@@ -36603,16 +36854,16 @@ test("Progression", "Operators rank up after field experience and may choose exa
   let campaign = createCampaignState();
   campaign = completeActOneMission(campaign, "act1-01-hollowmere-perimeter");
   campaign = completeActOneMission(campaign, "act1-02-border-outpost-defense");
-  assertEqual(campaign.roster.commander.rank, 2);
-  assertEqual(campaign.roster.commander.xp, 50);
-  campaign = chooseCampaignPerk(campaign, "commander", "valeBulwark");
-  assertEqual(campaign.roster.commander.perkId, "valeBulwark");
-  const duplicate = chooseCampaignPerk(campaign, "commander", "valeVanguard");
-  assertEqual(duplicate.roster.commander.perkId, "valeBulwark");
+  assertEqual(campaign.roster.vale.rank, 2);
+  assertEqual(campaign.roster.vale.xp, 50);
+  campaign = chooseCampaignPerk(campaign, "vale", "valeBulwark");
+  assertEqual(campaign.roster.vale.perkId, "valeBulwark");
+  const duplicate = chooseCampaignPerk(campaign, "vale", "valeVanguard");
+  assertEqual(duplicate.roster.vale.perkId, "valeBulwark");
 
   const deployment = createCampaignDeploymentState(campaign, "act1-03-recovered-relief");
   const roster = createCampaignMissionRoster(campaign, "act1-03-recovered-relief", deployment);
-  const vale = roster.find((entry) => entry.operatorId === "commander");
+  const vale = roster.find((entry) => entry.operatorId === "vale");
   assert(vale.modifiers.some((modifier) => modifier.source === "condition"));
   assert(vale.modifiers.some((modifier) => modifier.stat === "maxHp" && modifier.mode === "flat"));
 });
@@ -36620,13 +36871,13 @@ test("Progression", "Operators rank up after field experience and may choose exa
 test("Progression", "Save and load preserve facilities, ranks, perks, order and inventory", () => {
   let campaign = advanceActOneTo(createCampaignState(), "act1-11a-supply-interception");
   campaign = buildCampaignFacility(campaign, "repairBay");
-  campaign = { ...campaign, roster: { ...campaign.roster, commander: { ...campaign.roster.commander, rank: 2, xp: 50 } } };
-  campaign = chooseCampaignPerk(campaign, "commander", "valeVanguard");
+  campaign = { ...campaign, roster: { ...campaign.roster, vale: { ...campaign.roster.vale, rank: 2, xp: 50 } } };
+  campaign = chooseCampaignPerk(campaign, "vale", "valeVanguard");
   campaign = completeActOneMission(campaign, "act1-11b-witness-convoy");
   const loaded = loadCampaign(saveCampaign(campaign));
   assert(loaded);
   assertEqual(loaded.facilities.repairBay, true);
-  assertEqual(loaded.roster.commander.perkId, "valeVanguard");
+  assertEqual(loaded.roster.vale.perkId, "valeVanguard");
   assertEqual(loaded.orderChoices.quarryPriority[0], "Witness Convoy");
   assertEqual(JSON.stringify(loaded.inventory), JSON.stringify(campaign.inventory));
 });
@@ -36636,14 +36887,14 @@ test("Progression", "Failed missions grant no rewards, experience, flags, recrui
   const before = JSON.stringify(campaign);
   const failed = resolveMissionOutcome(beginMission(campaign, "act1-08-jailbreak"), "act1-08-jailbreak", {
     victory: false,
-    conditions: { byOperator: { commander: 5, reyes: 5 } },
+    conditions: { byOperator: { vale: 5, reyes: 5 } },
     facts: {}
   });
   assertEqual(failed.completed.includes("act1-08-jailbreak"), false);
   assertEqual(Object.prototype.hasOwnProperty.call(failed.roster, "nyx"), false);
   assertEqual(failed.inventory.jumpJets || 0, 0);
-  assertEqual(failed.roster.commander.condition, campaign.roster.commander.condition);
-  assertEqual(failed.roster.commander.xp, campaign.roster.commander.xp);
+  assertEqual(failed.roster.vale.condition, campaign.roster.vale.condition);
+  assertEqual(failed.roster.vale.xp, campaign.roster.vale.xp);
   assertEqual(JSON.parse(before).completed.length, campaign.completed.length);
 });
 
@@ -41119,7 +41370,7 @@ function StorySequenceScreen({ sequence, title, subtitle, onChoose, onSceneCompl
 
   const choiceResponseLine = React.useMemo(() => {
     if (!choice || !selectedOption) return null;
-    const speakerId = selectedOption.speaker || choice.speaker || "commander";
+    const speakerId = selectedOption.speaker || choice.speaker || "vale";
     const speaker = CAMPAIGN.speakers[speakerId] || { name: speakerId, glyph: "💬" };
     return {
       speaker: speakerId,

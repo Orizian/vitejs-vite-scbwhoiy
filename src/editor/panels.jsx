@@ -863,7 +863,7 @@ export function ScenesPanel({ mission, update, selectedSceneId, setSelectedScene
                   title: "New Scene",
                   location: "",
                   kind: "dialogue",
-                  lines: [{ speaker: "commander", text: "" }],
+                  lines: [{ speaker: "", text: "" }],
                   choices: []
                 };
                 setSelectedSceneId(id);
@@ -1006,7 +1006,7 @@ export function ScenesPanel({ mission, update, selectedSceneId, setSelectedScene
               onClick={() =>
                 update((draft) => {
                   const lines = draft.scenes[selectedSceneId].lines;
-                  lines.push({ speaker: lines.length ? lines[lines.length - 1].speaker : "commander", text: "" });
+                  lines.push({ speaker: lines.length ? lines[lines.length - 1].speaker : "", text: "" });
                 })
               }
             >
@@ -1125,7 +1125,7 @@ export function BeatsPanel({ mission, update, selectedBeatId, setSelectedBeatId 
                 draft.midBattle.push({
                   id,
                   trigger: { type: "battleStarted" },
-                  speaker: "commander",
+                  speaker: "",
                   text: "",
                   followUpLines: [],
                   priority: 50,

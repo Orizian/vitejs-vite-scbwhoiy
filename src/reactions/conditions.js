@@ -12,6 +12,7 @@
  * =======================================================================*/
 
 import { KNOWLEDGE_STATES as KNOWLEDGE_ORDER } from "../perception/channels.js";
+import { resourceQueryHolds, validateResourceQuery } from "../combat/resources.js";
 
 export const REACTION_CONDITION_REGISTRY = {
   all: {
@@ -350,8 +351,47 @@ export const REACTION_CONDITION_REGISTRY = {
     fields: ["amountAtLeast"],
     summary: "The event's amount is at least this large.",
     evaluate: (condition, ctx) => (ctx.event.amount || 0) >= condition.amountAtLeast
+  },
+
+  /**
+   * A combat resource balance, on the reactor or on either side of the event.
+   *
+   * Which pool this reads is decided by the resource's own scope, exactly as
+   * spending it would be: name a faction resource and it asks the faction,
+   * name a personal one and it asks the unit. The condition never says which,
+   * so a squad economy and a private rack are authored identically.
+   *
+   * This is what lets a reaction be offered only when it would achieve
+   * something — a rescue that fires when the shared budget is nearly gone, a
+   * riposte that needs poise banked, a steal that stays quiet when the target
+   * is carrying nothing.
+   */
+  resourceBalance: {
+    fields: ["resourceBalance", "of", "compare", "value", "percentOfMax"],
+    summary:
+      "A resource balance held by the reactor (default), the event's subject or its source.",
+    evaluate: (condition, ctx) => {
+      const ownerId = resourceOwnerId(condition.of, ctx);
+      if (!ownerId) return false;
+      const reading = ctx.resourceReading(ownerId, condition.resourceBalance);
+      return resourceQueryHolds(reading, {
+        resourceId: condition.resourceBalance,
+        compare: condition.compare,
+        value: condition.value,
+        percentOfMax: condition.percentOfMax
+      });
+    }
   }
 };
+
+/** Who a resource question is asked about. Defaults to the reacting unit. */
+function resourceOwnerId(of, ctx) {
+  if (of === "subject") return ctx.event.unitId || null;
+  if (of === "source") return ctx.event.sourceUnitId || null;
+  return ctx.reactorId || null;
+}
+
+export const RESOURCE_CONDITION_OWNERS = ["reactor", "subject", "source"];
 
 export const REACTION_CONDITION_IDS = Object.keys(REACTION_CONDITION_REGISTRY);
 
@@ -374,13 +414,13 @@ export function evaluateReactionCondition(condition, ctx) {
 }
 
 /** Static validation, shared by the content check and the editor. */
-export function validateReactionCondition(condition, path) {
+export function validateReactionCondition(condition, path, knownResourceIds) {
   const where = path || "condition";
   const problems = [];
   if (condition == null) return problems;
   if (Array.isArray(condition)) {
     condition.forEach((entry, index) => {
-      problems.push(...validateReactionCondition(entry, where + "[" + index + "]"));
+      problems.push(...validateReactionCondition(entry, where + "[" + index + "]", knownResourceIds));
     });
     return problems;
   }
@@ -396,10 +436,32 @@ export function validateReactionCondition(condition, path) {
     const list = condition[kind];
     if (!Array.isArray(list) || !list.length) return [where + "." + kind + " needs a non-empty list."];
     list.forEach((entry, index) => {
-      problems.push(...validateReactionCondition(entry, where + "." + kind + "[" + index + "]"));
+      problems.push(
+        ...validateReactionCondition(entry, where + "." + kind + "[" + index + "]", knownResourceIds)
+      );
     });
     return problems;
   }
-  if (kind === "not") return validateReactionCondition(condition.not, where + ".not");
+  if (kind === "not") return validateReactionCondition(condition.not, where + ".not", knownResourceIds);
+  if (kind === "resourceBalance") {
+    if (condition.of != null && !RESOURCE_CONDITION_OWNERS.includes(condition.of)) {
+      problems.push(
+        where + ' asks about unknown owner "' + condition.of + '" (' +
+          RESOURCE_CONDITION_OWNERS.join(", ") + ').'
+      );
+    }
+    problems.push(
+      ...validateResourceQuery(
+        {
+          resourceId: condition.resourceBalance,
+          compare: condition.compare,
+          value: condition.value,
+          percentOfMax: condition.percentOfMax
+        },
+        where,
+        knownResourceIds
+      )
+    );
+  }
   return problems;
 }

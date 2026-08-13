@@ -1636,7 +1636,7 @@
           "text": "Bellview's pump station is under coordinated raider assault. Water for four districts runs through it."
         },
         {
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "This one is real. Personnel first, then the pumps."
         },
         {
@@ -1656,7 +1656,7 @@
       "kind": "propaganda",
       "lines": [
         {
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Station holds. Get the crew inside and the west housing sealed."
         },
         {
@@ -1704,7 +1704,7 @@
       "trigger": {
         "type": "battleStarted"
       },
-      "speaker": "commander",
+      "speaker": "vale",
       "text": "Two lanes into the yard. Reyes, keep the crew side covered — Kell, take the berm.",
       "followUpLines": [],
       "priority": 90,
@@ -1777,7 +1777,7 @@
         "regionRef": "pumpYard",
         "teamId": "foe"
       },
-      "speaker": "commander",
+      "speaker": "vale",
       "text": "They're inside the wall. Forget the lanes — everything falls back to the housings.",
       "followUpLines": [],
       "priority": 85,
@@ -1792,7 +1792,7 @@
         "type": "enemyCountThreshold",
         "remainingAtMost": 3
       },
-      "speaker": "commander",
+      "speaker": "vale",
       "text": "They came in without supplies or a way out. Who attacks like this?",
       "followUpLines": [
         {

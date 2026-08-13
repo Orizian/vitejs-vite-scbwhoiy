@@ -510,7 +510,7 @@
       "kind": "dialogue",
       "lines": [
         {
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Kell is anchoring. He has the shot on me and he is not taking it."
         },
         {
@@ -558,7 +558,7 @@
           "text": "Hold still. Your left actuator is three seconds from seizing."
         },
         {
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Reyes —"
         },
         {
@@ -590,7 +590,7 @@
       "kind": "aftermath",
       "lines": [
         {
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Section Seven is back. Get them off this field before anyone reconsiders."
         }
       ],
@@ -920,7 +920,7 @@
       "actions": [
         {
           "type": "queueBark",
-          "speaker": "commander",
+          "speaker": "vale",
           "text": "Two Section Seven frames on the ridge. They knew we were coming."
         }
       ]

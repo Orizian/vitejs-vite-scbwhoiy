@@ -17,13 +17,13 @@
     },
     {
       "type": "characterEnter",
-      "character": "commander",
+      "character": "vale",
       "position": "left",
       "expression": "neutral"
     },
     {
       "type": "dialogue",
-      "speaker": "commander",
+      "speaker": "vale",
       "text": "Convoy stopped a klick back. Whatever came through here, it came through fast."
     },
     {
@@ -39,7 +39,7 @@
     },
     {
       "type": "dialogue",
-      "speaker": "commander",
+      "speaker": "vale",
       "text": "Then the report says Warner was evacuated."
     },
     {
@@ -54,12 +54,12 @@
     },
     {
       "type": "expression",
-      "character": "commander",
+      "character": "vale",
       "expression": "resolute"
     },
     {
       "type": "dialogue",
-      "speaker": "commander",
+      "speaker": "vale",
       "text": "Then there are still people down there. Get Kell on the ridge and tell him to keep his hands off the trigger until I say so."
     },
     {
@@ -73,7 +73,7 @@
     },
     {
       "type": "dialogue",
-      "speaker": "commander",
+      "speaker": "vale",
       "text": "Eleven days. And not one of them thought to check."
     },
     {

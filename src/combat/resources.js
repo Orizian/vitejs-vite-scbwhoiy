@@ -144,6 +144,101 @@ export function unitResourceIds(state, unitId) {
 }
 
 /* ---------------------------------------------------------------
+ * QUERIES
+ *
+ * Asking about a balance is not the same as changing one, and until now only
+ * the second half had a vocabulary. An ability could *cost* three charges; no
+ * authored condition could ask whether the target had three worth stealing.
+ *
+ * The comparison lives here rather than in a condition registry because there
+ * are two condition registries — one for effects, one for reactions — and a
+ * balance must mean the same thing in both. They each own how a query is
+ * *addressed*; this owns what it *answers*.
+ * -------------------------------------------------------------*/
+
+const COMPARISONS = {
+  atLeast: (measured, value) => measured >= value,
+  atMost: (measured, value) => measured <= value,
+  equal: (measured, value) => measured === value,
+  notEqual: (measured, value) => measured !== value
+};
+
+export const RESOURCE_COMPARISONS = Object.keys(COMPARISONS);
+export const DEFAULT_RESOURCE_COMPARISON = "atLeast";
+
+/**
+ * What a query is actually looking at: a live balance and the ceiling it is
+ * measured against.
+ *
+ * Scope is resolved by the caller's owner, exactly as spending does, so a
+ * faction pool is read from the faction bucket and a personal one from the
+ * unit. Nothing here decides who owns what.
+ */
+export function readResource(state, definition, owner) {
+  const entry = resourceEntry(state, definition, owner);
+  return {
+    present: !!entry,
+    balance: entry ? entry.current : 0,
+    max: definition ? definition.max || 0 : 0,
+    available: entry ? entry.available !== false : false
+  };
+}
+
+/**
+ * Whether a reading satisfies an authored comparison.
+ *
+ * `percentOfMax` measures the balance against the definition's own ceiling,
+ * which is the only way "nearly empty" survives a rebalance: an author who
+ * doubles a pool's maximum does not have to revisit every condition that
+ * mentioned it. A resource with no ceiling reads as zero percent rather than
+ * dividing by nothing.
+ */
+export function resourceQueryHolds(reading, query) {
+  if (!reading || !reading.present || !query) return false;
+  const compare = COMPARISONS[query.compare || DEFAULT_RESOURCE_COMPARISON];
+  if (!compare) return false;
+  const measured = query.percentOfMax
+    ? reading.max > 0
+      ? (reading.balance / reading.max) * 100
+      : 0
+    : reading.balance;
+  return compare(measured, Number(query.value || 0));
+}
+
+/**
+ * Static problems with an authored balance query, shared by both condition
+ * validators and the editor. `knownResourceIds` is optional: a chassis-only
+ * pool has no registry entry, so an unknown id is only an error where the
+ * caller can actually enumerate what exists.
+ */
+export function validateResourceQuery(query, path, knownResourceIds) {
+  const where = path || "condition";
+  const problems = [];
+  if (!query || typeof query !== "object") return [where + " must be an object."];
+  if (!query.resourceId) {
+    problems.push(where + " names no resource.");
+  } else if (knownResourceIds && !knownResourceIds.includes(query.resourceId)) {
+    problems.push(where + ' asks about unknown resource "' + query.resourceId + '".');
+  }
+  if (query.compare != null && !RESOURCE_COMPARISONS.includes(query.compare)) {
+    problems.push(
+      where + ' uses unknown comparison "' + query.compare + '" (' + RESOURCE_COMPARISONS.join(", ") + ').'
+    );
+  }
+  const value = Number(query.value);
+  if (!Number.isFinite(value)) {
+    problems.push(where + " needs a numeric value.");
+  } else if (value < 0) {
+    // Balances are clamped at zero, so a negative threshold is either a typo
+    // or a condition that can never change its answer.
+    problems.push(where + " compares against a negative balance, which cannot happen.");
+  } else if (query.percentOfMax && value > 100) {
+    problems.push(where + " compares against more than 100 percent of a maximum.");
+  }
+  return problems;
+}
+
+/* ---------------------------------------------------------------
  * READ / WRITE
  * -------------------------------------------------------------*/
 

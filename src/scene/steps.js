@@ -71,7 +71,7 @@ export const SCENE_STEP_TYPES = {
       { key: "expression", label: "Expression", kind: "expression", optional: true },
       { key: "position", label: "Portrait side", kind: "position", optional: true }
     ],
-    defaults: () => ({ speaker: "commander", text: "", expression: null, position: null }),
+    defaults: () => ({ speaker: "", text: "", expression: null, position: null }),
     validate(step, refs) {
       const problems = [];
       if (!filled(step.speaker)) problems.push("needs a speaker.");
@@ -112,7 +112,7 @@ export const SCENE_STEP_TYPES = {
       { key: "position", label: "Position", kind: "position", required: true },
       { key: "expression", label: "Expression", kind: "expression", optional: true }
     ],
-    defaults: () => ({ character: "commander", position: "left", expression: null }),
+    defaults: () => ({ character: "", position: "left", expression: null }),
     validate(step, refs) {
       const problems = [];
       if (!filled(step.character)) problems.push("needs a character.");
@@ -143,7 +143,7 @@ export const SCENE_STEP_TYPES = {
     summary: (step, refs) => (refs.speakerName(step.character) || step.character || "?") + " leaves",
     blocking: false,
     fields: [{ key: "character", label: "Character", kind: "speaker", required: true }],
-    defaults: () => ({ character: "commander" }),
+    defaults: () => ({ character: "" }),
     validate(step, refs) {
       if (!filled(step.character)) return ["needs a character."];
       if (!refs.isSpeaker(step.character)) {
@@ -168,7 +168,7 @@ export const SCENE_STEP_TYPES = {
       { key: "character", label: "Character", kind: "speaker", required: true },
       { key: "expression", label: "Expression", kind: "expression", required: true }
     ],
-    defaults: () => ({ character: "commander", expression: "concerned" }),
+    defaults: () => ({ character: "", expression: "concerned" }),
     validate(step, refs) {
       const problems = [];
       if (!filled(step.character)) problems.push("needs a character.");
