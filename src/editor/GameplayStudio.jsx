@@ -1358,6 +1358,9 @@ function SchemaField({ field, value, data, onChange }) {
             Available: {vocabulary.join(", ")}
           </p>
         ) : null}
+        {field.help ? (
+          <p className="mb-2 break-words text-[10px] leading-relaxed text-slate-600">{field.help}</p>
+        ) : null}
         <textarea
           rows={Math.min(20, Math.max(4, JSON.stringify(current, null, 2).split("\n").length))}
           value={JSON.stringify(current, null, 2)}

@@ -505,6 +505,154 @@ console.log("    ability model incl. transfer plan: " + perf.per.toFixed(4) + "m
 check("11. two runs of the same seed are identical", perf.identical);
 check("    and asking what a transfer would do is free", perf.per < 2, perf.per.toFixed(4) + "ms");
 
+
+/* ---- 15. the tactical language ----
+ *
+ * The connective vocabulary, driven through the real runtime: an ability
+ * refused on a balance, a mark that changes a number the player is shown and
+ * then delivers it, and a status acting at a moment other than the start of a
+ * turn. Everything below is authored data; none of it has engine support for
+ * the particular resource, status or pilot involved.
+ */
+console.log("\ntactical language");
+
+const language = await page.evaluate(`(() => {
+  ${PRELUDE}
+
+  /* -- a balance decides whether an ability is offered at all -- */
+  const gate = arena(940);
+  const veteran = ref(gate, "veteran");
+  Z.activateUnitForTest(gate, veteran.id);
+  setPool(gate, "veteran", "burst", 5);
+  const whenFull = Z.abilityModel(gate, veteran.id, "spoolDrive");
+  setPool(gate, "veteran", "burst", 2);
+  const whenRoom = Z.abilityModel(gate, veteran.id, "spoolDrive");
+
+  /* -- the same condition shape, asked of the squad's shared pool -- */
+  const shared = arena(941);
+  const reyes = stage(shared);
+  setPool(shared, "reyes", "supportCharge", 4);
+  const budget = cp(shared);
+  budget.current = budget.max;
+  const relayFull = Z.abilityModel(shared, reyes.id, "tacticalRelay");
+  budget.current = 1;
+  const relayRoom = Z.abilityModel(shared, reyes.id, "tacticalRelay");
+
+  /* -- a mark is worth a number, and the number is kept -- */
+  const marked = arena(942);
+  const kell = ref(marked, "kell");
+  const victim = ref(marked, "target");
+  kell.x = victim.x - 4;
+  kell.y = victim.y;
+  const shot = (state, shooter, mark) =>
+    Z.forecastAbility(state, shooter.id, "precisionShot", mark.id)
+      .filter((entry) => entry.effectType === "damage")
+      .reduce((total, entry) => total + entry.amount, 0);
+
+  const beforeMark = shot(marked, kell, victim);
+  Z.reactionEngine.applyStatus(marked, kell.id, [victim.id], "marked");
+  Z.reactionEngine.applyStatus(marked, kell.id, [kell.id], "braced");
+  Z.settleBattle(marked);
+  const afterMark = shot(marked, kell, victim);
+
+  Z.activateUnitForTest(marked, kell.id);
+  const fired = Z.executeCommand(marked, {
+    type: "useAbility",
+    unitId: kell.id,
+    abilityId: "precisionShot",
+    target: { unitId: victim.id }
+  });
+  const landed = fired.events.find((event) => event.type === "damageResolved");
+  const missed = fired.events.some((event) => event.type === "attackMissed");
+
+  /* -- a status acting when the activation ends -- */
+  const closing = arena(943);
+  const cooler = ref(closing, "veteran");
+  cooler.statuses.push({ statusId: "coolingCycle", remaining: 3 });
+  Z.activateUnitForTest(closing, cooler.id);
+  Z.settleBattle(closing);
+  setPool(closing, "veteran", "burst", 0);
+  Z.executeCommand(closing, { type: "endTurn", unitId: cooler.id });
+  Z.settleBattle(closing);
+
+  /* -- a status answering whoever damaged it, and stopping -- */
+  const plated = arena(944);
+  const wearer = ref(plated, "veteran");
+  const attacker = ref(plated, "target");
+  wearer.currentHp = 99999;
+  attacker.currentHp = 99999;
+  wearer.statuses.push({ statusId: "reactivePlating", remaining: 99 });
+  attacker.statuses.push({ statusId: "reactivePlating", remaining: 99 });
+  Z.activateUnitForTest(plated, attacker.id);
+  const exchange = Z.executeCommand(plated, {
+    type: "useAbility",
+    unitId: attacker.id,
+    abilityId: "handCannon",
+    target: { unitId: wearer.id }
+  });
+  Z.settleBattle(plated);
+  const exchanges = (exchange.events || []).filter(
+    (event) => event.type === "statusTriggered"
+  ).length;
+  const opened = (exchange.events || []).some((event) => event.type === "damageResolved");
+
+  return {
+    fullRefused: whenFull.usable === false,
+    fullReason: (whenFull.unusableReasons || []).join(" "),
+    roomOffered: whenRoom.usable === true,
+    relayFullRefused: relayFull.usable === false,
+    relayRoomOffered: relayRoom.usable === true,
+    sameConditionType:
+      Z.content.abilities.spoolDrive.conditions[0].type ===
+      Z.content.abilities.tacticalRelay.conditions[0].type,
+    beforeMark,
+    afterMark,
+    landedAmount: landed ? landed.amount : null,
+    landedMultiplier: landed ? landed.scalingMultiplier : null,
+    missed,
+    coolingRestored: (pool(closing, "veteran", "burst") || {}).current,
+    exchanges,
+    opened,
+    queueDrained: plated.resolutionQueue.length === 0,
+    noRunaway: !(plated.errors || []).some((message) => /maximum event count/.test(message)),
+    stillStanding: wearer.alive && attacker.alive
+  };
+})()`);
+
+check("15. a full rack refuses the ability that fills it", language.fullRefused);
+check("    and says why", /room/i.test(language.fullReason), language.fullReason);
+check("    while a rack with room offers it", language.roomOffered);
+check("    the same condition shape gates on the squad's pool", language.relayFullRefused);
+check("    which opens again when the pool has room", language.relayRoomOffered);
+check("    one condition type covers both scopes", language.sameConditionType);
+check(
+  "16. a mark raises the number the player is shown",
+  language.afterMark > language.beforeMark,
+  language.beforeMark + " → " + language.afterMark
+);
+check(
+  "    and the shot delivers exactly what was promised",
+  language.missed || language.landedAmount === language.afterMark,
+  language.missed ? "missed" : language.landedAmount + " vs " + language.afterMark
+);
+check(
+  "    with the mark attributed rather than baked in",
+  language.missed || language.landedMultiplier > 1,
+  String(language.landedMultiplier)
+);
+check(
+  "17. a status acts when the activation closes",
+  language.coolingRestored === 1,
+  String(language.coolingRestored)
+);
+check(
+  "18. retaliation answering retaliation goes back and forth",
+  !language.opened || language.exchanges > 1,
+  language.exchanges + " steps"
+);
+check("    and stops on its own", language.queueDrained && language.noRunaway);
+check("    with both frames still standing", language.stillStanding);
+
 /* ---- 12. the Studio ---- */
 console.log("\nstudio");
 await page.evaluate(() => {
@@ -534,6 +682,29 @@ await page.waitForTimeout(400);
 const behaviourText = await page.locator("body").innerText();
 check("    taking abilities offline is editable", /Takes these offline/i.test(behaviourText));
 check("    and so is doing it by tag", /Takes tagged actions offline/i.test(behaviourText));
+// The moments a status may act on are offered as a closed list, and the list
+// is the engine's own — an author cannot type a moment nothing fires.
+check(
+  "    the trigger moments are offered as a closed list",
+  /activationStart/.test(behaviourText) &&
+    /activationEnd/.test(behaviourText) &&
+    /unitDamaged/.test(behaviourText) &&
+    /killedUnit/.test(behaviourText)
+);
+check("    including where a trigger lands", /counterpart/i.test(behaviourText));
+
+await page.getByRole("button", { name: /^Operators$/ }).first().click();
+await page.waitForTimeout(700);
+const operatorList = await page.locator("body").innerText();
+check("    operators are listed by canonical id", /\bvale\b/.test(operatorList));
+await page.getByRole("button", { name: /Commander Vale/ }).first().click();
+await page.waitForTimeout(600);
+const operatorText = await page.locator("body").innerText();
+check("    the pilot opens under that id", /Commander Vale/i.test(operatorText));
+check(
+  "    and carries no second name to drift from it",
+  !/Stable content ref/i.test(operatorText)
+);
 
 const authoring = await page.evaluate(async () => {
   const registry = await import("/src/content/gameplay/registry.js");

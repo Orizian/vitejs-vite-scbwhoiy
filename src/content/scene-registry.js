@@ -26,6 +26,9 @@ const files = import.meta.glob("./scenes/*.json", { eager: true });
 /** The content vocabulary a scene is checked against, shared by the editor. */
 export function contentSceneRefs(knownSceneIds) {
   return {
+    // The cast, for an editor that wants to offer one rather than ask the
+    // author to remember an id. Validation only needs the predicate.
+    speakerIds: SPEAKER_IDS,
     isSpeaker: (id) => SPEAKER_IDS.includes(id),
     speakerName: (id) => id,
     isExpression: (id) => EXPRESSION_IDS.includes(id),

@@ -45444,6 +45444,23 @@ if (typeof window !== "undefined") {
     validateCommand,
     executeCommand,
     abilityModel: (state, unitId, abilityId) => createAbilityViewModel(state, unitId, abilityId),
+    // What the player is promised, from the one calculator the executor uses.
+    // Exposed so an acceptance run can compare the promise against the number
+    // that actually lands, rather than trusting they were computed the same way.
+    forecastAbility: (state, unitId, abilityId, targetUnitId) => {
+      const ability = CONTENT.abilities[abilityId];
+      const source = state.units[unitId];
+      const target = state.units[targetUnitId];
+      if (!ability || !source || !target) return [];
+      return forecastEffectList(state, {
+        sourceUnitId: unitId,
+        targetUnitId,
+        abilityId,
+        sourceTile: { x: source.x, y: source.y },
+        targetTile: { x: target.x, y: target.y },
+        effects: ability.effects
+      });
+    },
     isHostile,
     isFriendly,
     relationshipBetween: (state, a, b) => relationshipBetween(state.factions, a, b),

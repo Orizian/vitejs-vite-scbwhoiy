@@ -154,6 +154,15 @@ export default function SceneEditor({ onPreview, previewLabel }) {
 
   const insertStep = (type, at, patch) => {
     const created = normalizeStep({ type, ...patch });
+    // A step that declares a required character arrives with one, so adding a
+    // line produces something valid rather than something already complaining.
+    // Which character is content's first, decided by the schema field's kind
+    // rather than by this component knowing any names.
+    for (const field of (SCENE_STEP_TYPES[created.type] || {}).fields || []) {
+      if (field.kind === "speaker" && field.required && !created[field.key]) {
+        created[field.key] = (refs.speakerIds || [])[0] || "";
+      }
+    }
     const index = at == null ? steps.length : Math.max(0, Math.min(steps.length, at));
     const next = steps.slice(0, index).concat(created, steps.slice(index));
     replaceSteps(next, index);
