@@ -1,0 +1,144 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-11a-supply-interception",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Convoy at Dusk",
+      "location": "Abandoned Quarry",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "ferris",
+          "text": "Two sealed containers: fuel, plating, tools, one spare core."
+        },
+        {
+          "speaker": "reyes",
+          "text": "We need all of it."
+        },
+        {
+          "speaker": "vale",
+          "text": "Containers are the objective. This is not a fair fight and does not need to become one."
+        },
+        {
+          "speaker": "nyx",
+          "text": "Escort will be heavier because we rescued the witnesses first.",
+          "when": {
+            "flag": "prioritizedWitnesses"
+          }
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "A Working Gantry",
+      "location": "Abandoned Quarry",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "ferris",
+          "text": "Fuel, plating, machine tools, and an overclock core that passed inspection in a philosophical sense."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Give me an hour. The repair gantry will move again."
+        },
+        {
+          "speaker": "vale",
+          "text": "The quarry is still vulnerable. At least now we can defend it."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Convoy Escapes",
+      "location": "Convoy Depot",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "ferris",
+          "text": "Convoy is moving. I can falsify another delay, but not forever."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "supplyStart",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "ferris",
+      "text": "Containers are marked. Crack them and leave the escort behind if you can.",
+      "priority": 95,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "supplyEscort",
+      "trigger": {
+        "type": "firstEnemyDefeated"
+      },
+      "speaker": "nyx",
+      "text": "Escort is reacting. Do not let them turn this into an elimination fight.",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "supplyContainerHit",
+      "trigger": {
+        "type": "specificObjectiveTargetDamaged",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "occurrence": 1
+      },
+      "speaker": "reyes",
+      "text": "Seal is weakening. Keep the impact away from the fuel cells.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "supplyDrone",
+      "trigger": {
+        "type": "abilityUsed",
+        "abilityId": "fieldRepair",
+        "teamId": "foe"
+      },
+      "speaker": "reyes",
+      "text": "Repair drone is restoring the escort. Either pressure it or finish the containers.",
+      "priority": 65,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "supplyBoth",
+      "trigger": {
+        "type": "objectiveProgressReached",
+        "targetUnitIds": [
+          "u4",
+          "u5"
+        ],
+        "destroyed": 2
+      },
+      "speaker": "vale",
+      "text": "Both containers open. Take what we can carry and withdraw.",
+      "priority": 80,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

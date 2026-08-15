@@ -1,0 +1,308 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "parity",
+  "description": "What the prototype campaign source literal did, captured verbatim before it was deleted. This is a regression fixture, not content: every value here was read out of the running literal, and the parity test asserts the authored campaign still produces exactly these numbers. When the prototype Act One is replaced by real content, this file and its test go with it.",
+  "missions": {
+    "act1-01-hollowmere-perimeter": {
+      "supplies": 8,
+      "funds": 30,
+      "intel": 1,
+      "equipment": [],
+      "order": 1,
+      "requires": [],
+      "grantsFlags": [
+        "hollowmereOperationComplete"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [
+        "vale",
+        "reyes",
+        "kell"
+      ],
+      "lockedDeployment": true
+    },
+    "act1-02-border-outpost-defense": {
+      "supplies": 10,
+      "funds": 40,
+      "intel": 1,
+      "equipment": [],
+      "order": 2,
+      "requires": [
+        "hollowmereOperationComplete"
+      ],
+      "grantsFlags": [
+        "outpostDefended"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [
+        "vale",
+        "reyes",
+        "kell"
+      ],
+      "lockedDeployment": true
+    },
+    "act1-03-recovered-relief": {
+      "supplies": 12,
+      "funds": 25,
+      "intel": 2,
+      "equipment": [],
+      "order": 3,
+      "requires": [
+        "outpostDefended"
+      ],
+      "grantsFlags": [
+        "reliefEvidenceRecovered"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [
+        "vale",
+        "reyes",
+        "kell"
+      ],
+      "lockedDeployment": true
+    },
+    "act1-04-cleanup-order": {
+      "supplies": 8,
+      "funds": 20,
+      "intel": 2,
+      "equipment": [],
+      "order": 4,
+      "requires": [
+        "reliefEvidenceRecovered"
+      ],
+      "grantsFlags": [
+        "witnessesProtected",
+        "proofComplete"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [
+        "vale",
+        "reyes",
+        "kell"
+      ],
+      "lockedDeployment": true
+    },
+    "act1-05-the-evidence": {
+      "supplies": 0,
+      "funds": 0,
+      "intel": 1,
+      "equipment": [],
+      "order": 5,
+      "requires": [
+        "proofComplete"
+      ],
+      "grantsFlags": [
+        "evidenceCompiled"
+      ],
+      "kind": "story",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": null,
+      "requiredOperatorIds": null,
+      "lockedDeployment": null
+    },
+    "act1-06-confrontation-and-arrest": {
+      "supplies": 0,
+      "funds": 0,
+      "intel": 0,
+      "equipment": [],
+      "order": 6,
+      "requires": [
+        "evidenceCompiled"
+      ],
+      "grantsFlags": [
+        "arrested",
+        "brandedTraitor"
+      ],
+      "kind": "story",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": null,
+      "requiredOperatorIds": null,
+      "lockedDeployment": null
+    },
+    "act1-07-detention-block": {
+      "supplies": 0,
+      "funds": 0,
+      "intel": 0,
+      "equipment": [],
+      "order": 7,
+      "requires": [
+        "arrested"
+      ],
+      "grantsFlags": [
+        "detentionRouteOpen"
+      ],
+      "kind": "story",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": null,
+      "requiredOperatorIds": null,
+      "lockedDeployment": null
+    },
+    "act1-08-jailbreak": {
+      "supplies": 5,
+      "funds": 0,
+      "intel": 1,
+      "equipment": [
+        "jumpJets"
+      ],
+      "order": 8,
+      "requires": [
+        "detentionRouteOpen"
+      ],
+      "grantsFlags": [
+        "escaped",
+        "inExile"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [
+        "nyx"
+      ],
+      "contacts": [],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [
+        "vale",
+        "reyes"
+      ],
+      "lockedDeployment": true
+    },
+    "act1-09-pursuit-line": {
+      "supplies": 8,
+      "funds": 15,
+      "intel": 1,
+      "equipment": [],
+      "order": 9,
+      "requires": [
+        "inExile"
+      ],
+      "grantsFlags": [
+        "pursuitBroken"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [],
+      "lockedDeployment": false
+    },
+    "act1-10-abandoned-quarry": {
+      "supplies": 8,
+      "funds": 20,
+      "intel": 0,
+      "equipment": [],
+      "order": 10,
+      "requires": [
+        "pursuitBroken"
+      ],
+      "grantsFlags": [
+        "quarryReached"
+      ],
+      "kind": "story",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [
+        "ferris",
+        "saldana"
+      ],
+      "deploymentSize": null,
+      "requiredOperatorIds": null,
+      "lockedDeployment": null
+    },
+    "act1-11a-supply-interception": {
+      "supplies": 35,
+      "funds": 45,
+      "intel": 1,
+      "equipment": [
+        "overclockCore"
+      ],
+      "order": 11.1,
+      "requires": [
+        "quarryReached"
+      ],
+      "grantsFlags": [
+        "suppliesSecured"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [
+        "ferris"
+      ],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [],
+      "lockedDeployment": false
+    },
+    "act1-11b-witness-convoy": {
+      "supplies": 18,
+      "funds": 25,
+      "intel": 2,
+      "equipment": [],
+      "order": 11.2,
+      "requires": [
+        "quarryReached"
+      ],
+      "grantsFlags": [
+        "witnessesRescued"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [
+        "saldana"
+      ],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [],
+      "lockedDeployment": false
+    },
+    "act1-12-quarry-defense": {
+      "supplies": 25,
+      "funds": 40,
+      "intel": 2,
+      "equipment": [
+        "reactiveArmor"
+      ],
+      "order": 12,
+      "requires": [
+        "suppliesSecured",
+        "witnessesRescued"
+      ],
+      "grantsFlags": [
+        "baseEstablished",
+        "prototypeComplete"
+      ],
+      "kind": "battle",
+      "chapter": "actOne",
+      "recruits": [],
+      "contacts": [
+        "ferris",
+        "saldana"
+      ],
+      "deploymentSize": 3,
+      "requiredOperatorIds": [],
+      "lockedDeployment": false
+    }
+  }
+}

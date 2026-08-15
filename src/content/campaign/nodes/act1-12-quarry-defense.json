@@ -1,0 +1,53 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-12-quarry-defense",
+  "missionId": "act1-12-quarry-defense",
+  "order": 12,
+  "name": "Quarry Defense",
+  "chapter": "actOne",
+  "summary": "A government command lance follows the witnesses to the quarry.",
+  "objectiveText": "Protect the transports and repel the command lance",
+  "nodeKind": "battle",
+  "requires": [
+    "suppliesSecured",
+    "witnessesRescued"
+  ],
+  "grantsFlags": [
+    "baseEstablished",
+    "prototypeComplete"
+  ],
+  "encounterId": "missionQuarryDefense",
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [],
+    "optionalOperatorIds": "owned",
+    "guestOperators": [],
+    "lockedDeployment": false
+  },
+  "outcomeTracking": {
+    "groups": [
+      {
+        "id": "witnesses",
+        "unitTag": "civilian",
+        "teamId": "player"
+      }
+    ],
+    "rules": [
+      {
+        "flag": "quarryWitnessCasualties",
+        "path": "groups.witnesses.destroyed",
+        "op": "gt",
+        "value": 0
+      }
+    ]
+  },
+  "contacts": [
+    "ferris",
+    "saldana"
+  ],
+  "rewardTables": {
+    "firstClear": "clear_act1_12_quarry_defense"
+  }
+}

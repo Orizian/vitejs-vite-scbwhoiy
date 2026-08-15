@@ -1,0 +1,52 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "registry": "facilities",
+  "description": "Things the squad can build at its base. A facility costs currency, is gated on a campaign flag, and is content — nothing here simulates construction.",
+  "entries": {
+    "repairBay": {
+      "name": "Makeshift Repair Bay",
+      "glyph": "🛠",
+      "description": "Reduces repair costs and restores damaged frames.",
+      "cost": {
+        "supplies": 12,
+        "funds": 0,
+        "intel": 0
+      },
+      "requiresFlag": "quarryReached"
+    },
+    "quartermaster": {
+      "name": "Improvised Quartermaster Workshop",
+      "glyph": "🔧",
+      "description": "Organizes salvaged equipment and spare parts.",
+      "cost": {
+        "supplies": 6,
+        "funds": 30,
+        "intel": 0
+      },
+      "requiresFlag": "quarryReached"
+    },
+    "communications": {
+      "name": "Communications Corner",
+      "glyph": "📻",
+      "description": "Keeps Kell linked to the field and exposes state edits.",
+      "cost": {
+        "supplies": 4,
+        "funds": 10,
+        "intel": 1
+      },
+      "requiresFlag": "quarryReached"
+    },
+    "medical": {
+      "name": "Medical Station",
+      "glyph": "🏥",
+      "description": "A safe place for Saldaña and the Hollowmere survivors.",
+      "cost": {
+        "supplies": 10,
+        "funds": 15,
+        "intel": 0
+      },
+      "requiresFlag": "witnessesRescued"
+    }
+  }
+}

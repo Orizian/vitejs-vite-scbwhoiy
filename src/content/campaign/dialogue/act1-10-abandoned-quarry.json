@@ -1,0 +1,99 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-10-abandoned-quarry",
+  "sequences": {
+    "briefing": [
+      "arrival",
+      "inventory",
+      "choice",
+      "contact"
+    ],
+    "victory": [],
+    "defeat": []
+  },
+  "scenes": {
+    "arrival": {
+      "title": "Abandoned Quarry",
+      "location": "Outer Service Road",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "narrator",
+          "text": "The quarry is cold, flooded in places, and absent from modern logistics maps."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Old repair gantry, one intact generator, no fuel reserve."
+        },
+        {
+          "speaker": "kell",
+          "text": "Which makes it the best base we currently own."
+        },
+        {
+          "speaker": "vale",
+          "text": "Hideout. Not a base. Not yet."
+        }
+      ]
+    },
+    "inventory": {
+      "title": "What Remains",
+      "location": "Quarry Floor",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "Armor damage is persistent now. Every repair spends supplies we cannot replace."
+        },
+        {
+          "speaker": "nyx",
+          "text": "Government search patterns will reach this district eventually."
+        },
+        {
+          "speaker": "kell",
+          "text": "Two contacts are transmitting: Ferris with a supply convoy, Saldaña with surviving witnesses."
+        }
+      ]
+    },
+    "choice": {
+      "title": "First Priority",
+      "location": "Quarry Office",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "vale",
+          "text": "We need parts and we need the people who can prove Hollowmere. We cannot reach both at once."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Whichever operation we delay will get harder."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then we choose knowing the cost."
+        }
+      ]
+    },
+    "contact": {
+      "title": "Improvised Operations",
+      "location": "Abandoned Quarry",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "ferris",
+          "text": "I can get you plating, fuel, and one reactor core. Do not ask where the manifest went."
+        },
+        {
+          "speaker": "saldana",
+          "text": "I have two transports of witnesses moving without lights. The government is searching every road."
+        },
+        {
+          "speaker": "vale",
+          "text": "We make this place functional and bring them home."
+        }
+      ]
+    }
+  },
+  "midBattle": []
+}

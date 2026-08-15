@@ -1,0 +1,57 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-04-cleanup-order",
+  "missionId": "act1-04-cleanup-order",
+  "order": 4,
+  "name": "Cleanup Order",
+  "chapter": "actOne",
+  "summary": "Command orders the squad to intercept “collaborators.” A cleanup lance arrives to erase them.",
+  "objectiveText": "Protect both witness transports",
+  "nodeKind": "battle",
+  "requires": [
+    "reliefEvidenceRecovered"
+  ],
+  "grantsFlags": [
+    "witnessesProtected",
+    "proofComplete"
+  ],
+  "encounterId": "missionCleanupOrder",
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [
+      "vale",
+      "reyes",
+      "kell"
+    ],
+    "optionalOperatorIds": [],
+    "guestOperators": [],
+    "lockedDeployment": true,
+    "deploymentOrder": [
+      "vale",
+      "reyes",
+      "kell"
+    ]
+  },
+  "outcomeTracking": {
+    "groups": [
+      {
+        "id": "witnesses",
+        "unitTag": "civilian",
+        "teamId": "player"
+      }
+    ],
+    "rules": [
+      {
+        "flag": "cleanupWitnessCasualties",
+        "path": "groups.witnesses.destroyed",
+        "op": "gt",
+        "value": 0
+      }
+    ]
+  },
+  "rewardTables": {
+    "firstClear": "clear_act1_04_cleanup_order"
+  }
+}

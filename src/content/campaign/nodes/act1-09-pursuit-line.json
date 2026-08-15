@@ -1,0 +1,30 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-09-pursuit-line",
+  "missionId": "act1-09-pursuit-line",
+  "order": 9,
+  "name": "Pursuit Line",
+  "chapter": "actOne",
+  "summary": "Government pursuit closes through the flood-control district.",
+  "objectiveText": "Disable the gate relays, then extract",
+  "nodeKind": "battle",
+  "requires": [
+    "inExile"
+  ],
+  "grantsFlags": [
+    "pursuitBroken"
+  ],
+  "encounterId": "missionPursuitLine",
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [],
+    "optionalOperatorIds": "owned",
+    "guestOperators": [],
+    "lockedDeployment": false
+  },
+  "rewardTables": {
+    "firstClear": "clear_act1_09_pursuit_line"
+  }
+}

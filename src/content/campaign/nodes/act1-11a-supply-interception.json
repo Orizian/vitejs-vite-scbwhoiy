@@ -1,0 +1,46 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-11a-supply-interception",
+  "missionId": "act1-11a-supply-interception",
+  "order": 11.1,
+  "name": "Supply Interception",
+  "chapter": "actOne",
+  "summary": "Ferris locates fuel, plating, and a spare core.",
+  "objectiveText": "Breach both supply containers",
+  "nodeKind": "battle",
+  "requires": [
+    "quarryReached"
+  ],
+  "grantsFlags": [
+    "suppliesSecured"
+  ],
+  "encounterId": "missionSupplyInterception",
+  "encounterVariants": [
+    {
+      "when": {
+        "flag": "prioritizedWitnesses"
+      },
+      "encounterId": "missionSupplyInterceptionAlerted"
+    }
+  ],
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [],
+    "optionalOperatorIds": "owned",
+    "guestOperators": [],
+    "lockedDeployment": false
+  },
+  "contacts": [
+    "ferris"
+  ],
+  "orderChoice": {
+    "group": "quarryPriority",
+    "firstFlag": "prioritizedSupplies",
+    "laterFlag": "suppliesAfterWitnesses"
+  },
+  "rewardTables": {
+    "firstClear": "clear_act1_11a_supply_interception"
+  }
+}

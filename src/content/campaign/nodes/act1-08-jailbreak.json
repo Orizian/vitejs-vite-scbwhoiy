@@ -1,0 +1,47 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-08-jailbreak",
+  "missionId": "act1-08-jailbreak",
+  "order": 8,
+  "name": "Jailbreak",
+  "chapter": "actOne",
+  "summary": "Recover the impounded mechs and escape the detention yard.",
+  "objectiveText": "Reach south-west extraction",
+  "nodeKind": "battle",
+  "requires": [
+    "detentionRouteOpen"
+  ],
+  "grantsFlags": [
+    "escaped",
+    "inExile"
+  ],
+  "encounterId": "missionJailbreak",
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [
+      "vale",
+      "reyes"
+    ],
+    "optionalOperatorIds": [],
+    "guestOperators": [
+      {
+        "operatorId": "nyx",
+        "status": "guest"
+      }
+    ],
+    "lockedDeployment": true,
+    "deploymentOrder": [
+      "vale",
+      "nyx",
+      "reyes"
+    ]
+  },
+  "recruits": [
+    "nyx"
+  ],
+  "rewardTables": {
+    "firstClear": "clear_act1_08_jailbreak"
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-02-border-outpost-defense",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Real Alarm",
+      "location": "Border Outpost",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "government",
+          "text": "Border Station Four is under coordinated raider assault."
+        },
+        {
+          "speaker": "vale",
+          "text": "This one is real. Protect the personnel first."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Finally, an order that makes sense."
+        },
+        {
+          "speaker": "kell",
+          "text": "Let us see whether the attackers do."
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "A Useful Victory",
+      "location": "Border Outpost",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "vale",
+          "text": "Outpost holds. Get the wounded inside."
+        },
+        {
+          "speaker": "broadcast",
+          "text": "A massive offensive was shattered by Aldric’s vigilant defense network."
+        },
+        {
+          "speaker": "kell",
+          "text": "Four attackers. No reserve, no extraction plan, matching serial mounts."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Real people needed us. That does not make the report honest."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Outpost Breached",
+      "location": "Border Outpost",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "We are losing the station. Fall back and try again before the wounded are trapped."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "outpostOpening",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "vale",
+      "text": "Hold the approach. Reyes, keep the station side covered.",
+      "priority": 90,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "outpostFirstKill",
+      "trigger": {
+        "type": "firstEnemyDefeated"
+      },
+      "speaker": "kell",
+      "text": "Matching government-format mounting plates. Somebody standardized these “raiders.”",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "outpostHalf",
+      "trigger": {
+        "type": "enemyCountThreshold",
+        "remainingAtMost": 2
+      },
+      "speaker": "vale",
+      "text": "They came in without supplies or an escape route. Who attacks like this?",
+      "priority": 60,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "droneSpotted",
+      "trigger": {
+        "type": "unitOfTagSpotted",
+        "definitionIds": [
+          "governmentDrone"
+        ],
+        "afterActivations": 1
+      },
+      "speaker": "reyes",
+      "text": "That repair drone is government issue with the crest ground off.",
+      "priority": 65,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

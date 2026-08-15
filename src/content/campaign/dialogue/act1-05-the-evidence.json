@@ -1,0 +1,67 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-05-the-evidence",
+  "sequences": {
+    "briefing": [
+      "evidence",
+      "decision"
+    ],
+    "victory": [],
+    "defeat": []
+  },
+  "scenes": {
+    "evidence": {
+      "title": "The Evidence",
+      "location": "Government Barracks",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "narrator",
+          "text": "Kell seals the raw battle logs in three separate drives."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Hollowmere manifests, cleanup weapons locks, standardized attacker components."
+        },
+        {
+          "speaker": "kell",
+          "text": "Enough to prove the reports were prepared before the fighting."
+        },
+        {
+          "speaker": "vale",
+          "text": "We take it through the official chain. Aldric answers in a room full of witnesses."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Official channels belong to him."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then he can condemn himself using them."
+        }
+      ]
+    },
+    "decision": {
+      "title": "Before the Council",
+      "location": "Transit Lift",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "Once those doors open, they will control the cameras."
+        },
+        {
+          "speaker": "reyes",
+          "text": "And if the council already knows?"
+        },
+        {
+          "speaker": "vale",
+          "text": "Then we learn exactly how large the lie is."
+        }
+      ]
+    }
+  },
+  "midBattle": []
+}

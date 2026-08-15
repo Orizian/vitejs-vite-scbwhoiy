@@ -1,0 +1,151 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-08-jailbreak",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Break the Yard",
+      "location": "Detention Yard",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "South-west extraction is open. It will not stay open."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Hangar lockdown begins the instant the first frame moves."
+        },
+        {
+          "speaker": "nyx",
+          "text": "Those pilots were my unit yesterday."
+        },
+        {
+          "speaker": "vale",
+          "text": "Today they stand between us and the truth. Move."
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "No Flag, No Home",
+      "location": "Industrial Fringe",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "broadcast",
+          "text": "Terrorist Vale attacked a detention complex and abducted government personnel in stolen war machines."
+        },
+        {
+          "speaker": "nyx",
+          "text": "For the record, nobody abducted me."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Three damaged frames, Kell in a stolen utility truck, and almost no supplies."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then we survive the next hour first."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Cordon Closed",
+      "location": "Detention Yard",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "The route collapsed. Pull back into the service blocks; I will build another opening."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "jailbreakStart",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "kell",
+      "text": "Extraction marked south-west. Move before the outer cordon forms.",
+      "priority": 95,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "jailbreakFirstMove",
+      "trigger": {
+        "type": "unitEnteredZone",
+        "zone": {
+          "xMin": 0,
+          "xMax": 7,
+          "yMin": 1,
+          "yMax": 7
+        },
+        "teamId": "player"
+      },
+      "speaker": "reyes",
+      "text": "Hangar lockdown is active. Every patrol in the district just received our position.",
+      "priority": 85,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "jailbreakFirstKill",
+      "trigger": {
+        "type": "firstEnemyDefeated"
+      },
+      "speaker": "nyx",
+      "text": "First time firing on my own uniform. It feels exactly as bad as expected.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "jailbreakHalfway",
+      "trigger": {
+        "type": "unitEnteredZone",
+        "zone": {
+          "xMin": 0,
+          "xMax": 7,
+          "yMin": 4,
+          "yMax": 7
+        },
+        "teamId": "player"
+      },
+      "speaker": "kell",
+      "text": "You are halfway across. External pursuit mechs are mobilizing.",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "jailbreakValeLow",
+      "trigger": {
+        "type": "alliedUnitHpBelowPercent",
+        "definitionIds": [
+          "assaultMech"
+        ],
+        "percent": 40
+      },
+      "speaker": "reyes",
+      "text": "Vale’s frame is failing. Commander, do not make the escape without yourself.",
+      "priority": 65,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

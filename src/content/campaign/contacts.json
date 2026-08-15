@@ -1,0 +1,18 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "registry": "contacts",
+  "description": "People the squad comes to know. A contact is introduced by a campaign node and is otherwise pure content.",
+  "entries": {
+    "saldana": {
+      "name": "Doctor Saldaña",
+      "glyph": "🧑‍⚕️",
+      "note": "Hollowmere medic guiding the witness convoy."
+    },
+    "ferris": {
+      "name": "Quartermaster Ferris",
+      "glyph": "🧑‍🔧",
+      "note": "Maintenance smuggler who knows the convoy schedules."
+    }
+  }
+}

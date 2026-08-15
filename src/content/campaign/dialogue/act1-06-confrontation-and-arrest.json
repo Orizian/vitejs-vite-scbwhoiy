@@ -1,0 +1,191 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-06-confrontation-and-arrest",
+  "sequences": {
+    "briefing": [
+      "arrival",
+      "confrontation",
+      "arrest",
+      "broadcast",
+      "prison"
+    ],
+    "victory": [],
+    "defeat": []
+  },
+  "scenes": {
+    "arrival": {
+      "title": "Council Chamber",
+      "location": "Government Headquarters",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "chancellor",
+          "text": "Commander Vale. The nation’s newest hero arrives with concerns."
+        },
+        {
+          "speaker": "vale",
+          "text": "Combat records. Hollowmere was never a raider base. The relief depot was civilian property."
+        },
+        {
+          "speaker": "chancellor",
+          "text": "Facts are useful only after someone decides what they mean."
+        }
+      ]
+    },
+    "confrontation": {
+      "title": "The Public Battlefield",
+      "location": "Council Chamber",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "chancellor",
+          "text": "You announced your own limits before Hollowmere. ‘Turrets only.’ A commander does not rewrite a national directive in the field.",
+          "when": {
+            "flag": "intendedToSpareCivilians"
+          }
+        },
+        {
+          "speaker": "chancellor",
+          "text": "You ordered your lance to follow the target packet exactly. Do not pretend obedience absolves the officer who carried it out.",
+          "when": {
+            "flag": "followedOrders"
+          }
+        },
+        {
+          "speaker": "chancellor",
+          "text": "You spared civilians and allowed dangerous witnesses to escape.",
+          "when": {
+            "flag": "sparedHollowmereCivilians"
+          }
+        },
+        {
+          "speaker": "chancellor",
+          "text": "Your operation injured civilians. That failure sits under your command signature.",
+          "when": {
+            "all": [
+              {
+                "flag": "hollowmereCivilianDamage"
+              },
+              {
+                "notFlag": "hollowmereCivilianCasualties"
+              }
+            ]
+          }
+        },
+        {
+          "speaker": "chancellor",
+          "text": "People died under your authorization. The public will require a responsible name.",
+          "when": {
+            "flag": "hollowmereCivilianCasualties"
+          }
+        },
+        {
+          "speaker": "chancellor",
+          "text": "Hollowmere was a resource. The crisis made it available and made the nation grateful."
+        },
+        {
+          "speaker": "vale",
+          "text": "You manufactured the attack, took their relief, and called yourself the rescuer."
+        },
+        {
+          "speaker": "chancellor",
+          "text": "A frightened country remembers the man carrying water, not who lit the fire."
+        }
+      ],
+      "choices": [
+        {
+          "id": "confrontationStance",
+          "speaker": "vale",
+          "prompt": "How does Vale answer?",
+          "options": [
+            {
+              "id": "defiant",
+              "text": "Say it publicly: Aldric murdered Hollowmere.",
+              "spokenText": "Aldric murdered Hollowmere. Say it publicly.",
+              "flag": "publiclyDefiant"
+            },
+            {
+              "id": "quiet",
+              "text": "Say nothing and remember every face.",
+              "speaker": "narrator",
+              "spokenText": "Vale says nothing. He remembers every face in the chamber.",
+              "flag": "quietlyDefiant"
+            }
+          ]
+        }
+      ]
+    },
+    "arrest": {
+      "title": "The Order",
+      "location": "Council Chamber",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "chancellor",
+          "text": "Arrest Commander Vale for evidence fabrication, treason, and conspiracy."
+        },
+        {
+          "speaker": "vale",
+          "text": "Every person in this room knows what you did.",
+          "when": {
+            "flag": "publiclyDefiant"
+          }
+        },
+        {
+          "speaker": "narrator",
+          "text": "Vale remains silent as guards close in, noting who cannot meet their eyes.",
+          "when": {
+            "flag": "quietlyDefiant"
+          }
+        }
+      ]
+    },
+    "broadcast": {
+      "title": "Emergency Statement",
+      "location": "National Network",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "broadcast",
+          "text": "An unstable decorated officer threatened the Chancellor after conspiring with Hollowmere extremists.",
+          "when": {
+            "flag": "publiclyDefiant"
+          }
+        },
+        {
+          "speaker": "broadcast",
+          "text": "Commander Vale declined to deny overwhelming evidence of collaboration with Hollowmere extremists.",
+          "when": {
+            "flag": "quietlyDefiant"
+          }
+        },
+        {
+          "speaker": "broadcast",
+          "text": "Chancellor Aldric personally intervened to prevent further violence."
+        }
+      ]
+    },
+    "prison": {
+      "title": "Record Correction",
+      "location": "State Detention Wing",
+      "kind": "narration",
+      "lines": [
+        {
+          "speaker": "narrator",
+          "text": "Through the wall, Vale hears editors cutting mission audio into a confession."
+        },
+        {
+          "speaker": "broadcast",
+          "text": "Vale’s own combat record proves a long pattern of instability."
+        },
+        {
+          "speaker": "reyes",
+          "text": "They took the mechs and the uniform. They did not take the squad."
+        }
+      ]
+    }
+  },
+  "midBattle": []
+}

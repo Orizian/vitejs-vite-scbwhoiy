@@ -1,0 +1,47 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "id": "act-one",
+  "name": "Resistance — Act One: The Manufactured Hero",
+  "description": "Prototype Act One. Temporary content kept as the regression fixture that proves the authored campaign format expresses what the source literal did.",
+  "startingChapter": "actOne",
+  "startingCurrencies": {
+    "supplies": 40,
+    "funds": 120,
+    "intel": 0
+  },
+  "startingFlags": [],
+  "chapters": {
+    "actOne": {
+      "name": "Act One — The Manufactured Hero",
+      "order": 1
+    }
+  },
+  "baseStages": [
+    {
+      "flag": null,
+      "name": "Government Barracks",
+      "note": "Clean, supplied, and owned by the state."
+    },
+    {
+      "flag": "inExile",
+      "name": "On the Run",
+      "note": "No flag, no legal identity, no safe repair bay."
+    },
+    {
+      "flag": "quarryReached",
+      "name": "Abandoned Quarry",
+      "note": "Cold, hidden, and barely functional."
+    },
+    {
+      "flag": "suppliesSecured",
+      "name": "Quarry Workshop",
+      "note": "The old gantry moves again."
+    },
+    {
+      "flag": "baseEstablished",
+      "name": "Hidden Resistance Base",
+      "note": "Four pilots, rescued witnesses, and one vulnerable home."
+    }
+  ]
+}

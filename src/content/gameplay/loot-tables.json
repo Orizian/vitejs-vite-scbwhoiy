@@ -4,6 +4,322 @@
   "registry": "lootTables",
   "description": "What a reward source can pay. A table is reusable and referenced by id: a mission names one for its clear reward, a chassis names one as its default salvage, a specific placement names one to make a named enemy worth hunting. `guaranteed` always pays; `pools` roll.",
   "entries": {
+    "clear_act1_01_hollowmere_perimeter": {
+      "name": "Hollowmere Perimeter — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 8
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 30
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_02_border_outpost_defense": {
+      "name": "Border Outpost Defense — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 10
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 40
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_03_recovered_relief": {
+      "name": "Recovered Relief — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 12
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 25
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 2
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_04_cleanup_order": {
+      "name": "Cleanup Order — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 8
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 20
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 2
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_05_the_evidence": {
+      "name": "The Evidence — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_08_jailbreak": {
+      "name": "Jailbreak — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 5
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 1
+        },
+        {
+          "claim": "oncePerCampaign",
+          "id": "equipment:jumpJets",
+          "itemId": "jumpJets",
+          "kind": "equipment",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_09_pursuit_line": {
+      "name": "Pursuit Line — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 8
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 15
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_10_abandoned_quarry": {
+      "name": "Abandoned Quarry — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 8
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 20
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_11a_supply_interception": {
+      "name": "Supply Interception — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 35
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 45
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 1
+        },
+        {
+          "claim": "oncePerCampaign",
+          "id": "equipment:overclockCore",
+          "itemId": "overclockCore",
+          "kind": "equipment",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_11b_witness_convoy": {
+      "name": "Witness Convoy — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 18
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 25
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 2
+        }
+      ],
+      "pools": []
+    },
+    "clear_act1_12_quarry_defense": {
+      "name": "Quarry Defense — Clear",
+      "description": "Migrated from the prototype campaign literal. These were first-clear-only before mission-owned rewards existed, and the claim policy on each entry is what preserves that rather than the slot they sit in.",
+      "tags": [
+        "mission",
+        "actOne"
+      ],
+      "guaranteed": [
+        {
+          "id": "supplies",
+          "itemId": "supplies",
+          "kind": "currency",
+          "quantity": 25
+        },
+        {
+          "id": "funds",
+          "itemId": "funds",
+          "kind": "currency",
+          "quantity": 40
+        },
+        {
+          "id": "intel",
+          "itemId": "intel",
+          "kind": "currency",
+          "quantity": 2
+        },
+        {
+          "claim": "oncePerCampaign",
+          "id": "equipment:reactiveArmor",
+          "itemId": "reactiveArmor",
+          "kind": "equipment",
+          "quantity": 1
+        }
+      ],
+      "pools": []
+    },
     "eliteSalvage": {
       "name": "Elite Salvage",
       "description": "An elite frame is worth its ordinary parts and then something from the restricted pool on top.",

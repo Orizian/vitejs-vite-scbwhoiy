@@ -1,0 +1,19 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-07-detention-block",
+  "missionId": "act1-07-detention-block",
+  "order": 7,
+  "name": "Detention Block",
+  "chapter": "actOne",
+  "summary": "The record is rewritten while Reyes and Kell prepare the escape.",
+  "objectiveText": "Reach the impound hangar",
+  "nodeKind": "story",
+  "requires": [
+    "arrested"
+  ],
+  "grantsFlags": [
+    "detentionRouteOpen"
+  ]
+}

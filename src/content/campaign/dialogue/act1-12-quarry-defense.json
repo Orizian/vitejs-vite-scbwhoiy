@@ -1,0 +1,180 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-12-quarry-defense",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath",
+      "ending"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Searchlights at the Quarry",
+      "location": "Abandoned Quarry",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "Government command lance at the northern cut. They followed the witness convoy."
+        },
+        {
+          "speaker": "ferris",
+          "text": "Workshop is not finished."
+        },
+        {
+          "speaker": "saldana",
+          "text": "The transports cannot move again."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then we hold the entrance. We are done trading people for our escape."
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "A Place Worth Defending",
+      "location": "Quarry Entrance",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "saldana",
+          "text": "Both transports are inside. The wounded are stable."
+        },
+        {
+          "speaker": "ferris",
+          "text": "Repair gantry works. Mostly."
+        },
+        {
+          "speaker": "reyes",
+          "text": "People are asking where to build bunks."
+        },
+        {
+          "speaker": "nyx",
+          "text": "The broadcast calls this a terrorist compound."
+        },
+        {
+          "speaker": "vale",
+          "text": "It is not a hiding place anymore. It is a base."
+        }
+      ]
+    },
+    "ending": {
+      "title": "Act One — Exile",
+      "location": "Hidden Resistance Base",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "broadcast",
+          "text": "Authorities have identified an extremist network led by traitor Commander Vale."
+        },
+        {
+          "speaker": "kell",
+          "text": "They gave us a name before we chose one."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then we choose what it means. We protect people, preserve the truth, and fight back from here."
+        },
+        {
+          "speaker": "narrator",
+          "text": "End of Prototype — Act One complete."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Quarry Breached",
+      "location": "Quarry Entrance",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "The entrance is collapsing. Pull back and reset the defense before they reach the transports."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "quarryStart",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "kell",
+      "text": "Government command frame visible. Missile carrier behind it, drone on support.",
+      "priority": 100,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "quarryCommander",
+      "trigger": {
+        "type": "eliteUnitSpotted"
+      },
+      "speaker": "nyx",
+      "text": "That commander will mark targets for the whole line. Break its coordination.",
+      "priority": 85,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "quarryWitness",
+      "trigger": {
+        "type": "unitOfTagSpotted",
+        "tag": "civilian",
+        "teamId": "player"
+      },
+      "speaker": "civilian",
+      "text": "Commander Vale—Hollowmere remembers what your squad did.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "quarryTransportLow",
+      "trigger": {
+        "type": "protectedUnitHpBelowPercent",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "percent": 45
+      },
+      "speaker": "reyes",
+      "text": "Transport armor failing at the quarry mouth. I need a body between it and the missiles!",
+      "priority": 80,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "quarryHalf",
+      "trigger": {
+        "type": "enemyCountThreshold",
+        "remainingAtMost": 3
+      },
+      "speaker": "vale",
+      "text": "They expected fugitives. Show them people defending a home.",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "quarryVictory",
+      "trigger": {
+        "type": "battleVictoryConditionMet"
+      },
+      "speaker": "vale",
+      "text": "Quarry holds. Get everyone inside—we build from here.",
+      "priority": 100,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

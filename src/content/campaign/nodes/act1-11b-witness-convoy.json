@@ -1,0 +1,63 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-11b-witness-convoy",
+  "missionId": "act1-11b-witness-convoy",
+  "order": 11.2,
+  "name": "Witness Convoy",
+  "chapter": "actOne",
+  "summary": "Saldaña leads the surviving Hollowmere witnesses toward the quarry.",
+  "objectiveText": "Protect both civilian transports",
+  "nodeKind": "battle",
+  "requires": [
+    "quarryReached"
+  ],
+  "grantsFlags": [
+    "witnessesRescued"
+  ],
+  "encounterId": "missionWitnessConvoy",
+  "encounterVariants": [
+    {
+      "when": {
+        "flag": "prioritizedSupplies"
+      },
+      "encounterId": "missionWitnessConvoyAlerted"
+    }
+  ],
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [],
+    "optionalOperatorIds": "owned",
+    "guestOperators": [],
+    "lockedDeployment": false
+  },
+  "outcomeTracking": {
+    "groups": [
+      {
+        "id": "witnesses",
+        "unitTag": "civilian",
+        "teamId": "player"
+      }
+    ],
+    "rules": [
+      {
+        "flag": "finalWitnessCasualties",
+        "path": "groups.witnesses.destroyed",
+        "op": "gt",
+        "value": 0
+      }
+    ]
+  },
+  "contacts": [
+    "saldana"
+  ],
+  "orderChoice": {
+    "group": "quarryPriority",
+    "firstFlag": "prioritizedWitnesses",
+    "laterFlag": "witnessesAfterSupplies"
+  },
+  "rewardTables": {
+    "firstClear": "clear_act1_11b_witness_convoy"
+  }
+}

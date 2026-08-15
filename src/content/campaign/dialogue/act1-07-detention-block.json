@@ -1,0 +1,79 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-07-detention-block",
+  "sequences": {
+    "briefing": [
+      "cell",
+      "route",
+      "hangar"
+    ],
+    "victory": [],
+    "defeat": []
+  },
+  "scenes": {
+    "cell": {
+      "title": "Cell Door Open",
+      "location": "State Detention Wing",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "Door is open. Kell has the cameras looping for ninety seconds."
+        },
+        {
+          "speaker": "vale",
+          "text": "Where is Kell?"
+        },
+        {
+          "speaker": "kell",
+          "text": "Remote and offended you thought I would enter a detention block without a rifle."
+        }
+      ]
+    },
+    "route": {
+      "title": "Rewritten Record",
+      "location": "Service Corridor",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "broadcast",
+          "text": "The traitor Vale orchestrated violence at Hollowmere to conceal an extremist alliance."
+        },
+        {
+          "speaker": "reyes",
+          "text": "They published that before your interrogation ended."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then we keep the original record alive."
+        }
+      ]
+    },
+    "hangar": {
+      "title": "Impound Hangar",
+      "location": "Detention Yard",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "nyx",
+          "text": "Scout Nyx. I refused the cleanup order. They put me beside you for administrative convenience."
+        },
+        {
+          "speaker": "vale",
+          "text": "Can you pilot the stealth frame?"
+        },
+        {
+          "speaker": "nyx",
+          "text": "Open the bay and find out."
+        },
+        {
+          "speaker": "kell",
+          "text": "Extraction south-west. Patrols are waking up now."
+        }
+      ]
+    }
+  },
+  "midBattle": []
+}

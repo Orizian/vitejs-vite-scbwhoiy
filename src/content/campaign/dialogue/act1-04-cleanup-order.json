@@ -1,0 +1,146 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-04-cleanup-order",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Collaborator Intercept",
+      "location": "Hollowmere Causeway",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "government",
+          "text": "Two collaborator vehicles are fleeing the exclusion zone. Intercept and hold."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Passenger transports again."
+        },
+        {
+          "speaker": "kell",
+          "text": "Cleanup lance is approaching from the north with weapons hot."
+        },
+        {
+          "speaker": "vale",
+          "text": "We reach the convoy first. Nobody fires until I know who is inside."
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "The First Refusal",
+      "location": "Hollowmere Causeway",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "civilian",
+          "text": "They told us the government was coming to evacuate witnesses."
+        },
+        {
+          "speaker": "reyes",
+          "text": "The cleanup lance targeted them before it targeted us."
+        },
+        {
+          "speaker": "kell",
+          "text": "We have the weapons locks, depot manifests, and the edited target packet."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then this ends at Aldric’s desk. Through official channels, with every record."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Witnesses Lost",
+      "location": "Hollowmere Causeway",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "The convoy is gone. Command will call it an accident unless we stop them."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "cleanupOpening",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "government",
+      "text": "Vale, detain the collaborator convoy. Cleanup units are authorized to assist.",
+      "priority": 95,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "cleanupWitnessSpotted",
+      "trigger": {
+        "type": "unitOfTagSpotted",
+        "tag": "civilian",
+        "teamId": "player"
+      },
+      "speaker": "reyes",
+      "text": "I have passenger heat signatures. These are witnesses, not combatants.",
+      "priority": 85,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "eliteSpotted",
+      "trigger": {
+        "type": "eliteUnitSpotted"
+      },
+      "speaker": "kell",
+      "text": "Heavy cleanup frame has weapons lock on the transports—not on us.",
+      "priority": 80,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "firstCleanupAttack",
+      "trigger": {
+        "type": "firstEnemyDefeated"
+      },
+      "speaker": "vale",
+      "text": "Government lance, stand down. Those transports are under my protection.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true,
+      "followUpLines": [
+        {
+          "speaker": "nyx",
+          "text": "No response. Their order is extermination."
+        }
+      ]
+    },
+    {
+      "id": "witnessLow",
+      "trigger": {
+        "type": "protectedUnitHpBelowPercent",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "percent": 50
+      },
+      "speaker": "reyes",
+      "text": "Transport armor is failing. Get between them and the cleanup line!",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

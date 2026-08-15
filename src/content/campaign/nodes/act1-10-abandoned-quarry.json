@@ -1,0 +1,26 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-10-abandoned-quarry",
+  "missionId": "act1-10-abandoned-quarry",
+  "order": 10,
+  "name": "Abandoned Quarry",
+  "chapter": "actOne",
+  "summary": "The squad finds a hidden quarry that is barely usable.",
+  "objectiveText": "Establish the first hideout",
+  "nodeKind": "story",
+  "requires": [
+    "pursuitBroken"
+  ],
+  "grantsFlags": [
+    "quarryReached"
+  ],
+  "contacts": [
+    "ferris",
+    "saldana"
+  ],
+  "rewardTables": {
+    "firstClear": "clear_act1_10_abandoned_quarry"
+  }
+}

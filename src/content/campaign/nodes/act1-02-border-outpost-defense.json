@@ -1,0 +1,39 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-02-border-outpost-defense",
+  "missionId": "act1-02-border-outpost-defense",
+  "order": 2,
+  "name": "Border Outpost Defense",
+  "chapter": "actOne",
+  "summary": "A real outpost is attacked by a force with suspiciously standardized equipment.",
+  "objectiveText": "Defend the outpost",
+  "nodeKind": "battle",
+  "requires": [
+    "hollowmereOperationComplete"
+  ],
+  "grantsFlags": [
+    "outpostDefended"
+  ],
+  "encounterId": "missionBorderOutpostDefense",
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [
+      "vale",
+      "reyes",
+      "kell"
+    ],
+    "optionalOperatorIds": [],
+    "guestOperators": [],
+    "lockedDeployment": true,
+    "deploymentOrder": [
+      "vale",
+      "reyes",
+      "kell"
+    ]
+  },
+  "rewardTables": {
+    "firstClear": "clear_act1_02_border_outpost_defense"
+  }
+}

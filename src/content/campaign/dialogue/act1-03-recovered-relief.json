@@ -1,0 +1,150 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-03-recovered-relief",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Stolen State Material",
+      "location": "Forward Command",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "government",
+          "text": "Raiders stole medical stock and machine parts. Recover the marked containers."
+        },
+        {
+          "speaker": "kell",
+          "text": "The manifest begins after the alleged theft."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Meaning there is no record of the state owning any of it."
+        },
+        {
+          "speaker": "vale",
+          "text": "Secure the containers intact. We inspect everything ourselves."
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "Relief, Not Contraband",
+      "location": "Relief Depot",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "Antibiotics, irrigation seals, infant formula. Every crate is addressed to Hollowmere."
+        },
+        {
+          "speaker": "kell",
+          "text": "The state stamped “recovered property” over the original settlement marks."
+        },
+        {
+          "speaker": "vale",
+          "text": "Copy the manifests. Command gets nothing until I know who ordered this."
+        },
+        {
+          "speaker": "broadcast",
+          "text": "Loyal forces have returned stolen aid to its rightful government custodians."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Depot Lost",
+      "location": "Relief Depot",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "The manifests are moving. We need another approach before command erases the site."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "reliefOpening",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "vale",
+      "text": "Disable the defenses. Do not rupture the containers.",
+      "priority": 90,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "firstContainerDamaged",
+      "trigger": {
+        "type": "specificObjectiveTargetDamaged",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "occurrence": 1
+      },
+      "speaker": "reyes",
+      "text": "Medical hazard markings. These crates were packed for civilian clinics.",
+      "priority": 80,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "workerSpotted",
+      "trigger": {
+        "type": "unitOfTagSpotted",
+        "tag": "civilian",
+        "afterActivations": 1
+      },
+      "speaker": "kell",
+      "text": "Civilian vehicle in the depot. No raider escort, no weapons rack.",
+      "priority": 65,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "containerOne",
+      "trigger": {
+        "type": "specificObjectiveTargetDestroyed",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "occurrence": 1
+      },
+      "speaker": "reyes",
+      "text": "Manifest recovered. Hollowmere purchase order—dated before command claimed the theft.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "containerBoth",
+      "trigger": {
+        "type": "objectiveProgressReached",
+        "targetUnitIds": [
+          "u4",
+          "u5"
+        ],
+        "destroyed": 2
+      },
+      "speaker": "vale",
+      "text": "Both manifests secured. Preserve the raw files and move.",
+      "priority": 60,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

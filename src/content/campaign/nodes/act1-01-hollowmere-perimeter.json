@@ -1,0 +1,98 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-01-hollowmere-perimeter",
+  "missionId": "act1-01-hollowmere-perimeter",
+  "order": 1,
+  "name": "Hollowmere Perimeter",
+  "chapter": "actOne",
+  "summary": "Command calls a farming settlement a raider stronghold.",
+  "objectiveText": "Destroy the two supposed raider turrets",
+  "nodeKind": "battle",
+  "requires": [],
+  "grantsFlags": [
+    "hollowmereOperationComplete"
+  ],
+  "encounterId": "missionHollowmerePerimeter",
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [
+      "vale",
+      "reyes",
+      "kell"
+    ],
+    "optionalOperatorIds": [],
+    "guestOperators": [],
+    "lockedDeployment": true,
+    "deploymentOrder": [
+      "vale",
+      "reyes",
+      "kell"
+    ]
+  },
+  "outcomeTracking": {
+    "groups": [
+      {
+        "id": "civilians",
+        "unitTag": "civilian"
+      },
+      {
+        "id": "turrets",
+        "definitionIds": [
+          "securityTurret"
+        ]
+      }
+    ],
+    "rules": [
+      {
+        "flag": "attackedCivilians",
+        "path": "groups.civilians.attacked",
+        "op": "truthy"
+      },
+      {
+        "flag": "hollowmereCivilianDamage",
+        "path": "groups.civilians.damaged",
+        "op": "truthy"
+      },
+      {
+        "flag": "hollowmereCivilianCasualties",
+        "path": "groups.civilians.destroyed",
+        "op": "gt",
+        "value": 0
+      },
+      {
+        "flag": "sparedHollowmereCivilians",
+        "all": [
+          {
+            "path": "groups.civilians.damaged",
+            "op": "falsy"
+          },
+          {
+            "path": "groups.civilians.destroyed",
+            "op": "eq",
+            "value": 0
+          }
+        ]
+      },
+      {
+        "flag": "onlyIntendedTargetsDestroyed",
+        "all": [
+          {
+            "path": "groups.turrets.destroyed",
+            "op": "gte",
+            "value": 2
+          },
+          {
+            "path": "groups.civilians.destroyed",
+            "op": "eq",
+            "value": 0
+          }
+        ]
+      }
+    ]
+  },
+  "rewardTables": {
+    "firstClear": "clear_act1_01_hollowmere_perimeter"
+  }
+}

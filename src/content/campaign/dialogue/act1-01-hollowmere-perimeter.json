@@ -1,0 +1,206 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-01-hollowmere-perimeter",
+  "sequences": {
+    "briefing": [
+      "opening",
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "opening": {
+      "title": "Aldric’s Peace",
+      "location": "Government Barracks",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "broadcast",
+          "text": "Peace survives because disciplined operators stand between ordinary families and raider violence."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Your assault frame is tuned. Kell is already pretending he did not hear the speech."
+        },
+        {
+          "speaker": "kell",
+          "text": "I heard it. I simply did not learn anything."
+        },
+        {
+          "speaker": "vale",
+          "text": "Hollowmere perimeter. Routine anti-raider work. We finish clean."
+        }
+      ]
+    },
+    "briefing": {
+      "title": "Directive: Hollowmere",
+      "location": "Operations Room",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "government",
+          "text": "Two armed emplacements protect a raider logistics compound. Destroy both."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Hollowmere is listed as agricultural territory."
+        },
+        {
+          "speaker": "kell",
+          "text": "Intelligence still calls it a stronghold."
+        }
+      ],
+      "choices": [
+        {
+          "id": "hollowmereApproach",
+          "speaker": "vale",
+          "prompt": "Vale’s standing order",
+          "options": [
+            {
+              "id": "turretsOnly",
+              "text": "Turrets only. Nothing else gets shot.",
+              "spokenText": "Turrets only. Nothing else gets shot.",
+              "flag": "intendedToSpareCivilians"
+            },
+            {
+              "id": "byTheBook",
+              "text": "Follow the target packet exactly.",
+              "spokenText": "Follow the target packet exactly. No deviations.",
+              "flag": "followedOrders"
+            }
+          ]
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "Victory Package",
+      "location": "Hollowmere Perimeter",
+      "kind": "propaganda",
+      "lines": [
+        {
+          "speaker": "broadcast",
+          "text": "A major raider fortress has fallen through Chancellor Aldric’s decisive leadership."
+        },
+        {
+          "speaker": "reyes",
+          "text": "That package has aerial footage, casualty numbers, and a victory speech. We ended the fight less than a minute ago."
+        },
+        {
+          "speaker": "kell",
+          "text": "No mobile defenders. No supply train. No proper firing positions."
+        },
+        {
+          "speaker": "civilian",
+          "text": "You broke the old security guns and called us raiders.",
+          "when": {
+            "flag": "sparedHollowmereCivilians"
+          }
+        },
+        {
+          "speaker": "civilian",
+          "text": "You said you were protecting people. Look at the transports.",
+          "when": {
+            "flag": "hollowmereCivilianDamage"
+          }
+        },
+        {
+          "speaker": "vale",
+          "text": "Save the raw combat record. Nobody edits our copy."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Withdrawal",
+      "location": "Hollowmere Perimeter",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "reyes",
+          "text": "Pull back. Whatever command told us, these people are not an army."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "hollowmereStart",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "government",
+      "text": "Targets marked. Destroy both raider emplacements.",
+      "priority": 90,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "firstTurretDamaged",
+      "trigger": {
+        "type": "specificObjectiveTargetDamaged",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "occurrence": 1
+      },
+      "speaker": "kell",
+      "text": "That armor is agricultural-security grade. Raiders do not bolt these to irrigation concrete.",
+      "priority": 80,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "firstTurretDestroyed",
+      "trigger": {
+        "type": "specificObjectiveTargetDestroyed",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "occurrence": 1
+      },
+      "speaker": "reyes",
+      "text": "Barely any armor. This was built to scare thieves, not stop a lance.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "civilianConvoySpotted",
+      "trigger": {
+        "type": "unitOfTagSpotted",
+        "tag": "civilian",
+        "teamId": "foe",
+        "afterActivations": 1
+      },
+      "speaker": "reyes",
+      "text": "Those are passenger haulers. Families, Commander—not troop carriers.",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "bothTurretsDestroyed",
+      "trigger": {
+        "type": "objectiveProgressReached",
+        "targetUnitIds": [
+          "u4",
+          "u5"
+        ],
+        "destroyed": 2
+      },
+      "speaker": "kell",
+      "text": "Both guns down. No raider vehicles, no ammunition stores, no fighting positions. This was never a stronghold.",
+      "priority": 65,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

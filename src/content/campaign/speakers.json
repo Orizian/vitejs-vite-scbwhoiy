@@ -1,0 +1,52 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "registry": "speakers",
+  "description": "Everyone a campaign script can give a line to. Operators appear here under their canonical operator id.",
+  "entries": {
+    "vale": {
+      "name": "Commander Vale",
+      "glyph": "🧑‍🚀"
+    },
+    "reyes": {
+      "name": "Reyes",
+      "glyph": "👩‍🚀"
+    },
+    "kell": {
+      "name": "Kell",
+      "glyph": "🧔‍♂️"
+    },
+    "nyx": {
+      "name": "Nyx",
+      "glyph": "🥷"
+    },
+    "chancellor": {
+      "name": "Chancellor Aldric",
+      "glyph": "🤵"
+    },
+    "ferris": {
+      "name": "Quartermaster Ferris",
+      "glyph": "🧑‍🔧"
+    },
+    "saldana": {
+      "name": "Doctor Saldaña",
+      "glyph": "🧑‍⚕️"
+    },
+    "broadcast": {
+      "name": "State Broadcast",
+      "glyph": "📡"
+    },
+    "narrator": {
+      "name": "Narration",
+      "glyph": "▣"
+    },
+    "civilian": {
+      "name": "Hollowmere Survivor",
+      "glyph": "🧑‍🌾"
+    },
+    "government": {
+      "name": "Government Command",
+      "glyph": "◆"
+    }
+  }
+}

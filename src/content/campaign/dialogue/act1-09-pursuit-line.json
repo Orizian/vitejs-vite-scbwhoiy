@@ -1,0 +1,149 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-09-pursuit-line",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Flood-Control Route",
+      "location": "Industrial Fringe",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "Two gate relays control the canal barrier. Break both and I can open the old maintenance exit."
+        },
+        {
+          "speaker": "nyx",
+          "text": "Pursuit doctrine funnels fugitives into the center lane."
+        },
+        {
+          "speaker": "reyes",
+          "text": "Fuel is low. We do not stay for a heroic last stand."
+        },
+        {
+          "speaker": "vale",
+          "text": "Relays, gate, extraction. Nothing else matters."
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "Beyond the Search Grid",
+      "location": "Drainage Works",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "kell",
+          "text": "Gate closed behind you. Search drones will lose the track for a few hours."
+        },
+        {
+          "speaker": "nyx",
+          "text": "A few hours is the first luxury we have had."
+        },
+        {
+          "speaker": "reyes",
+          "text": "I know an abandoned quarry outside the official grid."
+        },
+        {
+          "speaker": "vale",
+          "text": "Then that is home until it is not."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Pursuit Catches Up",
+      "location": "Flood-Control Route",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "nyx",
+          "text": "They sealed the canal. We need to hit the relays faster on the next attempt."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "pursuitStart",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "kell",
+      "text": "Relays are upline. Extraction remains locked until both are down.",
+      "priority": 95,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "pursuitElite",
+      "trigger": {
+        "type": "eliteUnitSpotted"
+      },
+      "speaker": "nyx",
+      "text": "Missile carrier on the floodwall. Government expects us to bunch at the gate.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "pursuitRelayOne",
+      "trigger": {
+        "type": "specificObjectiveTargetDestroyed",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "occurrence": 1
+      },
+      "speaker": "reyes",
+      "text": "First relay dead. The gate motors are fighting the lock.",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "pursuitPhase",
+      "trigger": {
+        "type": "objectivePhaseChanged",
+        "toId": "extract"
+      },
+      "speaker": "kell",
+      "text": "Both relays are down. South-west maintenance exit is open now.",
+      "priority": 90,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "pursuitExtract",
+      "trigger": {
+        "type": "extractionReached",
+        "tiles": [
+          {
+            "x": 0,
+            "y": 7
+          },
+          {
+            "x": 1,
+            "y": 7
+          }
+        ]
+      },
+      "speaker": "vale",
+      "text": "All units through. Close the gate behind us.",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

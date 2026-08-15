@@ -1,0 +1,150 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "script",
+  "id": "act1-11b-witness-convoy",
+  "sequences": {
+    "briefing": [
+      "briefing"
+    ],
+    "victory": [
+      "aftermath"
+    ],
+    "defeat": [
+      "defeat"
+    ]
+  },
+  "scenes": {
+    "briefing": {
+      "title": "Witnesses in the Dark",
+      "location": "Abandoned Quarry",
+      "kind": "briefing",
+      "lines": [
+        {
+          "speaker": "saldana",
+          "text": "Two transports. Forty-three survivors and the original relief records."
+        },
+        {
+          "speaker": "nyx",
+          "text": "Government command frame is leading the interception."
+        },
+        {
+          "speaker": "vale",
+          "text": "Nobody touches those transports."
+        },
+        {
+          "speaker": "reyes",
+          "text": "They had more time to locate the convoy because we took the supplies first.",
+          "when": {
+            "flag": "prioritizedSupplies"
+          }
+        }
+      ]
+    },
+    "aftermath": {
+      "title": "Remember Hollowmere",
+      "location": "Quarry Evacuation Route",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "civilian",
+          "text": "You were the officer who stopped the cleanup lance.",
+          "when": {
+            "flag": "sparedHollowmereCivilians"
+          }
+        },
+        {
+          "speaker": "civilian",
+          "text": "Some of us remember the damage your squad caused before you turned.",
+          "when": {
+            "flag": "hollowmereCivilianDamage"
+          }
+        },
+        {
+          "speaker": "saldana",
+          "text": "The quarry can hide everyone for tonight."
+        },
+        {
+          "speaker": "vale",
+          "text": "Tonight is enough. Move the transports inside."
+        }
+      ]
+    },
+    "defeat": {
+      "title": "Convoy Broken",
+      "location": "Quarry Evacuation Route",
+      "kind": "dialogue",
+      "lines": [
+        {
+          "speaker": "saldana",
+          "text": "We lost the route. Pull back before the remaining families are trapped with us."
+        }
+      ]
+    }
+  },
+  "midBattle": [
+    {
+      "id": "witnessStart",
+      "trigger": {
+        "type": "battleStarted"
+      },
+      "speaker": "saldana",
+      "text": "Transports are ahead. Government units are closing from the north.",
+      "priority": 95,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "witnessSpotted",
+      "trigger": {
+        "type": "unitOfTagSpotted",
+        "tag": "civilian",
+        "teamId": "player"
+      },
+      "speaker": "vale",
+      "text": "Convoy visual. Form around the transports.",
+      "priority": 85,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "witnessElite",
+      "trigger": {
+        "type": "eliteUnitSpotted"
+      },
+      "speaker": "nyx",
+      "text": "Command frame identified. It will coordinate every target lock on the road.",
+      "priority": 80,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "witnessLow",
+      "trigger": {
+        "type": "protectedUnitHpBelowPercent",
+        "unitIds": [
+          "u4",
+          "u5"
+        ],
+        "percent": 50
+      },
+      "speaker": "reyes",
+      "text": "One transport is below half armor. Shield it now!",
+      "priority": 75,
+      "pauseBattle": true,
+      "once": true
+    },
+    {
+      "id": "witnessAttack",
+      "trigger": {
+        "type": "civilianDamaged",
+        "teamId": "player"
+      },
+      "speaker": "civilian",
+      "text": "They found us—please, do not let them finish what Hollowmere started.",
+      "priority": 70,
+      "pauseBattle": true,
+      "once": true
+    }
+  ]
+}

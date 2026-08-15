@@ -1,0 +1,54 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-03-recovered-relief",
+  "missionId": "act1-03-recovered-relief",
+  "order": 3,
+  "name": "Recovered Relief",
+  "chapter": "actOne",
+  "summary": "Seize a depot allegedly holding stolen state material.",
+  "objectiveText": "Secure both marked containers",
+  "nodeKind": "battle",
+  "requires": [
+    "outpostDefended"
+  ],
+  "grantsFlags": [
+    "reliefEvidenceRecovered"
+  ],
+  "encounterId": "missionRecoveredRelief",
+  "deployment": {
+    "deploymentSize": 3,
+    "requiredOperatorIds": [
+      "vale",
+      "reyes",
+      "kell"
+    ],
+    "optionalOperatorIds": [],
+    "guestOperators": [],
+    "lockedDeployment": true,
+    "deploymentOrder": [
+      "vale",
+      "reyes",
+      "kell"
+    ]
+  },
+  "outcomeTracking": {
+    "groups": [
+      {
+        "id": "civilians",
+        "unitTag": "civilian"
+      }
+    ],
+    "rules": [
+      {
+        "flag": "reliefCivilianHarmed",
+        "path": "groups.civilians.damaged",
+        "op": "truthy"
+      }
+    ]
+  },
+  "rewardTables": {
+    "firstClear": "clear_act1_03_recovered_relief"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-05-the-evidence",
+  "missionId": "act1-05-the-evidence",
+  "order": 5,
+  "name": "The Evidence",
+  "chapter": "actOne",
+  "summary": "Vale, Reyes, and Kell assemble the mission records and choose official confrontation.",
+  "objectiveText": "Compile the Hollowmere evidence",
+  "nodeKind": "story",
+  "requires": [
+    "proofComplete"
+  ],
+  "grantsFlags": [
+    "evidenceCompiled"
+  ],
+  "rewardTables": {
+    "firstClear": "clear_act1_05_the_evidence"
+  }
+}

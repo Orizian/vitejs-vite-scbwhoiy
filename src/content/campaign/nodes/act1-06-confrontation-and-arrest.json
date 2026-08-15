@@ -1,0 +1,20 @@
+{
+  "format": "statuszero.campaign",
+  "formatVersion": 1,
+  "kind": "node",
+  "id": "act1-06-confrontation-and-arrest",
+  "missionId": "act1-06-confrontation-and-arrest",
+  "order": 6,
+  "name": "Confrontation and Arrest",
+  "chapter": "actOne",
+  "summary": "Vale presents the evidence to Chancellor Aldric.",
+  "objectiveText": "Confront the Chancellor",
+  "nodeKind": "story",
+  "requires": [
+    "evidenceCompiled"
+  ],
+  "grantsFlags": [
+    "arrested",
+    "brandedTraitor"
+  ]
+}
