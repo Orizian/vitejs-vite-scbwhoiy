@@ -25,7 +25,12 @@ import {
   serializeMission,
   parseMission
 } from "../content/mission-format.js";
-import { PLAYTEST_STORAGE_KEY } from "../content/mission-registry.js";
+import {
+  PLAYTEST_STORAGE_KEY,
+  MISSION_CONTENT,
+  missionSourceById,
+  writePlaytestMission
+} from "../content/mission-registry.js";
 import { terrainById } from "../content/catalog.js";
 import { writePreviewScene } from "../content/scene-registry.js";
 import { buildArenaMission } from "../content/gameplay/arena.js";
@@ -64,6 +69,7 @@ const TABS = [
  * keeps the whole editor out of the game's bundle. */
 const LazySceneEditor = React.lazy(() => import("./SceneEditor.jsx"));
 const LazyGameplayStudio = React.lazy(() => import("./GameplayStudio.jsx"));
+const LazyCampaignEditor = React.lazy(() => import("./CampaignEditor.jsx"));
 
 function ModeLoading({ label }) {
   return (
@@ -75,7 +81,7 @@ function ModeLoading({ label }) {
 
 const AUTOSAVE_KEY = "statuszero.editor.draft";
 const EDITOR_MODE_KEY = "statuszero.editor.mode";
-const EDITOR_MODES = ["mission", "scene", "gameplay"];
+const EDITOR_MODES = ["mission", "scene", "gameplay", "campaign"];
 const HISTORY_LIMIT = 60;
 
 /**
@@ -456,6 +462,53 @@ export default function Editor({ onExit, onScenePreview }) {
     [onScenePreview]
   );
 
+  /* ---- campaign node actions ----
+   *
+   * Two verbs, both reusing paths that already exist. Opening a mission loads
+   * the canonical mission file into the Mission Editor; playing from a node
+   * writes the playtest slot the mission editor's own Playtest button writes.
+   *
+   * "Play from here" deliberately launches the *mission*, not a synthesized
+   * campaign state. Fabricating a plausible campaign — inventing which flags
+   * are set, which pilots survived, what was recruited — would silently test a
+   * game state no playthrough can produce, and a green result would mean
+   * nothing. What the author actually wants to check at this point is the
+   * operation, and the mission playtest slot already does that without
+   * touching the real save. Campaign-state simulation is answered by the
+   * availability preview beside the inspector, which uses the runtime's own
+   * evaluator rather than a guess.
+   */
+  const openMissionFromCampaign = React.useCallback((missionId) => {
+    const entry = missionId ? MISSION_CONTENT.missions[missionId] : null;
+    if (!entry) {
+      alert(
+        'There is no mission file for "' + missionId + '" yet.\n\n' +
+          "Prototype operations still run from engine encounters. Create a mission " +
+          "with this id in the Mission Editor and the node will point at it."
+      );
+      return;
+    }
+    const source = missionSourceById(missionId);
+    if (source) {
+      setMission(normalizeMission(source));
+      chooseMode("mission");
+    }
+  }, []);
+
+  const playCampaignNode = React.useCallback((node) => {
+    const source = node && node.missionId ? missionSourceById(node.missionId) : null;
+    if (!source) {
+      alert(
+        'Cannot play "' + (node && node.id) + '" from here.\n\n' +
+          "It has no mission file, so there is nothing to load into the playtest " +
+          "slot. The real campaign still runs it from its engine encounter."
+      );
+      return;
+    }
+    writePlaytestMission(normalizeMission(source));
+    if (typeof window !== "undefined") window.open("/", "_blank");
+  }, []);
+
   /* ---- gameplay data test ----
    * The Studio has already written its draft to the slot the content registry
    * overlays at import. All that is left is to put the resolved subject into
@@ -488,7 +541,7 @@ export default function Editor({ onExit, onScenePreview }) {
         </span>
         {/* Only working editors appear here. A mode that does not exist yet is
          *  not a tab; it is nothing. */}
-        {[["mission", "Missions"], ["scene", "Scenes"], ["gameplay", "Gameplay Data"]].map(([id, label]) => (
+        {[["mission", "Missions"], ["scene", "Scenes"], ["gameplay", "Gameplay Data"], ["campaign", "Campaign"]].map(([id, label]) => (
           <button
             key={id}
             onClick={() => chooseMode(id)}
@@ -511,6 +564,14 @@ export default function Editor({ onExit, onScenePreview }) {
     return chrome(
       <React.Suspense fallback={<ModeLoading label="Loading scene editor…" />}>
         <LazySceneEditor onPreview={previewScene} previewLabel="Preview" />
+      </React.Suspense>
+    );
+  }
+
+  if (mode === "campaign") {
+    return chrome(
+      <React.Suspense fallback={<ModeLoading label="Loading campaign editor…" />}>
+        <LazyCampaignEditor onOpenMission={openMissionFromCampaign} onPlayNode={playCampaignNode} />
       </React.Suspense>
     );
   }

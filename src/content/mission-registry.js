@@ -146,6 +146,22 @@ export const MISSION_CONTENT = collect();
 
 /** Story script for a file-authored mission, or null. App.jsx's storyScript()
  *  consults this before falling back to the built-in CAMPAIGN.dialogue table. */
+/**
+ * The authored source of a mission, as it sits on disk.
+ *
+ * The registry's own `missions` map is a compiled summary; an editor that
+ * wants to *edit* a mission needs the file. Returns null for a mission that
+ * has no file — which several prototype operations still do not.
+ */
+export function missionSourceById(missionId) {
+  for (const [path, module] of Object.entries(files)) {
+    const raw = module && module.default ? module.default : module;
+    const id = raw.id || path.split("/").pop().replace(/\.json$/, "");
+    if (id === missionId) return raw;
+  }
+  return null;
+}
+
 export function missionFileScript(missionId) {
   return MISSION_CONTENT.scripts[missionId] || null;
 }
