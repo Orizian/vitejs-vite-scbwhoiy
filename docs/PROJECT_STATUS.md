@@ -1,6 +1,6 @@
 # STATUS ZERO — Canonical Project Status
 
-> **Last updated** 2026-08-13 · **Branch** `claude/tacrpg-engine-analysis-editors-mwjxzt` · **Commit** `afec6f6`
+> **Last updated** 2026-08-14 · **Branch** `claude/tacrpg-engine-analysis-editors-mwjxzt` · **Commit** `ebfa913`
 >
 > **CURRENT status in this document is derived from code, tests and runtime
 > registries — not from design documents or conversation.** Where a feature
@@ -458,8 +458,8 @@ And the three rules the codebase already enforces:
 | Equipment / build system | PARTIAL | 4 slots, modifiers, grants/removes abilities, class compatibility, persistent ownership | Durability, upgrades, meaningful build expression | No state, no durability, no progression hooks |
 | Mastery / perk system | PARTIAL | 8 perks, one choice per operator at rank 2 | Character skill trees | No trees, tiers or unlock paths (PRG-01) |
 | Enemy AI | PARTIAL | 3 weight profiles over believed world, real reaction scorer, refuses waste | Role behaviours (hunter, escort, ace) | No behaviours, no planning for any advanced primitive |
-| Campaign | PARTIAL | 13 Act One missions, chapters, economy, base, facilities, contacts, roster, ranks | Multi-act, authored not hard-coded | Entirely a literal in App.jsx |
-| Campaign graph editor | NOT IMPLEMENTED | — | Author nodes, unlocks, rewards | Nothing authors the campaign |
+| Campaign | IMPLEMENTED | Authored content in `src/content/campaign/`: manifest, one file per node, facilities, contacts, speakers, scripts. Pure runtime takes content as an argument | Multi-act | Content breadth only |
+| Campaign graph editor | IMPLEMENTED | Fourth editor mode: node browser, derived-edge graph, inspector, availability preview, reachability, cross-editor navigation, draft isolation | Same | Export covers nodes only |
 | Mission editor | IMPLEMENTED | Full authoring, validation, deterministic export | Same | — |
 | Map editor | IMPLEMENTED | Terrain, elevation, legend, preview | Larger maps, sectors | MAP-02 |
 | Scene editor | IMPLEMENTED | 8 step types, preview-from-here, round trip | Camera, mid-battle choices | CIN-01 |
@@ -468,7 +468,7 @@ And the three rules the codebase already enforces:
 | Mission replay | PARTIAL | Battle-end replay same/new seed; the reward pipeline fully supports repeat clears and is tested through them | Campaign-level re-run | **No board UI offers a completed mission again** |
 | Loot / drops | IMPLEMENTED | Authored loot tables, guaranteed + weighted pools, nested references, chassis and placement drop sources, deterministic rolls, claim policies | Same + more content | Content breadth only |
 | Materials / salvage | IMPLEMENTED | `materials` registry, persistent quantities, save/load | Consumed by crafting | Nothing consumes them yet |
-| Mission rewards | IMPLEMENTED | Mission files own `clear` and `firstClear` tables; results screen shows sources | All missions migrated off the campaign literal | 13 Act One missions still use the legacy adapter |
+| Mission rewards | IMPLEMENTED | One authority per mission — its mission file, or its campaign node where no file exists. Legacy adapter deleted | Same | — |
 | First-clear vs repeat rewards | IMPLEMENTED | Separate sources, claim policies, exactly-once application | Same | No replay UI on the mission board |
 | Salvage from wrecks | NOT IMPLEMENTED | Defeated enemies drop authored loot; wrecks themselves are not a separate source | Recover parts from wrecks | Nothing exists |
 | Crafting | NOT IMPLEMENTED | — | Build/upgrade from parts | Nothing exists |
@@ -538,6 +538,9 @@ phases have been removed.
 - No elite/ace phase behaviour — no retreat, loadout change or death refusal (BOS-01).
 
 ### Content / progression
+- **Twelve operations have no mission file.** Their campaign nodes are fully authored; their maps and encounters are still `MAPS`/`ENCOUNTERS` literals in App.jsx. That is mission-content extraction, not campaign work.
+- **Currencies are still campaign fields**, not a registry. Authored grants already say `{ kind: "currency", itemId: "funds" }`, so the authored shape will not change when they are generalized.
+- Campaign export writes node files only; the manifest, facilities and contacts are hand-edited.
 - No crafting, vendors or black market. Materials exist and accumulate; nothing consumes them.
 - **No mission-board replay UI.** The reward architecture supports repeat clears end to end and is tested through them, but the board filters completed missions out of `available`, so nothing offers one again.
 - **13 Act One missions still author rewards in the `CAMPAIGN` literal**, adapted at one call site. Migration path documented in `docs/REWARDS.md`.
@@ -550,14 +553,12 @@ phases have been removed.
 - No disable/capture/surrender (CAP-01).
 
 ### Editor
-- No campaign editor.
 - No project creation or switching.
 - Terrain presentation vocabulary (swatches, map characters, speakers, backgrounds) still hand-written in `catalog.js`.
 - No in-app documentation or onboarding.
 
 ### Architecture
-- **`App.jsx` is 46,682 lines** and holds the engine, all presentation, the whole campaign, map/encounter literals and every test.
-- The campaign is a source literal, not authored data.
+- **`App.jsx` is 44,610 lines** (down from 46,682 — the campaign literal is gone) and holds the engine, all presentation, the whole campaign, map/encounter literals and every test.
 - No multi-project abstraction; `STATUS_ZERO` naming is baked into globals and storage keys.
 - No large-map sectoring, culling or pathfinding budget (MAP-02).
 - One map per battle; no submaps (SUB-01).
@@ -576,14 +577,15 @@ phases have been removed.
 
 # Test / Quality Snapshot
 
-Measured on commit `afec6f6`.
+Measured on commit `ebfa913`.
 
 | | |
 |---|---|
-| **Unit tests** | **716 / 716 passing**, across 79 groups |
+| **Unit tests** | **735 / 735 passing**, across 80 groups |
 | **Architecture audit** | **PASS** — 36 checks, 0 failures |
-| **Character-name tripwire** | **clean** — 71 forbidden ids, 6 generic directories |
+| **Character-name tripwire** | **clean** — 80 forbidden ids, 6 generic directories |
 | **Content validation** | **clean** — 0 errors |
+| **Campaign validation** | **clean** — 0 errors, 0 warnings, 13 nodes reachable, no cycles |
 | **Browser acceptance** | **15 suites, 668 checks, all passing** |
 
 | Suite | Checks | Suite | Checks |
@@ -599,7 +601,7 @@ Measured on commit `afec6f6`.
 
 Largest test groups: Trajectory 38 · Tactical language 33 · Reactions 28 ·
 Perception 28 · Rewards 28 · Propagation 27 · Sequencing 24 · Fixtures 23 ·
-Interception 23 · Orchestration 22 · Support 22.
+Interception 23 · Orchestration 22 · Support 22 · Campaign 18.
 
 ---
 

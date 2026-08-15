@@ -55,6 +55,17 @@ const GENERIC_DIRS = [
  * is deliberately not here — engine code must not learn it either, and the way
  * to guarantee that is for the engine never to see a name at all. */
 const FORBIDDEN_NAMES = [
+  // Campaign content. Progression code that names one of our operations, flags
+  // or chapters is a campaign engine that only runs this campaign.
+  "act1-01-hollowmere-perimeter",
+  "act1-12-quarry-defense",
+  "quarryReached",
+  "hollowmereOperationComplete",
+  "inExile",
+  "actOne",
+  "repairBay",
+  "saldana",
+  "ferris",
   // Reward content. A loot pipeline that mentions a material, a table or a
   // named enemy has grown the special case the whole architecture exists to
   // avoid — the next unique drop would need a second one.
