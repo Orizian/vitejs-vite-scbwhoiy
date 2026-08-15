@@ -50,6 +50,17 @@ export const REQUIREMENT_KINDS = {
 export const REQUIREMENT_KIND_IDS = Object.keys(REQUIREMENT_KINDS);
 
 /**
+ * Selectors an authored deployment may use instead of naming operators.
+ *
+ * `"owned"` means "whoever is on the roster when this runs", which is not a
+ * list an author can write down: by the time the late operations are offered,
+ * who survived and who was recruited is a property of the playthrough. It is a
+ * named vocabulary rather than a magic string so validation can tell the
+ * difference between a selector and a typo'd operator id.
+ */
+export const ROSTER_SELECTORS = ["owned"];
+
+/**
  * Authored requirements accept a bare string as shorthand for a flag.
  *
  * The prototype authored `requires: ["quarryReached"]` and there is no reason
@@ -334,9 +345,18 @@ export function validateCampaign(content, refs) {
     }
     const deployment = node.deployment;
     if (deployment) {
-      const rosterRefs = (deployment.requiredOperatorIds || [])
-        .concat(deployment.optionalOperatorIds || [])
-        .concat(deployment.deploymentOrder || [])
+      const listed = (value) => {
+        if (typeof value === "string") {
+          if (!ROSTER_SELECTORS.includes(value)) {
+            errors.push(where + ' uses unknown roster selector "' + value + '".');
+          }
+          return [];
+        }
+        return Array.isArray(value) ? value : [];
+      };
+      const rosterRefs = listed(deployment.requiredOperatorIds)
+        .concat(listed(deployment.optionalOperatorIds))
+        .concat(listed(deployment.deploymentOrder))
         .concat((deployment.guestOperators || []).map((guest) => guest.operatorId));
       for (const operatorId of rosterRefs) {
         if (known.operatorIds && !known.operatorIds.includes(operatorId)) {
@@ -347,7 +367,7 @@ export function validateCampaign(content, refs) {
       if (size != null && !(Number(size) > 0)) {
         errors.push(where + " has a deployment size that is not positive.");
       }
-      if (size != null && (deployment.requiredOperatorIds || []).length > Number(size)) {
+      if (size != null && listed(deployment.requiredOperatorIds).length > Number(size)) {
         errors.push(where + " requires more operators than it may deploy.");
       }
     }

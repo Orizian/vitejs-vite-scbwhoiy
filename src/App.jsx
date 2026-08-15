@@ -29870,6 +29870,375 @@ test("Rewards", "Existing campaign progression is unchanged by any of this", () 
   assert(deployment.candidates.length, "deployment still assembles a lance");
 });
 
+/* ---------------------------------------------------------------
+ * CAMPAIGN
+ *
+ * Progression as authored data. The load-bearing test in this group is the
+ * synthetic one: a three-node campaign with no mission, operator or flag this
+ * project ships, driven through the same functions the real campaign uses. If
+ * that ever needs a STATUS ZERO id to pass, the campaign layer has stopped
+ * being a campaign engine and become one campaign that happens to run.
+ * -------------------------------------------------------------*/
+
+/**
+ * A campaign made of nothing this project owns.
+ *
+ * Three nodes: a root, one gated on the root's flag, and one gated on a flag
+ * the root does not grant — so the third only opens after the second.
+ */
+function syntheticCampaign() {
+  const node = (id, order, requires, grantsFlags, extra) =>
+    normalizeNode({ id, missionId: "m-" + id, order, requires, grantsFlags, ...(extra || {}) }, id);
+  return {
+    id: "synthetic",
+    name: "Synthetic",
+    startingChapter: "one",
+    startingCurrencies: { credits: 5 },
+    startingFlags: [],
+    startingRoster: ["pilotOne"],
+    chapters: { one: { name: "One", order: 1 } },
+    baseStages: [],
+    facilities: { workshop: { name: "Workshop", cost: { credits: 3 } } },
+    contacts: { broker: { name: "Broker" } },
+    speakers: {},
+    dialogue: {},
+    nodes: {
+      alpha: node("alpha", 1, [], ["alphaDone"]),
+      beta: node("beta", 2, ["alphaDone"], ["betaDone"], { recruits: ["pilotTwo"] }),
+      gamma: node("gamma", 3, ["betaDone"], ["gammaDone"], { contacts: ["broker"] })
+    }
+  };
+}
+
+const syntheticState = (overrides) => ({ flags: {}, completed: [], ...(overrides || {}) });
+
+test("Campaign", "A campaign with none of this project's ids initializes and progresses", () => {
+  const content = syntheticCampaign();
+  let state = syntheticState();
+
+  assertEqual(availableNodeIds(content, state).join(","), "alpha", "only the root is offered");
+  assertEqual(rootNodeIds(content).join(","), "alpha");
+
+  // Completing alpha grants its flag, which opens beta and nothing else.
+  state = { flags: { alphaDone: true }, completed: ["alpha"] };
+  assertEqual(availableNodeIds(content, state).join(","), "beta");
+
+  state = { flags: { alphaDone: true, betaDone: true }, completed: ["alpha", "beta"] };
+  assertEqual(availableNodeIds(content, state).join(","), "gamma");
+
+  // And the whole thing is reachable.
+  const reach = reachability(content);
+  assertEqual(reach.unreachable.length, 0, reach.unreachable.join(","));
+  assertEqual(reach.reachable.slice().sort().join(","), "alpha,beta,gamma");
+});
+
+test("Campaign", "A locked node says which requirement it is waiting on", () => {
+  const content = syntheticCampaign();
+  const report = nodeAvailability(content, syntheticState(), "gamma");
+  assertEqual(report.available, false);
+  assertEqual(report.reason, "requirementsUnmet");
+  assertEqual(report.unmet.join(","), "betaDone", "the editor and the tooltip read the same answer");
+
+  const open = nodeAvailability(content, syntheticState({ flags: { betaDone: true } }), "gamma");
+  assertEqual(open.available, true);
+  assertEqual(open.unmet.length, 0);
+});
+
+test("Campaign", "Graph edges are derived, never authored twice", () => {
+  const edges = deriveEdges(syntheticCampaign());
+  assertEqual(edges.length, 2, "one edge per satisfied requirement");
+  const described = edges.map((edge) => edge.from + "->" + edge.to + ":" + edge.flag).sort();
+  assertEqual(described.join(" | "), "alpha->beta:alphaDone | beta->gamma:betaDone");
+  assert(edges.every((edge) => !edge.dangling));
+});
+
+test("Campaign", "A requirement nothing grants is reported as a dangling edge", () => {
+  const content = syntheticCampaign();
+  content.nodes.gamma = normalizeNode(
+    { id: "gamma", missionId: "m-gamma", order: 3, requires: ["nobodyGrantsThis"] },
+    "gamma"
+  );
+  const dangling = deriveEdges(content).filter((edge) => edge.dangling);
+  assertEqual(dangling.length, 1);
+  assertEqual(dangling[0].to, "gamma");
+  assertEqual(dangling[0].from, null, "there is no source, which is the point");
+
+  const report = validateCampaign(content, {});
+  assert(
+    report.errors.some((message) => message.includes("nobodyGrantsThis")),
+    report.errors.join(" | ")
+  );
+  assertEqual(reachability(content).unreachable.join(","), "gamma");
+});
+
+test("Campaign", "A cycle between nodes is refused", () => {
+  const content = syntheticCampaign();
+  content.nodes.alpha = normalizeNode(
+    { id: "alpha", missionId: "m-alpha", order: 1, requires: ["gammaDone"], grantsFlags: ["alphaDone"] },
+    "alpha"
+  );
+  const cycles = findNodeCycles(content);
+  assert(cycles.length, "the cycle is found");
+  const report = validateCampaign(content, {});
+  assert(report.errors.some((message) => message.includes("cycle")), report.errors.join(" | "));
+  assert(
+    report.errors.some((message) => message.includes("cannot begin")),
+    "and with every node gated, nothing can start"
+  );
+});
+
+test("Campaign", "A node waiting on a flag it grants itself is refused", () => {
+  const content = syntheticCampaign();
+  content.nodes.alpha = normalizeNode(
+    { id: "alpha", missionId: "m-alpha", order: 1, requires: ["alphaDone"], grantsFlags: ["alphaDone"] },
+    "alpha"
+  );
+  const report = validateCampaign(content, {});
+  assert(
+    report.errors.some((message) => message.includes("a flag it grants itself")),
+    report.errors.join(" | ")
+  );
+});
+
+test("Campaign", "Validation refuses unknown references", () => {
+  const content = syntheticCampaign();
+  const refs = {
+    missionIds: ["m-alpha", "m-beta", "m-gamma"],
+    operatorIds: ["pilotOne", "pilotTwo"],
+    contactIds: ["broker"],
+    currencyIds: ["credits"]
+  };
+  assertEqual(validateCampaign(content, refs).errors.length, 0, "the synthetic campaign is clean");
+
+  const complains = (mutate, needle) => {
+    const broken = syntheticCampaign();
+    mutate(broken);
+    const errors = validateCampaign(broken, refs).errors;
+    assert(errors.some((message) => message.includes(needle)), needle + ": " + errors.join(" | "));
+  };
+
+  complains((c) => { c.nodes.beta.missionId = "ghostMission"; }, "ghostMission");
+  complains((c) => { c.nodes.beta.missionId = null; }, "references no mission");
+  complains((c) => { c.nodes.beta.recruits = ["ghostPilot"]; }, "ghostPilot");
+  complains((c) => { c.nodes.gamma.contacts = ["ghostContact"]; }, "ghostContact");
+  complains((c) => { c.facilities.workshop.cost = { doubloons: 2 }; }, "doubloons");
+  complains((c) => { c.startingRoster = ["ghostPilot"]; }, "ghostPilot");
+  complains((c) => { c.startingCurrencies = { doubloons: 1 }; }, "doubloons");
+  complains((c) => { c.nodes.beta.requires = [{ kind: "vibes" }]; }, "vibes");
+  // Ownership: a node may say when a mission is offered, never what it pays.
+  complains((c) => { c.nodes.beta.rewards = { funds: 10 }; }, "Mission content owns");
+});
+
+test("Campaign", "Two nodes cannot claim one id, and a node id must be a slug", () => {
+  const content = syntheticCampaign();
+  content.nodes["not a slug"] = normalizeNode(
+    { id: "not a slug", missionId: "m-alpha", order: 4 },
+    "not a slug"
+  );
+  const report = validateCampaign(content, {});
+  assert(report.errors.some((message) => message.includes("stable slug")), report.errors.join(" | "));
+  // Duplicate ids are impossible by construction — nodes are a map keyed by id,
+  // and the loader refuses a second file claiming one. That check lives there.
+  assert(CAMPAIGN_CONTENT.errors.length === 0, CAMPAIGN_CONTENT.errors.join(" | "));
+});
+
+test("Campaign", "Deployment rules are validated against the roster", () => {
+  const refs = { operatorIds: ["pilotOne", "pilotTwo"] };
+  const withDeployment = (deployment) => {
+    const content = syntheticCampaign();
+    content.nodes.beta.deployment = deployment;
+    return validateCampaign(content, refs).errors;
+  };
+  assert(
+    withDeployment({ deploymentSize: 2, requiredOperatorIds: ["ghost"] }).some((m) => m.includes("ghost")),
+    "an unknown operator"
+  );
+  assert(
+    withDeployment({ deploymentSize: 0 }).some((m) => m.includes("not positive")),
+    "a deployment nobody can join"
+  );
+  assert(
+    withDeployment({ deploymentSize: 1, requiredOperatorIds: ["pilotOne", "pilotTwo"] })
+      .some((m) => m.includes("more operators than it may deploy")),
+    "a deployment that cannot satisfy itself"
+  );
+  assertEqual(withDeployment({ deploymentSize: 2, requiredOperatorIds: ["pilotOne"] }).length, 0);
+});
+
+test("Campaign", "Graph layout is editor metadata and never reaches the runtime", () => {
+  const content = syntheticCampaign();
+  content.nodes.alpha.editor = { x: 999, y: -40 };
+  content.nodes.gamma.editor = { x: 0, y: 0 };
+  assertEqual(
+    orderedNodes(content).map((node) => node.id).join(","),
+    "alpha,beta,gamma",
+    "order comes from the authored order, not from pixels"
+  );
+  assertEqual(availableNodeIds(content, syntheticState()).join(","), "alpha");
+  const source = [orderedNodes.toString(), nodeAvailability.toString(), deriveEdges.toString()].join("\n");
+  assert(!/\.editor\b/.test(source), "no progression function reads layout");
+});
+
+/* ---- the shipped campaign, as authored data ---- */
+
+test("Campaign", "The shipped campaign loads from files with no errors", () => {
+  assertEqual(CAMPAIGN_CONTENT.errors.join(" | "), "", "the loader found no problems");
+  assertEqual(campaignNodes().length, 13, "thirteen operations");
+  assert(CAMPAIGN_CONTENT.id, "the campaign has an identity");
+  assertEqual(Object.keys(CAMPAIGN_CONTENT.facilities).length, 4);
+  assertEqual(Object.keys(CAMPAIGN_CONTENT.contacts).length, 2);
+  assertEqual(Object.keys(CAMPAIGN_CONTENT.dialogue).length, 13, "every node kept its script");
+  assert(Object.isFrozen(CAMPAIGN_CONTENT), "authored content is not runtime state");
+});
+
+test("Campaign", "The shipped campaign validates", () => {
+  const report = validateCampaign(CAMPAIGN_CONTENT, {
+    missionIds: campaignNodes().map((node) => node.missionId),
+    operatorIds: Object.keys(GAMEPLAY_CONTENT.operators),
+    contactIds: Object.keys(CAMPAIGN_CONTENT.contacts),
+    facilityIds: Object.keys(CAMPAIGN_CONTENT.facilities),
+    currencyIds: CAMPAIGN_CURRENCY_IDS
+  });
+  assertEqual(report.errors.join(" | "), "");
+  assertEqual(report.warnings.join(" | "), "", "and no node is stranded");
+  // The selector is authored vocabulary, not a typo'd operator.
+  const late = campaignNode("act1-09-pursuit-line");
+  assertEqual(late.deployment.optionalOperatorIds, "owned");
+  assert(
+    validateCampaign(
+      { ...CAMPAIGN_CONTENT, nodes: { x: normalizeNode({ id: "x", missionId: "m", deployment: { optionalOperatorIds: "everyone" } }, "x") } },
+      { operatorIds: [] }
+    ).errors.some((message) => message.includes("everyone")),
+    "and an unknown selector is refused"
+  );
+});
+
+test("Campaign", "The shipped graph is a chain with exactly one branch", () => {
+  const roots = rootNodeIds(CAMPAIGN_CONTENT);
+  assertEqual(roots.join(","), "act1-01-hollowmere-perimeter", "one way in");
+  const reach = reachability(CAMPAIGN_CONTENT);
+  assertEqual(reach.unreachable.length, 0, "every operation can be reached");
+  assertEqual(reach.reachable.length, 13);
+  assertEqual(findNodeCycles(CAMPAIGN_CONTENT).length, 0);
+
+  // The branch: two nodes share a prerequisite, and one node needs both.
+  const edges = deriveEdges(CAMPAIGN_CONTENT);
+  const fromQuarry = edges.filter((edge) => edge.flag === "quarryReached").map((edge) => edge.to).sort();
+  assertEqual(fromQuarry.join(","), "act1-11a-supply-interception,act1-11b-witness-convoy");
+  const intoFinal = edges.filter((edge) => edge.to === "act1-12-quarry-defense").map((edge) => edge.flag).sort();
+  assertEqual(intoFinal.join(","), "suppliesSecured,witnessesRescued");
+});
+
+test("Campaign", "Availability through the shipped campaign matches the game's own board", () => {
+  // The runtime helper and the authored-content helper must agree, because the
+  // board reads one and the editor's preview reads the other.
+  let campaign = createCampaignState();
+  assertEqual(
+    availableMissions(campaign).join(","),
+    availableNodeIds(CAMPAIGN_CONTENT, campaign).join(","),
+    "at the start"
+  );
+  campaign = resolveMissionOutcome(beginMission(campaign, "act1-01-hollowmere-perimeter"),
+    "act1-01-hollowmere-perimeter",
+    { victory: true, activations: 4, conditions: { byOperator: {} }, facts: {}, defeated: [] });
+  assertEqual(
+    availableMissions(campaign).join(","),
+    availableNodeIds(CAMPAIGN_CONTENT, campaign).join(","),
+    "and after a clear"
+  );
+  assertEqual(availableMissions(campaign).join(","), "act1-02-border-outpost-defense");
+});
+
+test("Campaign", "Campaign content names no operator by anything but its canonical id", () => {
+  const ids = Object.keys(GAMEPLAY_CONTENT.operators);
+  const named = new Set();
+  for (const node of campaignNodes()) {
+    for (const operatorId of node.recruits) named.add(operatorId);
+    const deployment = node.deployment || {};
+    // A roster selector is not an operator id — "owned" means whoever is on
+    // the roster at the time, which no author can list in advance.
+    const listed = (value) => (Array.isArray(value) ? value : []);
+    for (const operatorId of listed(deployment.requiredOperatorIds)
+      .concat(listed(deployment.optionalOperatorIds))
+      .concat(listed(deployment.deploymentOrder))) named.add(operatorId);
+  }
+  for (const operatorId of named) {
+    assert(ids.includes(operatorId), 'campaign content names "' + operatorId + '", which is not an operator');
+  }
+  const serialized = JSON.stringify(CAMPAIGN_CONTENT);
+  assert(!serialized.includes('"commander"'), "no legacy alias survives in campaign content");
+  assert(!/"ref"\s*:/.test(serialized), "and nothing carries a second name");
+});
+
+test("Campaign", "The campaign runtime knows no mission, operator or flag by name", () => {
+  const source = [
+    orderedNodes.toString(),
+    nodeAvailability.toString(),
+    availableNodeIds.toString(),
+    deriveEdges.toString(),
+    rootNodeIds.toString(),
+    reachability.toString(),
+    findNodeCycles.toString(),
+    validateCampaign.toString(),
+    normalizeNode.toString()
+  ].join("\n");
+  const forbidden = [
+    "act1-01-hollowmere-perimeter", "act1-12-quarry-defense", "quarryReached", "inExile",
+    "vale", "kell", "nyx", "reyes", "actOne", "repairBay", "saldana", "ferris",
+    "funds", "supplies", "intel"
+  ];
+  for (const word of forbidden) {
+    assert(
+      !new RegExp('"' + word + '"|\'' + word + '\'').test(source),
+      'the campaign runtime names "' + word + '"'
+    );
+  }
+});
+
+test("Campaign", "Facilities and contacts are authored content the runtime reads", () => {
+  const campaign = createCampaignState();
+  const base = createBaseModel({ ...campaign, flags: { quarryReached: true } });
+  assert(base.facilities.length, "the base screen lists authored facilities");
+  for (const facility of base.facilities) {
+    assert(CAMPAIGN_CONTENT.facilities[facility.facilityId], facility.facilityId + " is authored");
+  }
+  const withContact = { ...campaign, contacts: ["ferris"] };
+  const model = createBaseModel(withContact);
+  assertEqual(model.contacts.length, 1);
+  assertEqual(model.contacts[0].name, CAMPAIGN_CONTENT.contacts.ferris.name);
+});
+
+test("Campaign", "Adding a node requires no source change", () => {
+  // The claim the phase is built on, checked rather than asserted in prose: a
+  // node assembled the way a dropped file would be assemble runs through every
+  // runtime helper without any registration step.
+  const content = {
+    ...CAMPAIGN_CONTENT,
+    nodes: {
+      ...CAMPAIGN_CONTENT.nodes,
+      "act1-13-invented": normalizeNode(
+        {
+          id: "act1-13-invented",
+          missionId: "act1-13-invented",
+          order: 13,
+          name: "Invented Operation",
+          requires: ["baseEstablished"],
+          grantsFlags: ["inventedDone"]
+        },
+        "act1-13-invented"
+      )
+    }
+  };
+  const reach = reachability(content);
+  assertEqual(reach.unreachable.length, 0, "it is reachable straight away");
+  assert(reach.reachable.includes("act1-13-invented"));
+  const edges = deriveEdges(content).filter((edge) => edge.to === "act1-13-invented");
+  assertEqual(edges.length, 1, "and the graph already knows what it waits on");
+  assertEqual(edges[0].from, "act1-12-quarry-defense");
+  const state = { flags: { baseEstablished: true }, completed: [] };
+  assert(availableNodeIds(content, state).includes("act1-13-invented"));
+});
+
 test("Presentation", "Architecture audit still passes and content stays clean", () => {
   const audit = auditArchitecture();
   assert(audit.pass, audit.failures.join(" | "));
